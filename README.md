@@ -1,4 +1,4 @@
-# ⏚ OpenHack
+# ⏚ [OpenHack](https://openhack.com)
 
 **Open Source Agentic Security Scanner for your codebase.**
 
