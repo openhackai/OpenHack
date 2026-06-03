@@ -899,14 +899,36 @@ class OpenHackApp:
             self.last_status_line = "cancelled"
             self._invalidate()
 
-        @kb.add("escape", eager=True)
+        def _completion_open() -> bool:
+            return self.input_buffer.complete_state is not None
+
+        @kb.add("escape", eager=True, filter=Condition(_completion_open))
+        def _escape_completion(event):
+            event.current_buffer.cancel_completion()
+
+        @kb.add("escape", eager=False, filter=~Condition(_completion_open))
         def _escape(event):
-            # Dismiss the completion dropdown if it's open. Without `eager`
-            # prompt_toolkit waits ~half a second to see if this is an alt-key
-            # sequence, which feels laggy.
+            pass
+
+        # Option+Shift+Left/Right — select word (macOS sends Escape + ShiftLeft/Right)
+        @kb.add("escape", "s-left")
+        def _select_word_left(event):
             buf = event.current_buffer
-            if buf.complete_state:
-                buf.cancel_completion()
+            pos = buf.document.find_previous_word_beginning() or 0
+            buf.cursor_position += pos
+            buf.start_selection()
+            # Already moved — selection is from new pos to old pos
+            # Re-do: move back, start selection, then move
+            buf.cursor_position -= pos
+            buf.start_selection()
+            buf.cursor_position += pos
+
+        @kb.add("escape", "s-right")
+        def _select_word_right(event):
+            buf = event.current_buffer
+            pos = buf.document.find_next_word_ending() or 0
+            buf.start_selection()
+            buf.cursor_position += pos
 
         # Tab navigation — only in scanning/viewing modes, and only when the
         # input is empty so they don't conflict with typing.
@@ -3130,14 +3152,22 @@ class OpenHackApp:
             )
 
         except asyncio.CancelledError:
-            self.last_status_line = "scan cancelled"
             if session is not None:
                 self._write_report(session, target_dir, status="cancelled")
+                self.last_status_line = (
+                    f"scan cancelled · resume with: openhack resume {session.id}"
+                )
+            else:
+                self.last_status_line = "scan cancelled"
             raise
         except Exception as exc:
-            self.last_status_line = f"scan failed: {exc}"
             if session is not None:
                 self._write_report(session, target_dir, status="failed")
+                self.last_status_line = (
+                    f"scan failed: {exc} · retry with: openhack resume {session.id}"
+                )
+            else:
+                self.last_status_line = f"scan failed: {exc}"
         finally:
             if self.scan is not None:
                 self.scan.finish()
