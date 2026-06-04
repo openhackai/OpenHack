@@ -1,6 +1,6 @@
 # ⏚ OpenHack
 
-**Open Source Agentic Security Scanner for your codebase.**
+**Open Source Agentic Security Scanner & Verifier for your codebase.**
 
 Like Claude Code Security / Codex Security but open source and **exclusively uses open source models**. 
 
