@@ -2,11 +2,22 @@
 
 **Open Source Agentic Security Scanner for your codebase.**
 
-Like Claude Code Security / Codex Security but open source. OpenHack does recon -> hunting -> validation -> verification all in one pipeline to find high quality verified vulnerabilities. OpenHack exclusively uses open source models and specializes in web app vulnerabilities.
+Like Claude Code Security / Codex Security but open source and **exclusively uses open source models**. 
 
 ## Links
 ### [Join Discord](https://openhack.com/discord)
 ### [Website](https://openhack.com)
+
+## How it works
+OpenHack does `recon` -> `hunting` -> `validation` -> `verification` all in one pipeline to find high quality verified vulnerabilities.
+
+**Recon**: Does a deep dive and fully understands your application along with any custom context you give it. Builds a full project model before hunting begins.
+
+**Hunter**: Specialized category based hunters get to finding vulnerabilities initially, along with feature based hunters divind deep to find vulnerabilities in risky code areas.
+
+**Validation**: Validation agent performs a review of the finding and it's impact and whether it's even valid.
+
+**Verification**: Verification agent performs a full browser + sandbox based attack to find verify vulnerabilities in a real docker / DOM environment.
 
 ## Install
 
