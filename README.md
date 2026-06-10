@@ -1,12 +1,22 @@
-# ⏚ OpenHack
+# ⏚ [OpenHack](https://openhack.com)
 
 **Open Source Agentic Security Scanner & Verifier for your codebase.**
 
-Like Claude Code Security / Codex Security but open source and **exclusively uses open source models**. 
+Like Claude Code Security / Codex Security but open source and **exclusively uses open source models**.
 
-## Links
-### [Join Discord](https://openhack.com/discord)
-### [Website](https://openhack.com)
+<p align="center">
+  <a href="https://openhack.com"><img src="https://img.shields.io/badge/Website-openhack.com-0969da?style=for-the-badge" alt="Website"></a>
+  &nbsp;
+  <a href="https://openhack.com/discord"><img src="https://img.shields.io/badge/Discord-Join_Server-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  &nbsp;
+  <a href="https://x.com/openhackai"><img src="https://img.shields.io/badge/X-@openhackai-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X"></a>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/openhack/"><img src="https://img.shields.io/pypi/v/openhack?style=for-the-badge&label=pypi&color=3775A9" alt="PyPI"></a>
+  &nbsp;
+  <a href="https://github.com/openhackai/openhack/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openhackai/openhack?style=for-the-badge" alt="License"></a>
+</p>
 
 ## Get started
 
@@ -161,4 +171,4 @@ OpenHack is open source. Issues and PRs welcome on [GitHub](https://github.com/o
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE). Free for personal, educational, and open-source use. For commercial licensing without AGPL obligations, contact [team@openhack.com](mailto:team@openhack.com).
+MIT — see [LICENSE](LICENSE).
