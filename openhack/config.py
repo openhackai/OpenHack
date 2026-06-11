@@ -158,6 +158,11 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Ignore unrelated keys in a CWD .env / environment. The scanner runs
+        # inside arbitrary target repos whose .env files contain keys we don't
+        # own; without this, pydantic-settings' default extra="forbid" crashes
+        # the CLI on any unknown key (e.g. a target's gemini_sandbox_proxy_command).
+        extra="ignore",
     )
 
     def model_post_init(self, __context) -> None:
