@@ -24,6 +24,12 @@ Like Claude Code Security / Codex Security but open source and **exclusively use
 pipx install openhack
 ```
 
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install openhack
+```
+
 Or with pip:
 
 ```bash
