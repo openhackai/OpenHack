@@ -12,6 +12,8 @@ from .ast_tools import ASTTools
 from .shell import ShellTools
 from .security_tools import SecurityTools
 from .mailbox import MailboxTools
+from .recon import ReconTools
+from .oob import OOBTools
 
 
 class ToolRegistry:
@@ -36,7 +38,12 @@ class ToolRegistry:
             self.shell_tools = ShellTools(workdir=target_dir)
             self.security_tools = SecurityTools(workdir=target_dir)
             self.mailbox_tools = MailboxTools()
-            self._tool_sources += [self.shell_tools, self.security_tools, self.mailbox_tools]
+            self.recon_tools = ReconTools()
+            self.oob_tools = OOBTools()
+            self._tool_sources += [
+                self.shell_tools, self.security_tools, self.mailbox_tools,
+                self.recon_tools, self.oob_tools,
+            ]
 
         self._tool_handlers = {}
         self._register_tools()

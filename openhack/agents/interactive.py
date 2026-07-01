@@ -113,6 +113,8 @@ _PLAN_ALLOWED_TOOLS = {
     "extract_functions", "extract_exports", "extract_imports",
     "find_api_handlers", "trace_variable", "find_dangerous_patterns",
     "sca_scan", "secret_scan", "which",
+    # Passive network recon is fine while planning; active scans/attacks are not.
+    "subdomains", "dns_lookup",
 }
 
 

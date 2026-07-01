@@ -7,6 +7,8 @@ import pytest
 from openhack.tools.shell import ShellTools
 from openhack.tools.security_tools import SecurityTools
 from openhack.tools.mailbox import MailboxTools
+from openhack.tools.recon import ReconTools
+from openhack.tools.oob import OOBTools
 from openhack.tools.registry import ToolRegistry
 
 
@@ -227,6 +229,97 @@ def test_mailbox_new_parses_json(monkeypatch):
     assert result["address"] == "signup-abc123@inbox.openhack.com"
 
 
+# ------------------------------------------------------------------- recon
+
+def test_recon_reports_missing_tool(monkeypatch):
+    monkeypatch.setattr("openhack.tools.recon.which", lambda _: None)
+    r = ReconTools()
+    result = r.subdomains("example.com")
+    assert result["error"] == "tool_not_installed"
+    assert result["tool"] == "subfinder"
+
+
+def test_recon_subdomains_parses_output(monkeypatch):
+    import openhack.tools.recon as recon
+
+    class FakeProc:
+        stdout = "a.example.com\nb.example.com\n\n"
+        stderr = ""
+
+    monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/subfinder")
+    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    r = ReconTools()
+    result = r.subdomains("example.com")
+    assert result["count"] == 2
+    assert "a.example.com" in result["subdomains"]
+
+
+def test_recon_nuclei_parses_jsonl(monkeypatch):
+    import openhack.tools.recon as recon
+
+    class FakeProc:
+        stdout = (
+            '{"template-id":"CVE-2021-1","info":{"name":"Bad","severity":"high"},'
+            '"matched-at":"https://x","type":"http"}\n'
+            'not-json\n'
+        )
+        stderr = ""
+
+    monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/nuclei")
+    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    r = ReconTools()
+    result = r.nuclei_scan("https://x")
+    assert result["count"] == 1
+    assert result["findings"][0]["severity"] == "high"
+
+
+def test_recon_dns_missing_name():
+    r = ReconTools()
+    assert "error" in r.dns_lookup("")
+
+
+# --------------------------------------------------------------------- oob
+
+def test_oob_register_generates_unique_marker():
+    oob = OOBTools()
+    a = oob.oob_register(label="ssrf")
+    b = oob.oob_register(label="ssrf")
+    assert a["marker"] != b["marker"]
+    assert a["marker"].startswith("ssrf-")
+    assert a["http_url"].endswith(a["marker"])
+
+
+def test_oob_poll_requires_token(monkeypatch):
+    monkeypatch.delenv("OOB_TOKEN", raising=False)
+    oob = OOBTools()
+    result = oob.oob_poll("abc123")
+    assert result["error"] == "oob_unconfigured"
+
+
+def test_oob_poll_requires_marker(monkeypatch):
+    monkeypatch.setenv("OOB_TOKEN", "tok")
+    oob = OOBTools()
+    assert oob.oob_poll("")["error"] == "missing_marker"
+
+
+def test_oob_poll_parses_hits(monkeypatch):
+    import openhack.tools.oob as oobmod
+
+    monkeypatch.setenv("OOB_TOKEN", "tok")
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return b'{"count":1,"hits":[{"ts":1,"method":"GET","path":"/m","ip":"1.2.3.4"}]}'
+
+    monkeypatch.setattr(oobmod.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+    oob = OOBTools()
+    result = oob.oob_poll("m")
+    assert result["fired"] is True
+    assert result["interactions"] == 1
+
+
 # ----------------------------------------------------------------- registry
 
 def test_registry_excludes_agent_tools_by_default(tmp_path):
@@ -240,7 +333,9 @@ def test_registry_includes_agent_tools_when_requested(tmp_path):
     reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True)
     names = {t["name"] for t in reg.get_all_tool_definitions()}
     for expected in ("run_command", "which", "sca_scan", "secret_scan",
-                     "mailbox_new", "mailbox_wait", "read_file"):
+                     "mailbox_new", "mailbox_wait", "read_file",
+                     "subdomains", "http_probe", "port_scan", "nuclei_scan",
+                     "oob_register", "oob_poll"):
         assert expected in names
 
 
