@@ -84,7 +84,14 @@ class LLMClient:
         prompt_cache_key: Optional[str] = None,
     ):
         self.provider = provider or settings.llm_provider
-        self.model = model or settings.openhack_model_id
+        # Model resolution is provider-aware: OpenHack uses its configured model,
+        # any other provider uses its own default (or an override) — see providers.
+        from openhack import providers as _providers
+        self._resolved = _providers.resolve(self.provider, model)
+        if self._resolved:
+            self.model = self._resolved.model
+        else:
+            self.model = model or settings.openhack_model_id
 
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -97,6 +104,24 @@ class LLMClient:
         self._init_client()
 
     def _init_client(self):
+        # Non-OpenHack provider (bring-your-own-key): resolve from the registry.
+        if self._resolved is not None:
+            r = self._resolved
+            if r.missing_key_env:
+                raise ValueError(
+                    f"{r.name} is selected as the LLM provider but {r.missing_key_env} "
+                    f"is not set.\nExport your key, e.g.:  export {r.missing_key_env}=...\n"
+                    f"Or switch back to OpenHack:  /config llm_provider openhack"
+                )
+            self.client = openai.AsyncOpenAI(
+                api_key=r.api_key,
+                base_url=r.base_url,
+                timeout=settings.openhack_read_timeout,
+                max_retries=0,
+            )
+            return
+
+        # Default: the OpenHack hosted provider.
         if not settings.openhack_api_key:
             raise ValueError(
                 "OPENHACK_API_KEY is required.\n"
@@ -111,7 +136,13 @@ class LLMClient:
         )
 
     def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        pricing = self.PRICING.get(self.model, {"input": 0.50, "output": 2.80})
+        if self._resolved is not None:
+            # Bring-your-own-key providers: use their pricing if we know it,
+            # otherwise report 0 rather than guessing with OpenHack's rates
+            # (the user is billed by their own provider anyway).
+            pricing = self._resolved.pricing.get(self.model, {"input": 0.0, "output": 0.0})
+        else:
+            pricing = self.PRICING.get(self.model, {"input": 0.50, "output": 2.80})
         return (input_tokens / 1_000_000) * pricing["input"] + (output_tokens / 1_000_000) * pricing["output"]
 
     def _convert_tools_to_openai_format(self, tools: list[dict]) -> list[dict]:
@@ -198,8 +229,12 @@ class LLMClient:
             kwargs["tool_choice"] = tool_choice or "auto"
         # Re-read settings via the module so /config changes apply mid-session.
         from openhack import config as _config
+        # OpenHack and OpenAI accept prompt_cache_key; other OpenAI-compatible
+        # endpoints often reject unknown params, so only send it when supported.
+        provider_supports_cache = self._resolved is None or self._resolved.supports_prompt_cache
         if (
             self.prompt_cache_key
+            and provider_supports_cache
             and _config.settings.prompt_caching
             and not LLMClient._cache_key_unsupported
         ):

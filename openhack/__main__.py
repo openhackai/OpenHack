@@ -124,6 +124,25 @@ def _cmd_agent():
         print()
 
 
+def _cmd_providers():
+    """List LLM providers you can connect (bring-your-own-key)."""
+    from openhack import providers
+    from openhack.config import settings
+
+    print("\nLLM providers (set with: /config llm_provider <name>)\n")
+    active = settings.llm_provider
+    mark = "→" if active == "openhack" else " "
+    print(f"  {mark} openhack        OpenHack hosted (default; free credits, no setup)")
+    for name in providers.PROVIDERS:
+        spec = providers.PROVIDERS[name]
+        import os as _os
+        has_key = bool(_os.environ.get(spec.api_key_env) or spec.keyless_default)
+        mark = "→" if active == name else " "
+        key_note = "key set" if has_key else f"needs {spec.api_key_env}"
+        print(f"  {mark} {name:<14}  {spec.label:<22}  default {spec.default_model}  [{key_note}]")
+    print("\n  Override a model with OPENHACK_MODEL_ID or <PROVIDER>_MODEL.\n")
+
+
 def _cmd_sessions():
     """List all saved scan sessions."""
     import json
@@ -261,6 +280,7 @@ COMMANDS = {
     "plan": _cmd_plan,
     "agent": _cmd_agent,
     "interactive": _cmd_agent,
+    "providers": _cmd_providers,
     "scan": _cmd_scan,
     "sessions": _cmd_sessions,
     "resume": _cmd_resume,
