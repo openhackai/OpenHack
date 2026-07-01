@@ -353,6 +353,16 @@ def test_runner_prints_response_over_fallback(capsys):
     assert "stale" not in out
 
 
+def test_runner_dedupes_already_streamed_answer(capsys):
+    """A final answer already shown live must not be printed a second time."""
+    from openhack import interactive_runner as ir
+
+    ir._print_result({"response": "the plan body"}, _FakeSession(), fallback="the plan body")
+    out = capsys.readouterr().out
+    # Appears zero times in the result block (it was already streamed).
+    assert out.count("the plan body") == 0
+
+
 def test_runner_trace_printer_stashes_last_text():
     from openhack import interactive_runner as ir
     from openhack.agents.session import TraceEntry

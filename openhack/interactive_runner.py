@@ -100,15 +100,20 @@ async def _run_once(agent, session, task: str) -> dict:
 
 def _print_result(result: dict, session, fallback: str = "") -> None:
     print()
-    response = result.get("response") or result.get("partial_result") or ""
-    if not response.strip() and fallback.strip():
-        # The agent ended without closing prose — surface its last substantive
-        # message so the operator never gets a blank screen.
-        response = fallback
+    response = (result.get("response") or result.get("partial_result") or "").strip()
+    streamed = fallback.strip()
     if result.get("error"):
         print(_c(_RED, f"  {result['error']}"))
-    if response.strip():
-        print(response.strip())
+
+    if response and response == streamed:
+        # The final answer was already shown live as it streamed — don't repeat it.
+        pass
+    elif response:
+        print(response)
+    elif streamed:
+        # The agent ended on a tool call with no closing prose; recover its last
+        # substantive message so the operator never gets a blank screen.
+        print(streamed)
     else:
         print(_c(_MUTED, "  (no textual output — check the tool activity above)"))
     print()
