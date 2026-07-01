@@ -3,6 +3,8 @@ Entry point for OpenHack.
 
 Usage:
   openhack                          Launch interactive TUI
+  openhack hack "<task>" [path]     Run one hacking task headlessly (no TUI)
+  openhack agent [path]             Interactive agent prompt loop (no TUI)
   openhack scan [path]              Scan a repository (headless, defaults to .)
   openhack sessions                 List all saved scan sessions
   openhack resume <id>              Resume a previous scan session
@@ -41,6 +43,56 @@ def _cmd_scan():
         print()
     except Exception:
         pass
+
+
+def _cmd_hack():
+    """Run a single hacking task headlessly (no TUI)."""
+    from pathlib import Path
+
+    task = sys.argv[2] if len(sys.argv) > 2 else None
+    if not task:
+        print('Usage: openhack hack "<task>" [path]')
+        print('Example: openhack hack "check this repo for exposed secrets and vulnerable deps"')
+        return
+
+    target_arg = sys.argv[3] if len(sys.argv) > 3 else "."
+    target = Path(target_arg).resolve()
+    if not target.is_dir():
+        target = Path.cwd()
+
+    from openhack.config import settings
+    if not settings.openhack_api_key:
+        print("Error: not logged in.")
+        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        return
+
+    from openhack.interactive_runner import run_task
+    try:
+        run_task(task, target_dir=str(target))
+    except KeyboardInterrupt:
+        print()
+
+
+def _cmd_agent():
+    """Interactive agent prompt loop (no TUI)."""
+    from pathlib import Path
+
+    target_arg = sys.argv[2] if len(sys.argv) > 2 else "."
+    target = Path(target_arg).resolve()
+    if not target.is_dir():
+        target = Path.cwd()
+
+    from openhack.config import settings
+    if not settings.openhack_api_key:
+        print("Error: not logged in.")
+        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        return
+
+    from openhack.interactive_runner import run_repl
+    try:
+        run_repl(target_dir=str(target))
+    except KeyboardInterrupt:
+        print()
 
 
 def _cmd_sessions():
@@ -176,6 +228,9 @@ def _cmd_setup():
 
 
 COMMANDS = {
+    "hack": _cmd_hack,
+    "agent": _cmd_agent,
+    "interactive": _cmd_agent,
     "scan": _cmd_scan,
     "sessions": _cmd_sessions,
     "resume": _cmd_resume,

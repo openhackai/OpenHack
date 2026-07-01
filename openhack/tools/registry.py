@@ -9,35 +9,47 @@ from typing import Any
 from .filesystem import FileSystemTools
 from .nextjs import NextJSTools
 from .ast_tools import ASTTools
+from .shell import ShellTools
+from .security_tools import SecurityTools
+from .mailbox import MailboxTools
 
 
 class ToolRegistry:
-    """Registry that manages all scanning tools and their execution."""
+    """Registry that manages all scanning tools and their execution.
 
-    def __init__(self, target_dir: Path):
+    By default it exposes the read-only, target-jailed scanning tools used by
+    the vuln-scan pipeline. Pass ``include_agent_tools=True`` to also expose the
+    interactive hacking toolkit (shell execution, SCA/secret scanners,
+    disposable mailbox) used by the interactive agent.
+    """
+
+    def __init__(self, target_dir: Path, include_agent_tools: bool = False):
         self.target_dir = target_dir
         self.fs_tools = FileSystemTools(target_dir)
         self.nextjs_tools = NextJSTools(self.fs_tools)
         self.ast_tools = ASTTools(self.fs_tools)
 
+        self.include_agent_tools = include_agent_tools
+        self._tool_sources = [self.fs_tools, self.nextjs_tools, self.ast_tools]
+
+        if include_agent_tools:
+            self.shell_tools = ShellTools(workdir=target_dir)
+            self.security_tools = SecurityTools(workdir=target_dir)
+            self.mailbox_tools = MailboxTools()
+            self._tool_sources += [self.shell_tools, self.security_tools, self.mailbox_tools]
+
         self._tool_handlers = {}
         self._register_tools()
 
     def _register_tools(self):
-        for tool in self.fs_tools.get_tool_definitions():
-            self._tool_handlers[tool["name"]] = self.fs_tools.execute_tool
-
-        for tool in self.nextjs_tools.get_tool_definitions():
-            self._tool_handlers[tool["name"]] = self.nextjs_tools.execute_tool
-
-        for tool in self.ast_tools.get_tool_definitions():
-            self._tool_handlers[tool["name"]] = self.ast_tools.execute_tool
+        for source in self._tool_sources:
+            for tool in source.get_tool_definitions():
+                self._tool_handlers[tool["name"]] = source.execute_tool
 
     def get_all_tool_definitions(self) -> list[dict]:
         tools = []
-        tools.extend(self.fs_tools.get_tool_definitions())
-        tools.extend(self.nextjs_tools.get_tool_definitions())
-        tools.extend(self.ast_tools.get_tool_definitions())
+        for source in self._tool_sources:
+            tools.extend(source.get_tool_definitions())
         return tools
 
     def is_async_tool(self, name: str) -> bool:
