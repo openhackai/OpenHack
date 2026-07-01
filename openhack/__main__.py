@@ -4,6 +4,7 @@ Entry point for OpenHack.
 Usage:
   openhack                          Launch interactive TUI
   openhack hack "<task>" [path]     Run one hacking task headlessly (no TUI)
+  openhack plan "<objective>" [path] Draft a read-only attack plan (no TUI)
   openhack agent [path]             Interactive agent prompt loop (no TUI)
   openhack scan [path]              Scan a repository (headless, defaults to .)
   openhack sessions                 List all saved scan sessions
@@ -69,6 +70,34 @@ def _cmd_hack():
     from openhack.interactive_runner import run_task
     try:
         run_task(task, target_dir=str(target))
+    except KeyboardInterrupt:
+        print()
+
+
+def _cmd_plan():
+    """Produce a read-only attack plan for a target/objective (no TUI)."""
+    from pathlib import Path
+
+    objective = sys.argv[2] if len(sys.argv) > 2 else None
+    if not objective:
+        print('Usage: openhack plan "<objective>" [path]')
+        print('Example: openhack plan "find auth and access-control bugs in this app"')
+        return
+
+    target_arg = sys.argv[3] if len(sys.argv) > 3 else "."
+    target = Path(target_arg).resolve()
+    if not target.is_dir():
+        target = Path.cwd()
+
+    from openhack.config import settings
+    if not settings.openhack_api_key:
+        print("Error: not logged in.")
+        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        return
+
+    from openhack.interactive_runner import run_plan
+    try:
+        run_plan(objective, target_dir=str(target))
     except KeyboardInterrupt:
         print()
 
@@ -229,6 +258,7 @@ def _cmd_setup():
 
 COMMANDS = {
     "hack": _cmd_hack,
+    "plan": _cmd_plan,
     "agent": _cmd_agent,
     "interactive": _cmd_agent,
     "scan": _cmd_scan,

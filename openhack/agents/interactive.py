@@ -69,6 +69,44 @@ the impact, and the concrete next step or fix.
 """
 
 
+PLAN_SYSTEM_PROMPT = """\
+You are OpenHack in **plan mode** — a senior offensive-security lead scoping an \
+authorized engagement for the operator at the terminal. Your job is to produce a \
+concrete, prioritized attack plan. You are read-only right now: you may gather \
+cheap, passive intelligence (read code, inventory dependencies with `sca_scan`, \
+sweep for exposed secrets with `secret_scan`, check which tools are installed), \
+but you do **not** launch attacks, mutate anything, or run intrusive/noisy \
+commands. That comes after the human approves the plan.
+
+## Produce a plan that covers
+
+1. **Target model** — what this is (stack, frameworks, entry points, exposed \
+surface) based on the passive intel you gathered.
+2. **Attack surface & hypotheses** — the specific, prioritized weaknesses worth \
+testing, each with a one-line rationale grounded in what you actually observed.
+3. **Step-by-step plan** — an ordered checklist of the concrete actions you'd \
+take (tool + purpose), cheapest/highest-signal first, escalating only as needed.
+4. **Prerequisites & open questions** — anything you need from the operator \
+(scope boundaries, credentials, out-of-scope hosts) before executing.
+
+Ground every hypothesis in evidence you gathered — no boilerplate checklists. \
+Be specific and terse. End by telling the operator to approve the plan (or adjust \
+scope) before you execute.
+
+{context_note}
+"""
+
+# Passive, read-only tools that plan mode is allowed to use. Anything that
+# executes attacks or mutates state (run_command, mailbox_*) is withheld until
+# the operator approves the plan and switches to the interactive agent.
+_PLAN_ALLOWED_TOOLS = {
+    "read_file", "list_directory", "grep", "glob", "find_files",
+    "extract_functions", "extract_exports", "extract_imports",
+    "find_api_handlers", "trace_variable", "find_dangerous_patterns",
+    "sca_scan", "secret_scan", "which",
+}
+
+
 class InteractiveAgent(BaseAgent):
     """A single general-purpose agent the human drives interactively."""
 
@@ -88,6 +126,32 @@ class InteractiveAgent(BaseAgent):
         return SYSTEM_PROMPT.format(context_note=context_note)
 
 
+class PlanAgent(InteractiveAgent):
+    """Read-only planning agent: scopes a target and proposes an attack plan."""
+
+    name = "openhack-plan"
+    description = "Attack planner (read-only)"
+
+    def get_system_prompt(self, context: dict) -> str:
+        parts = []
+        target = context.get("target_dir")
+        if target:
+            parts.append(f"Session root (relative paths resolve here): {target}")
+        if context.get("target_note"):
+            parts.append(context["target_note"])
+        context_note = "\n".join(f"- {p}" for p in parts)
+        if context_note:
+            context_note = "## Session context\n" + context_note
+        return PLAN_SYSTEM_PROMPT.format(context_note=context_note)
+
+    def get_tools(self) -> list[dict]:
+        """Expose only the passive, read-only subset of the toolkit."""
+        return [
+            t for t in self.tools.get_all_tool_definitions()
+            if t["name"] in _PLAN_ALLOWED_TOOLS
+        ]
+
+
 def build_interactive_agent(
     target_dir: str,
     session: Optional[Session] = None,
@@ -99,10 +163,26 @@ def build_interactive_agent(
     Returns the agent and its session so a caller (TUI or headless runner) can
     stream traces, inject user instructions, and read cost as it runs.
     """
+    return _build_agent(InteractiveAgent, target_dir, session, model, on_trace,
+                        cache_key="openhack-interactive")
+
+
+def build_plan_agent(
+    target_dir: str,
+    session: Optional[Session] = None,
+    model: Optional[str] = None,
+    on_trace=None,
+) -> tuple["PlanAgent", Session]:
+    """Wire up a read-only PlanAgent that proposes an attack plan."""
+    return _build_agent(PlanAgent, target_dir, session, model, on_trace,
+                        cache_key="openhack-plan")
+
+
+def _build_agent(agent_cls, target_dir, session, model, on_trace, cache_key):
     from pathlib import Path
 
     session = session or Session(target_dir=str(target_dir), on_trace=on_trace)
-    llm = LLMClient(model=model, prompt_cache_key="openhack-interactive")
+    llm = LLMClient(model=model, prompt_cache_key=cache_key)
     tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True)
-    agent = InteractiveAgent(llm=llm, tools=tools, session=session)
+    agent = agent_cls(llm=llm, tools=tools, session=session)
     return agent, session

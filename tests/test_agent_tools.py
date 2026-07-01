@@ -295,3 +295,34 @@ def test_interactive_agent_exposes_full_toolkit(tmp_path):
     names = {t["name"] for t in agent.get_tools()}
     for expected in ("run_command", "sca_scan", "secret_scan", "mailbox_new", "read_file"):
         assert expected in names
+
+
+def _make_plan_agent(tmp_path):
+    from openhack.agents.interactive import PlanAgent
+    from openhack.agents.session import Session
+
+    session = Session(target_dir=str(tmp_path))
+    tools = ToolRegistry(target_dir=tmp_path, include_agent_tools=True)
+    return PlanAgent(llm=_StubLLM(), tools=tools, session=session)
+
+
+def test_plan_agent_is_read_only(tmp_path):
+    """Plan mode must not expose attack/mutation tools."""
+    agent = _make_plan_agent(tmp_path)
+    names = {t["name"] for t in agent.get_tools()}
+    # Passive intel is allowed...
+    assert "sca_scan" in names
+    assert "secret_scan" in names
+    assert "read_file" in names
+    # ...but nothing that executes attacks or mutates state.
+    assert "run_command" not in names
+    assert "mailbox_new" not in names
+    assert "mailbox_wait" not in names
+
+
+def test_plan_agent_prompt_is_planning(tmp_path):
+    agent = _make_plan_agent(tmp_path)
+    prompt = agent.get_system_prompt({"target_dir": str(tmp_path)}).lower()
+    assert "plan mode" in prompt
+    assert "read-only" in prompt
+    assert "approve" in prompt

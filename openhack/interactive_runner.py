@@ -125,6 +125,28 @@ def run_task(task: str, target_dir: Optional[str] = None, model: Optional[str] =
     return result
 
 
+def run_plan(objective: str, target_dir: Optional[str] = None, model: Optional[str] = None) -> dict:
+    """Produce a read-only attack plan for an objective/target. Returns the result."""
+    from openhack.agents.interactive import build_plan_agent
+
+    target = str(Path(target_dir).resolve()) if target_dir else str(Path.cwd())
+    agent, session = build_plan_agent(
+        target_dir=target, model=model, on_trace=_make_trace_printer()
+    )
+    _print_banner(target, agent.llm.model)
+    print(_c(_BOLD, "  plan: " + objective))
+    print(_c(_MUTED, "  (read-only — no attacks run until you approve)"))
+    print()
+    try:
+        result = asyncio.run(_run_once(agent, session, objective))
+    except KeyboardInterrupt:
+        session.cancel()
+        print(_c(_MUTED, "\n  interrupted"))
+        return {"error": "interrupted"}
+    _print_result(result, session)
+    return result
+
+
 def run_repl(target_dir: Optional[str] = None, model: Optional[str] = None) -> None:
     """Interactive prompt loop. Each line is a task for the same session/agent."""
     from openhack.agents.interactive import build_interactive_agent
