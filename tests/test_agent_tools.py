@@ -320,6 +320,53 @@ def test_oob_poll_parses_hits(monkeypatch):
     assert result["interactions"] == 1
 
 
+# ----------------------------------------------------------------- browser
+
+def test_browser_degrades_without_playwright(monkeypatch):
+    import asyncio
+    import builtins
+    from openhack.tools.browser import BrowserTools
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("playwright"):
+            raise ImportError("no playwright")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    bt = BrowserTools()
+    result = asyncio.run(bt.browser_fetch("https://example.com"))
+    assert result["error"] == "browser_unavailable"
+
+
+def test_browser_missing_url():
+    import asyncio
+    from openhack.tools.browser import BrowserTools
+
+    result = asyncio.run(BrowserTools().browser_fetch(""))
+    assert result["error"] == "missing_url"
+
+
+def test_registry_browser_is_async(tmp_path):
+    reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True)
+    assert reg.is_async_tool("browser_fetch") is True
+    assert reg.is_async_tool("run_command") is False
+    names = {t["name"] for t in reg.get_all_tool_definitions()}
+    assert "browser_fetch" in names
+
+
+def test_registry_async_dispatch(tmp_path):
+    import asyncio
+    reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True)
+    # Calling an async tool synchronously must not silently misbehave.
+    sync = reg.execute_tool("browser_fetch", {"url": "https://x"})
+    assert "error" in sync
+    # Async path returns a real dict (degraded if no playwright, but a dict).
+    out = asyncio.run(reg.execute_tool_async("browser_fetch", {"url": ""}))
+    assert isinstance(out, dict)
+
+
 # ----------------------------------------------------------------- registry
 
 def test_registry_excludes_agent_tools_by_default(tmp_path):
