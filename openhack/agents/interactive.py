@@ -89,6 +89,15 @@ take (tool + purpose), cheapest/highest-signal first, escalating only as needed.
 4. **Prerequisites & open questions** — anything you need from the operator \
 (scope boundaries, credentials, out-of-scope hosts) before executing.
 
+## Work in one pass
+
+Gather your intel in a single focused sweep — read the key files, run sca_scan \
+and secret_scan **once each**, check for the tools you'd need. Do not repeat \
+tools you have already run; you already have those results. As soon as you have \
+enough to scope the target, **stop calling tools and write the plan as your \
+final message.** Your final message must be the plan itself — do not end on a \
+tool call.
+
 Ground every hypothesis in evidence you gathered — no boilerplate checklists. \
 Be specific and terse. End by telling the operator to approve the plan (or adjust \
 scope) before you execute.

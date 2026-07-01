@@ -326,3 +326,38 @@ def test_plan_agent_prompt_is_planning(tmp_path):
     assert "plan mode" in prompt
     assert "read-only" in prompt
     assert "approve" in prompt
+
+
+# ------------------------------------------------------- runner robustness
+
+class _FakeSession:
+    total_cost = 0.0
+    total_tokens = 0
+
+
+def test_runner_falls_back_to_last_text_on_empty_response(capsys):
+    """A tool-only final turn must not leave the operator with a blank screen."""
+    from openhack import interactive_runner as ir
+
+    ir._print_result({"response": ""}, _FakeSession(), fallback="the recovered plan text")
+    out = capsys.readouterr().out
+    assert "the recovered plan text" in out
+
+
+def test_runner_prints_response_over_fallback(capsys):
+    from openhack import interactive_runner as ir
+
+    ir._print_result({"response": "real answer"}, _FakeSession(), fallback="stale")
+    out = capsys.readouterr().out
+    assert "real answer" in out
+    assert "stale" not in out
+
+
+def test_runner_trace_printer_stashes_last_text():
+    from openhack import interactive_runner as ir
+    from openhack.agents.session import TraceEntry
+
+    state: dict = {}
+    printer = ir._make_trace_printer(state)
+    printer(TraceEntry(timestamp=0.0, agent="a", event_type="thinking", content="hello plan"))
+    assert state["last_text"] == "hello plan"

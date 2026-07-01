@@ -49,13 +49,21 @@ def _fmt_tool_input(tool_input: Optional[dict]) -> str:
     return blob if len(blob) <= 100 else blob[:97] + "..."
 
 
-def _make_trace_printer():
-    """Return an on_trace callback that renders agent activity to the terminal."""
+def _make_trace_printer(state: Optional[dict] = None):
+    """Return an on_trace callback that renders agent activity to the terminal.
+
+    If ``state`` is given, the last substantive 'thinking' text is stashed in
+    ``state['last_text']`` so the caller can fall back to it when the agent's
+    final response comes back empty (it sometimes ends a turn with tool calls
+    only and no closing prose).
+    """
     def on_trace(entry) -> None:
         etype = entry.event_type
         if etype == "thinking":
             text = (entry.content or "").strip()
             if text:
+                if state is not None:
+                    state["last_text"] = text
                 print(_c(_MUTED, "  ·") + " " + text)
         elif etype == "tool_call":
             arg = _fmt_tool_input(entry.tool_input)
@@ -90,13 +98,19 @@ async def _run_once(agent, session, task: str) -> dict:
     return result
 
 
-def _print_result(result: dict, session) -> None:
+def _print_result(result: dict, session, fallback: str = "") -> None:
     print()
     response = result.get("response") or result.get("partial_result") or ""
+    if not response.strip() and fallback.strip():
+        # The agent ended without closing prose — surface its last substantive
+        # message so the operator never gets a blank screen.
+        response = fallback
     if result.get("error"):
         print(_c(_RED, f"  {result['error']}"))
-    if response:
+    if response.strip():
         print(response.strip())
+    else:
+        print(_c(_MUTED, "  (no textual output — check the tool activity above)"))
     print()
     cost = getattr(session, "total_cost", 0.0)
     tokens = getattr(session, "total_tokens", 0)
@@ -109,8 +123,9 @@ def run_task(task: str, target_dir: Optional[str] = None, model: Optional[str] =
     from openhack.agents.interactive import build_interactive_agent
 
     target = str(Path(target_dir).resolve()) if target_dir else str(Path.cwd())
+    state: dict = {}
     agent, session = build_interactive_agent(
-        target_dir=target, model=model, on_trace=_make_trace_printer()
+        target_dir=target, model=model, on_trace=_make_trace_printer(state)
     )
     _print_banner(target, agent.llm.model)
     print(_c(_BOLD, "  " + task))
@@ -121,7 +136,7 @@ def run_task(task: str, target_dir: Optional[str] = None, model: Optional[str] =
         session.cancel()
         print(_c(_MUTED, "\n  interrupted"))
         return {"error": "interrupted"}
-    _print_result(result, session)
+    _print_result(result, session, fallback=state.get("last_text", ""))
     return result
 
 
@@ -130,8 +145,9 @@ def run_plan(objective: str, target_dir: Optional[str] = None, model: Optional[s
     from openhack.agents.interactive import build_plan_agent
 
     target = str(Path(target_dir).resolve()) if target_dir else str(Path.cwd())
+    state: dict = {}
     agent, session = build_plan_agent(
-        target_dir=target, model=model, on_trace=_make_trace_printer()
+        target_dir=target, model=model, on_trace=_make_trace_printer(state)
     )
     _print_banner(target, agent.llm.model)
     print(_c(_BOLD, "  plan: " + objective))
@@ -143,7 +159,7 @@ def run_plan(objective: str, target_dir: Optional[str] = None, model: Optional[s
         session.cancel()
         print(_c(_MUTED, "\n  interrupted"))
         return {"error": "interrupted"}
-    _print_result(result, session)
+    _print_result(result, session, fallback=state.get("last_text", ""))
     return result
 
 
@@ -152,8 +168,9 @@ def run_repl(target_dir: Optional[str] = None, model: Optional[str] = None) -> N
     from openhack.agents.interactive import build_interactive_agent
 
     target = str(Path(target_dir).resolve()) if target_dir else str(Path.cwd())
+    state: dict = {}
     agent, session = build_interactive_agent(
-        target_dir=target, model=model, on_trace=_make_trace_printer()
+        target_dir=target, model=model, on_trace=_make_trace_printer(state)
     )
     _print_banner(target, agent.llm.model)
     print(_c(_MUTED, "  Type a task and press enter. Ctrl-D or /exit to quit."))
@@ -169,9 +186,10 @@ def run_repl(target_dir: Optional[str] = None, model: Optional[str] = None) -> N
             continue
         if task in ("/exit", "/quit", "exit", "quit"):
             break
+        state.clear()
         try:
             result = asyncio.run(_run_once(agent, session, task))
         except KeyboardInterrupt:
             print(_c(_MUTED, "\n  interrupted — ask something else or /exit"))
             continue
-        _print_result(result, session)
+        _print_result(result, session, fallback=state.get("last_text", ""))
