@@ -85,7 +85,7 @@ For every confirmed finding you get: severity, CVSS score, file location, full d
 | `/cancel`                  | Permanently cancel a running scan                                                                  |
 | `/sessions`                | Browse and re-load past scans (also supports re-running an aborted scan with `r`)                  |
 | `/findings`                | Re-display findings from last scan                                                                 |
-| `/copy`                    | Copy the selected finding (description + vulnerable code + fix) for Codex / Claude Code / OpenCode |
+| `/copy`                    | Copy the selected finding (description + vulnerable code + fix) for Codex / Claude Code / Cursor |
 | `/verify sandbox` *(Beta)* | Spin up a Docker sandbox and exploit-test each finding with live requests                          |
 | `/verify browser` *(Beta)* | Launch a headless browser to verify client-side vulns (XSS, CSRF, etc.)                            |
 | `/login`                   | Re-login to your OpenHack account                                                                  |

@@ -48,10 +48,12 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.formatted_text import split_lines
 from prompt_toolkit.layout.dimension import Dimension as D
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.layout.processors import BeforeInput
+from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
+from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
 
+from openhack import __version__ as OPENHACK_VERSION
 from openhack.agents.coordinator import CoordinatorAgent
 from openhack.agents.llm import LLMClient, Message, LLMResponse
 from openhack.agents.session import Session, SessionStatus, Finding, TraceEntry
@@ -69,24 +71,141 @@ from openhack.prompts.project_context import build_project_context
 from openhack.updates import Announcement, UpdateInfo, fetch_updates, save_dismissed
 
 
+# ── OpenHack palette ──────────────────────────────────────────────
+# The brand system: tinted dark neutrals (cool green family, never pure
+# black/white) carrying one signal-green accent used with restraint, plus a
+# warm coral as the secondary. Values are the resolved brand tokens.
+OH_BG        = "#0A1311"  # Deep Ink — the green-tinted near-black canvas
+OH_PANEL     = "#111A17"  # Ash — sidebar / elevated surface
+OH_ELEM      = "#16211C"  # element surface (input box / message box)
+OH_TEXT      = "#E8EAE9"  # Chalk — primary foreground (cool near-white)
+OH_MUTED     = "#7E8784"  # Stone — secondary / dimmed text
+OH_BORDER    = "#243029"  # default border
+OH_BORDER_A  = "#2D3531"  # active border
+OH_BORDER_SUB= "#1A211D"  # subtle border / divider
+OH_PRIMARY   = "#00B97E"  # Signal Green — THE accent (brand, used sparingly)
+OH_SECONDARY = "#00B97E"  # accent bars + spinner share the one signal green
+OH_ACCENT    = "#1CC584"  # brighter green (headings / keywords)
+OH_RED       = "#EA6A64"  # warm coral — errors (brand secondary)
+OH_ORANGE    = "#E99B2A"  # warning
+OH_GREEN     = "#00B97E"  # success == the signal green
+OH_CYAN      = "#5BB39E"  # soft teal (info, kept in the green family)
+OH_YELLOW    = "#DEBA50"
+
+
 # ── Brand ─────────────────────────────────────────────────────────
 
-# OpenHack ground-symbol logo (chunky pixel blocks). All lines are padded to
-# 26 cols so the line's geometric midpoint matches the blocks' visual midpoint
-# (col 13.5) — keeps the "OpenHack" wordmark aligned with the vertical bar.
-_LOGO_WIDTH = 26
-_LOGO_LINES = [line.ljust(_LOGO_WIDTH) for line in [
-    "            ██",
-    "            ██",
-    "            ██",
-    "            ██",
-    "            ██",
-    "   ████████████████████",
-    "",
-    "     ████████████████",
-    "",
-    "       ████████████",
-]]
+# The OpenHack mark — the ground/earth symbol: a tall thin stem (half the
+# total height) descending into three bars that narrow as they go down, with a
+# one-unit gap between each bar. Proportions trace the brand SVG (stem 1u wide
+# ×5u tall; bars 9u/7u/4u wide ×1u thick; gaps 1u). Drawn on an 18-col grid so
+# every element is centered on the same axis; per-line centering keeps it so.
+_MARK_ROWS = [
+    "        ██        ",
+    "        ██        ",
+    "        ██        ",
+    "        ██        ",
+    "        ██        ",
+    "██████████████████",
+    "                  ",
+    "  ██████████████  ",
+    "                  ",
+    "     ████████     ",
+]
+
+# The "OpenHack" wordmark is rendered as plain bold text beneath the mark — a
+# clean logo lockup (large green symbol over a simple wordmark).
+_WORDMARK = "OpenHack"
+
+
+# ── Knight-rider spinner ──────────────────────────────────────────
+# A bidirectional scanner that sweeps one bright diamond back and forth across
+# a row of dim dots — shown while the scanner is working.
+_SPIN_WIDTH = 8
+_SPIN_TRAIL = "◆⬩⬪·"  # head → tail shades, then inactive dot
+
+
+def _build_spinner_frames() -> list[str]:
+    """One forward-and-back sweep of the bright head with a fading trail."""
+    frames: list[str] = []
+    seq = list(range(_SPIN_WIDTH)) + list(range(_SPIN_WIDTH - 2, 0, -1))
+    forward = True
+    for head in seq:
+        # Direction of travel flips at the endpoints; the trail lags behind.
+        if head == _SPIN_WIDTH - 1:
+            forward = False
+        elif head == 0:
+            forward = True
+        cells = []
+        for i in range(_SPIN_WIDTH):
+            dist = (head - i) if forward else (i - head)
+            if dist == 0:
+                cells.append(_SPIN_TRAIL[0])
+            elif 0 < dist < len(_SPIN_TRAIL) - 1:
+                cells.append(_SPIN_TRAIL[dist])
+            else:
+                cells.append("·")
+        frames.append("".join(cells))
+    return frames
+
+
+_SPINNER_FRAMES = _build_spinner_frames()
+
+
+def _abbrev_home(path: str) -> str:
+    """`/Users/x/code` → `~/code` for compact display."""
+    try:
+        home = str(Path.home())
+        if path == home:
+            return "~"
+        if path.startswith(home + os.sep):
+            return "~" + path[len(home):]
+    except Exception:
+        pass
+    return path
+
+
+def _git_branch(path: str) -> str:
+    """Current git branch for `path`, or "" if not a repo."""
+    try:
+        head = Path(path) / ".git" / "HEAD"
+        # Walk up to find the repo root's .git/HEAD.
+        cur = Path(path)
+        for _ in range(8):
+            h = cur / ".git" / "HEAD"
+            if h.exists():
+                ref = h.read_text().strip()
+                if ref.startswith("ref:"):
+                    return ref.rsplit("/", 1)[-1]
+                return ref[:7]
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+    except Exception:
+        pass
+    return ""
+
+
+def _fmt_tokens(n: int) -> str:
+    """6640 → '6.6K', 1500000 → '1.5M'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+class _PlaceholderProcessor(Processor):
+    """Show dim placeholder text in an empty single-line buffer."""
+
+    def __init__(self, text_fn: Callable[[], str], style: str = "class:input.placeholder"):
+        self.text_fn = text_fn
+        self.style = style
+
+    def apply_transformation(self, ti):
+        if not ti.document.text and ti.lineno == 0:
+            return Transformation([(self.style, self.text_fn())])
+        return Transformation(ti.fragments)
 
 
 
@@ -132,7 +251,7 @@ def _sev_label(severity: str) -> str:
 # ── Slash command registry ────────────────────────────────────────
 
 _SLASH_COMMANDS = [
-    ("/copy", "Copy the selected finding for Codex / Claude Code / OpenCode"),
+    ("/copy", "Copy the selected finding for Codex / Claude Code / Cursor"),
     ("/logout", "Sign out (clears the saved token — requires confirmation)"),
     ("/verify", "Run sandbox/browser verification on loaded findings (`/verify sandbox` or `/verify browser`)"),
     ("/mouse", "Toggle mouse capture — off lets you drag-to-select text natively"),
@@ -562,14 +681,11 @@ class _ScrollableFormattedTextControl(FormattedTextControl):
 
 
 def _section_header(label: str) -> list[tuple[str, str]]:
-    """An open-bottom 'box top' that visually demarcates a section."""
-    width = 78
-    prefix = f"┌─ {label} "
-    pad = max(0, width - len(prefix) - 1)
+    """A compact, peach section label with a short trailing rule. Kept narrow
+    so it never wraps inside the (now sidebar-narrowed) details pane."""
     return [
-        ("class:section.box", prefix),
-        ("class:section.box", "─" * pad),
-        ("class:section.box", "┐\n"),
+        ("class:section.label", f"{label.upper()}  "),
+        ("class:rule", "─" * max(6, 28 - len(label))),
     ]
 
 
@@ -819,6 +935,9 @@ class OpenHackApp:
         self._trace_agent_idx: int = 0
         # Update/announcement state — populated asynchronously on startup.
         self._update_info: Optional[UpdateInfo] = None
+        # Knight-rider spinner frame index, advanced by the run() ticker while
+        # a scan is active. Wraps over _SPINNER_FRAMES.
+        self._spin_idx: int = 0
 
         self.input_buffer = Buffer(
             multiline=False,
@@ -840,6 +959,9 @@ class OpenHackApp:
             # When False, the terminal's built-in drag-to-select works.
             mouse_support=Condition(lambda: self._mouse_enabled),
             erase_when_done=True,
+            # The palette is full 24-bit; force truecolor so the hex theme
+            # renders faithfully instead of being quantized to 256.
+            color_depth=ColorDepth.DEPTH_24_BIT,
         )
 
     # ── Keybindings ───────────────────────────────────────────────
@@ -1150,83 +1272,131 @@ class OpenHackApp:
     # ── Style ─────────────────────────────────────────────────────
 
     def _build_style(self) -> Style:
+        # All colors drawn from the dark palette (see OH_* constants).
         return Style.from_dict({
-            "logo": "bold ansiwhite",
-            "wordmark": "bold ansiwhite",
-            "tagline": "ansigray",
-            "tip": "ansigray italic",
-            "tip.label": "ansiyellow",
-            "footer": "ansigray",
-            "input.box": "",
-            "input.prompt": "bold ansibrightgreen",
-            "input.placeholder": "ansigray italic",
-            "hint": "ansigray",
-            "hint.key": "bold ansiwhite",
-            "rule": "ansigray",
-            "header.brand": "bold ansicyan",
-            "header.sep": "ansigray",
-            "header.target": "bold ansiwhite",
-            "header.meta": "ansigray",
-            "tab.active": "bold reverse ansicyan",
-            "tab.inactive": "ansigray",
-            "tab.key": "bold ansiwhite",
-            "pane.title": "bold ansiwhite",
-            "pane.empty": "ansigray italic",
-            "pane.dim": "ansigray",
-            "verified": "bold ansigreen",
-            "status.pending": "ansigray",
-            "status.running": "bold ansicyan",
-            "status.working": "bold ansiyellow",
-            "status.done": "bold ansigreen",
-            "status.fail": "bold ansired",
-            "agent.name": "ansiwhite",
-            "agent.detail": "ansigray",
-            "sev.critical": "bold reverse ansired",
-            "sev.high": "bold ansired",
-            "sev.medium": "bold ansiyellow",
-            "sev.low": "bold ansiblue",
-            "sev.info": "ansigray",
-            "finding.title": "ansiwhite",
-            "finding.path": "ansigray",
-            "finding.cursor": "bold reverse ansicyan",
-            "trace.time": "ansigray",
-            "trace.agent": "ansicyan",
-            "trace.arrow": "ansigray",
-            "trace.tool": "bold ansiwhite",
-            "trace.dim": "ansigray",
-            "trace.step": "bold ansibrightblue",
-            "session.row": "ansiwhite",
-            "session.row.selected": "bold reverse ansicyan",
-            "session.meta": "ansigray",
-            "section.label": "bold ansicyan",
-            "section.box": "ansicyan",
-            "code": "ansiwhite",
-            "md.h1": "bold ansibrightcyan underline",
-            "md.h2": "bold ansicyan",
-            "md.h3": "bold ansiwhite",
-            "md.bold": "bold ansiwhite",
-            "md.italic": "italic",
-            "md.code": "bg:#222222 ansibrightgreen",
-            "md.bullet": "ansicyan",
-            "md.link": "underline ansibrightblue",
-            "md.quote": "italic ansigray",
-            "syntax.comment": "italic ansigray",
-            "syntax.string": "ansigreen",
-            "syntax.keyword": "bold ansimagenta",
-            "syntax.builtin": "ansicyan",
-            "syntax.function": "ansiyellow",
-            "syntax.class": "bold ansiyellow",
-            "syntax.decorator": "ansiyellow",
-            "syntax.number": "ansicyan",
-            "syntax.operator": "ansiwhite",
-            "log": "ansigray",
-            "modal.frame": "bg:#1a1a1a ansiwhite",
-            "modal.title": "bg:#1a1a1a bold ansibrightcyan",
-            "modal.body": "bg:#1a1a1a ansiwhite",
-            "modal.hint": "bg:#1a1a1a ansigray",
-            "modal.key": "bg:#1a1a1a bold ansibrightyellow",
-            "completion-menu.completion": "bg:#222222 ansiwhite",
-            "completion-menu.completion.current": "bg:ansibrightblue ansiwhite",
+            # canvas
+            "body": f"bg:{OH_BG} {OH_TEXT}",
+            # logo / wordmark
+            "logo": f"bold {OH_TEXT}",
+            "logo.dim": OH_MUTED,
+            "logo.bright": f"bold {OH_TEXT}",
+            "logo.mark": f"bold {OH_PRIMARY}",  # signal-green ground symbol
+            "wordmark": f"bold {OH_TEXT}",
+            "tagline": OH_MUTED,
+            # tip line
+            "tip": OH_MUTED,
+            "tip.label": f"bold {OH_ORANGE}",
+            "tip.key": OH_TEXT,
+            "footer": OH_MUTED,
+            "footer.bright": f"bold {OH_TEXT}",
+            "footer.dot": OH_GREEN,
+            # input box (signal-green left bar, element bg)
+            "input.box": f"bg:{OH_ELEM}",
+            "input.bar": f"{OH_SECONDARY} bg:{OH_ELEM}",
+            "input.prompt": OH_SECONDARY,
+            "input.placeholder": f"bg:{OH_ELEM} {OH_MUTED}",
+            "input.model.agent": f"bg:{OH_ELEM} {OH_SECONDARY}",
+            "input.model.sep": f"bg:{OH_ELEM} {OH_MUTED}",
+            "input.model.name": f"bg:{OH_ELEM} {OH_TEXT}",
+            "input.model.provider": f"bg:{OH_ELEM} {OH_MUTED}",
+            # hints
+            "hint": OH_MUTED,
+            "hint.key": OH_TEXT,
+            "rule": OH_BORDER_SUB,
+            # spinner / status row
+            "spinner": OH_SECONDARY,
+            "spinner.dim": OH_BORDER,
+            "status.esc": OH_TEXT,
+            "status.esc.label": OH_MUTED,
+            "status.usage": OH_MUTED,
+            # header
+            "header.brand": f"bold {OH_PRIMARY}",
+            "header.brandname": f"bold {OH_TEXT}",
+            "header.sep": OH_MUTED,
+            "header.target": f"bold {OH_TEXT}",
+            "header.meta": OH_MUTED,
+            # sidebar
+            "sidebar": f"bg:{OH_PANEL} {OH_TEXT}",
+            "sidebar.header": f"bg:{OH_PANEL} bold {OH_TEXT}",
+            "sidebar.label": f"bg:{OH_PANEL} {OH_MUTED}",
+            "sidebar.value": f"bg:{OH_PANEL} {OH_TEXT}",
+            "sidebar.dot": f"bg:{OH_PANEL} {OH_GREEN}",
+            "sidebar.path.dim": f"bg:{OH_PANEL} {OH_MUTED}",
+            "sidebar.path.bright": f"bg:{OH_PANEL} bold {OH_TEXT}",
+            "sidebar.sep": f"bg:{OH_PANEL} {OH_BORDER_SUB}",
+            # tabs
+            "tab.active": f"bold {OH_PRIMARY}",
+            "tab.inactive": OH_MUTED,
+            "tab.key": OH_TEXT,
+            # panes
+            "pane.title": f"bold {OH_TEXT}",
+            "pane.empty": OH_MUTED,
+            "pane.dim": OH_MUTED,
+            "verified": f"bold {OH_GREEN}",
+            "status.pending": OH_MUTED,
+            "status.running": f"bold {OH_SECONDARY}",
+            "status.working": f"bold {OH_ORANGE}",
+            "status.done": f"bold {OH_GREEN}",
+            "status.fail": f"bold {OH_RED}",
+            "agent.name": OH_TEXT,
+            "agent.detail": OH_MUTED,
+            # severity
+            "sev.critical": f"bold {OH_RED}",
+            "sev.high": f"bold {OH_RED}",
+            "sev.medium": f"bold {OH_ORANGE}",
+            "sev.low": f"bold {OH_CYAN}",
+            "sev.info": OH_MUTED,
+            "finding.title": OH_TEXT,
+            "finding.path": OH_MUTED,
+            "finding.cursor": f"bold {OH_PRIMARY}",
+            # trace / message stream
+            "trace.time": OH_MUTED,
+            "trace.agent": OH_SECONDARY,
+            "trace.arrow": OH_MUTED,
+            "trace.tool": f"bold {OH_TEXT}",
+            "trace.dim": OH_MUTED,
+            "trace.step": f"bold {OH_PRIMARY}",
+            "msg.bar": OH_SECONDARY,
+            "msg.bar.error": OH_RED,
+            "msg.meta.glyph": OH_PRIMARY,
+            "msg.meta.agent": OH_TEXT,
+            "msg.meta.dim": OH_MUTED,
+            # sessions
+            "session.row": OH_TEXT,
+            "session.row.selected": f"bold {OH_PRIMARY}",
+            "session.meta": OH_MUTED,
+            # sections / code / markdown
+            "section.label": f"bold {OH_PRIMARY}",
+            "section.box": OH_PRIMARY,
+            "code": OH_TEXT,
+            "md.h1": f"bold {OH_ACCENT} underline",
+            "md.h2": f"bold {OH_ACCENT}",
+            "md.h3": f"bold {OH_TEXT}",
+            "md.bold": f"bold {OH_ORANGE}",
+            "md.italic": f"italic {OH_YELLOW}",
+            "md.code": f"bg:{OH_ELEM} {OH_GREEN}",
+            "md.bullet": OH_PRIMARY,
+            "md.link": f"underline {OH_CYAN}",
+            "md.quote": f"italic {OH_YELLOW}",
+            # syntax
+            "syntax.comment": f"italic {OH_MUTED}",
+            "syntax.string": OH_GREEN,
+            "syntax.keyword": f"bold {OH_ACCENT}",
+            "syntax.builtin": OH_CYAN,
+            "syntax.function": OH_PRIMARY,
+            "syntax.class": f"bold {OH_YELLOW}",
+            "syntax.decorator": OH_YELLOW,
+            "syntax.number": OH_ORANGE,
+            "syntax.operator": OH_CYAN,
+            "log": OH_MUTED,
+            # modal
+            "modal.frame": f"bg:{OH_PANEL} {OH_TEXT}",
+            "modal.title": f"bg:{OH_PANEL} bold {OH_PRIMARY}",
+            "modal.body": f"bg:{OH_PANEL} {OH_TEXT}",
+            "modal.hint": f"bg:{OH_PANEL} {OH_MUTED}",
+            "modal.key": f"bg:{OH_PANEL} bold {OH_PRIMARY}",
+            "completion-menu.completion": f"bg:{OH_ELEM} {OH_TEXT}",
+            "completion-menu.completion.current": f"bg:{OH_SECONDARY} {OH_BG}",
         })
 
     # ── Layout ────────────────────────────────────────────────────
@@ -1301,173 +1471,184 @@ class OpenHackApp:
         )
         return Layout(root, focused_element=self._input_window)
 
-    def _build_landing_container(self) -> HSplit:
-        # Centered logo + wordmark + input + hints + tip + footer.
-        # Render each logo line as its own Window so WindowAlign.CENTER puts
-        # them all at the same horizontal offset.
-        logo_windows = [
-            Window(
-                FormattedTextControl(lambda line=line: [("class:logo", line)]),
-                align=WindowAlign.CENTER,
-                height=1,
-            )
-            for line in _LOGO_LINES
+    # ── Shared input/footer components ────────────────────────────
+
+    def _wordmark_lines(self) -> list[list[tuple[str, str]]]:
+        """The 'OpenHack' wordmark as a single line of bold brand-tone text."""
+        return [[("class:wordmark", _WORDMARK)]]
+
+    def _placeholder_text(self) -> str:
+        return "Ask anything, or type /scan . to begin a security scan"
+
+    def _model_line(self) -> list[tuple[str, str]]:
+        """The '<agent> · <model> <provider>' line under the input."""
+        return [
+            ("class:input.box", "  "),
+            ("class:input.model.agent", "Scan"),
+            ("class:input.model.sep", " · "),
+            ("class:input.model.name", self.model or "kimi-k2.5"),
+            ("class:input.model.provider", f"  {self.provider}"),
         ]
 
-        def wordmark():
-            return [("class:wordmark", "OpenHack")]
+    def _make_input_window(self) -> Window:
+        """Create the shared buffer window (blue prompt, dim placeholder)."""
+        return Window(
+            content=BufferControl(
+                buffer=self.input_buffer,
+                input_processors=[
+                    BeforeInput("  ", style="class:input.box"),
+                    _PlaceholderProcessor(lambda: "  " + self._placeholder_text()),
+                ],
+            ),
+            height=1,
+            style="class:input.box",
+        )
+
+    def _input_box(self, width) -> VSplit:
+        """The prompt: a signal-green left accent bar + element-bg box holding
+        the input line and the model/agent status line."""
+        inner = HSplit([
+            Window(height=1, style="class:input.box"),  # airy top padding
+            self._input_window,
+            Window(
+                FormattedTextControl(self._model_line),
+                height=1, style="class:input.box",
+            ),
+            Window(height=1, style="class:input.box"),  # bottom padding
+        ], style="class:input.box")
+        return VSplit([
+            Window(width=1, char="▌", style="class:input.bar"),
+            inner,
+            Window(width=1, style="class:input.box"),
+        ], width=width, style="class:input.box")
+
+    def _cwd_fragments(self, dim: str, bright: str) -> list[tuple[str, str]]:
+        """`~/parent/`(dim) + `name`(bright) + `:branch`(dim)."""
+        cwd = os.getcwd()
+        disp = _abbrev_home(cwd)
+        branch = _git_branch(cwd)
+        parent, _, name = disp.rpartition("/")
+        out: list[tuple[str, str]] = []
+        if parent:
+            out.append((dim, parent + "/"))
+        out.append((bright, name or disp))
+        if branch:
+            out.append((dim, ":" + branch))
+        return out
+
+    def _build_landing_container(self) -> HSplit:
+        # Landing: the green ground mark over the two-tone wordmark, a brand
+        # tagline, a bordered prompt with the signal-green accent bar, a
+        # right-aligned shortcut row, a tip line, and a cwd/version footer.
+        mark_windows = [
+            Window(
+                FormattedTextControl(lambda row=row: [("class:logo.mark", row)]),
+                align=WindowAlign.CENTER, height=1, style="class:body",
+            )
+            for row in _MARK_ROWS
+        ]
+        wm = self._wordmark_lines()
+        logo_windows = [
+            Window(
+                FormattedTextControl(lambda frags=frags: frags),
+                align=WindowAlign.CENTER, height=1, style="class:body",
+            )
+            for frags in wm
+        ]
+
+        def tagline():
+            return [("class:tagline", "The open-source security agent · hunts and verifies vulnerabilities")]
 
         def tip():
+            cfg = load_user_config()
+            logged_in = bool(
+                cfg.get("openhack_user_first_name")
+                or cfg.get("openhack_user_email")
+                or self.user_email
+            )
+            if not logged_in:
+                return [
+                    ("class:tip.label", "● Tip  "),
+                    ("class:tip", "Run "),
+                    ("class:tip.key", "/login"),
+                    ("class:tip", " to get $20 in free credits and start scanning"),
+                ]
             return [
-                ("class:tip.label", "• Tip  "),
+                ("class:tip.label", "● Tip  "),
                 ("class:tip", "Type "),
-                ("class:hint.key", "/scan ."),
+                ("class:tip.key", "/scan ."),
                 ("class:tip", " to scan the current directory, or "),
-                ("class:hint.key", "?"),
+                ("class:tip.key", "?"),
                 ("class:tip", " for help"),
             ]
 
-        # "Get Started" box — four key commands a new user needs. Each row is
-        # `command  description`, column-aligned so the descriptions line up.
-        _GETTING_STARTED = [
-            ("/login",          "login to OpenHack"),
-            ("/scan <dir>",     "begin a scan"),
-            ("/sessions",       "browse past scans"),
-            ("/help",           "list commands"),
-            ("/discord",        "chat with the community"),
-        ]
-        _GS_CMD_WIDTH = max(len(cmd) for cmd, _ in _GETTING_STARTED)
-
-        _GS_LPAD = "  "  # 2 spaces left padding inside the frame
-        _GS_RPAD = "  "  # 2 spaces right padding inside the frame
-
-        def getting_started():
-            out: list[tuple[str, str]] = [
-                ("", "\n"),  # top vertical padding
-                ("", _GS_LPAD), ("class:pane.title", "Get Started"), ("", _GS_RPAD + "\n"),
-                ("", "\n"),  # spacer under the title
-            ]
-            for cmd, desc in _GETTING_STARTED:
-                pad = " " * (_GS_CMD_WIDTH - len(cmd) + 3)
-                out.append(("", _GS_LPAD))
-                out.append(("class:hint.key", cmd))
-                out.append(("", pad))
-                out.append(("class:tip", desc))
-                out.append(("", _GS_RPAD + "\n"))
-            out.append(("", "\n"))  # bottom vertical padding
-            return out
-
-        # Width = lpad + command column + gap + longest description column + rpad.
-        _GS_INNER_WIDTH = (
-            len(_GS_LPAD) + _GS_CMD_WIDTH + 3
-            + max(len(d) for _, d in _GETTING_STARTED) + len(_GS_RPAD)
-        )
-        _GS_FRAME_WIDTH = _GS_INNER_WIDTH + 2  # +2 for the box borders
-        # Body height: 1 top pad + 1 title + 1 blank + N rows + 1 bottom pad.
-        _GS_INNER_HEIGHT = 3 + len(_GETTING_STARTED) + 1
-
         def hints():
             return [
-                ("class:hint", "  enter "),
-                ("class:hint.key", "submit"),
-                ("class:hint", "   tab "),
-                ("class:hint.key", "complete"),
-                ("class:hint", "   "),
-                ("class:hint.key", "?"),
-                ("class:hint", " help"),
+                ("class:hint.key", "tab"), ("class:hint", " complete    "),
+                ("class:hint.key", "enter"), ("class:hint", " submit    "),
+                ("class:hint.key", "?"), ("class:hint", " help"),
             ]
 
-        def footer():
-            cfg = load_user_config()
-            first = cfg.get("openhack_user_first_name") or ""
-            last = cfg.get("openhack_user_last_name") or ""
-            email = cfg.get("openhack_user_email") or self.user_email or ""
-            org = cfg.get("openhack_org_name") or self.org_name or ""
-            # Prefer full name → first name → email.
-            display_name = " ".join(p for p in (first, last) if p).strip() or email
-            parts: list[tuple[str, str]] = []
-            if display_name:
-                parts.append(("class:footer", display_name))
-            if org:
-                if parts:
-                    parts.append(("class:footer", "  ·  "))
-                parts.append(("class:footer", org))
-            if not parts:
-                parts.append(("class:footer", "not logged in — run /login"))
-            return parts
+        def version_right():
+            return [("class:footer", f"OpenHack {OPENHACK_VERSION}"), ("class:footer", "  ")]
 
-        # The input bar (used by both landing and scanning, but here it's
-        # styled to feel like opencode's centered prompt).
-        self._input_window = Window(
-            content=BufferControl(
-                buffer=self.input_buffer,
-                input_processors=[BeforeInput("❯ ", style="class:input.prompt")],
+        self._input_window = self._make_input_window()
+        # Cap max == preferred so leftover width flows to the side spacers and
+        # the box stays centered (rather than stretching to fill the row).
+        box_width = D(min=44, preferred=80, max=80)
+
+        # The prompt box + right-aligned shortcut row, centered horizontally.
+        box_region = VSplit([
+            Window(width=D(weight=1), style="class:body"),
+            HSplit([
+                self._input_box(box_width),
+                Window(height=1, style="class:body"),
+                Window(FormattedTextControl(hints), height=1,
+                       align=WindowAlign.RIGHT, style="class:body"),
+            ], width=box_width),
+            Window(width=D(weight=1), style="class:body"),
+        ], style="class:body")
+
+        footer = VSplit([
+            Window(width=1, style="class:body"),
+            Window(
+                FormattedTextControl(
+                    lambda: self._cwd_fragments("class:footer", "class:footer.bright")
+                ),
+                height=1, style="class:body",
             ),
-            height=1,
-        )
+            Window(FormattedTextControl(version_right), height=1,
+                   align=WindowAlign.RIGHT, style="class:body"),
+        ], style="class:body")
 
         return HSplit([
-            Window(height=D(weight=1)),  # top spacer
+            Window(height=D(weight=1), style="class:body"),  # top spacer
+            *mark_windows,
+            Window(height=1, style="class:body"),
             *logo_windows,
-            Window(height=1),
-            Window(FormattedTextControl(wordmark), align=WindowAlign.CENTER, height=1),
-            Window(height=2),
-            # Input row, padded so it appears centered with consistent width.
-            VSplit([
-                Window(width=D(weight=1)),
-                HSplit([
-                    Window(
-                        FormattedTextControl(lambda: [("class:rule", "─" * 64)]),
-                        height=1,
-                    ),
-                    self._input_window,
-                    Window(
-                        FormattedTextControl(lambda: [("class:rule", "─" * 64)]),
-                        height=1,
-                    ),
-                ], width=64),
-                Window(width=D(weight=1)),
-            ]),
-            Window(height=1),
-            Window(FormattedTextControl(hints), align=WindowAlign.CENTER, height=1),
-            Window(height=1),
-            Window(FormattedTextControl(tip), align=WindowAlign.CENTER, height=1),
-            Window(height=1),
-            # "Get Started" box — fixed-width, horizontally centered with
-            # flexible spacers on either side.
-            VSplit([
-                Window(width=D(weight=1)),
-                Frame(
-                    Window(
-                        FormattedTextControl(getting_started),
-                        height=_GS_INNER_HEIGHT,
-                    ),
-                    width=_GS_FRAME_WIDTH,
-                ),
-                Window(width=D(weight=1)),
-            ]),
-            Window(height=1),
-            # Update notification + announcement banners (populated async on
-            # startup via the /updates endpoint). Empty if nothing to show.
+            Window(height=1, style="class:body"),
+            Window(FormattedTextControl(tagline), align=WindowAlign.CENTER,
+                   height=1, style="class:body"),
+            Window(height=2, style="class:body"),
+            box_region,
+            Window(height=1, style="class:body"),
+            Window(FormattedTextControl(tip), align=WindowAlign.CENTER,
+                   height=1, style="class:body"),
+            Window(height=1, style="class:body"),
             Window(
                 FormattedTextControl(self._update_banner_text),
-                align=WindowAlign.CENTER,
-                wrap_lines=True,
+                align=WindowAlign.CENTER, wrap_lines=True, style="class:body",
             ),
-            # Status-line slot: shows /verify warnings, /logout prompts, errors,
-            # etc., on the landing screen. wrap_lines so long warnings stay
-            # readable instead of getting truncated at the right edge.
             Window(
                 FormattedTextControl(lambda: [
                     ("class:log", f"  {self.last_status_line}" if self.last_status_line else "")
                 ]),
-                wrap_lines=True,
-                align=WindowAlign.CENTER,
+                wrap_lines=True, align=WindowAlign.CENTER, style="class:body",
             ),
-            Window(height=D(weight=1)),
-            Window(FormattedTextControl(footer), align=WindowAlign.CENTER, height=1),
-            Window(height=1),
-        ])
+            Window(height=D(weight=1), style="class:body"),  # bottom spacer
+            footer,
+            Window(height=1, style="class:body"),
+        ], style="class:body")
 
     def _build_scan_container(self) -> HSplit:
         # ── Header bar ────────────────────────────────────────────
@@ -1488,21 +1669,15 @@ class OpenHackApp:
                 target = self.viewing_target or target
                 label = "viewing"
             short = self._short_target(target) if target else ""
-            out: list[tuple[str, str]] = [("class:header.brand", "⏚ openhack")]
+            # Clean top bar — the elapsed/cost/account now live in the sidebar.
+            out: list[tuple[str, str]] = [
+                ("class:header.brand", "⏚ "),
+                ("class:header.brandname", "OpenHack"),
+            ]
             if short:
                 out.extend([
                     ("class:header.sep", "  ·  "),
                     ("class:header.target", short),
-                ])
-            if elapsed:
-                out.extend([
-                    ("class:header.sep", "    "),
-                    ("class:header.meta", elapsed),
-                ])
-            if self.scan is not None and self.mode != "viewing":
-                out.extend([
-                    ("class:header.sep", "  ·  "),
-                    ("class:header.meta", f"${cost:.4f}"),
                 ])
             if label:
                 out.extend([
@@ -2001,28 +2176,142 @@ class OpenHackApp:
                                  filter=Condition(lambda: self.active_tab == "findings")),
         ])
 
-        # ── Bottom status line + input ────────────────────────────
-        def status_line():
+        # ── Right sidebar (session panel) ─────────────────────────
+        P = "  "  # left padding inside the sidebar
+
+        def sidebar_body():
+            out: list[tuple[str, str]] = []
+            # Session header
+            if self.mode == "viewing":
+                title = "Viewing session"
+            elif self.scan is not None and self.scan.end_time is not None:
+                title = "Scan complete"
+            elif self.scan is not None:
+                title = "Scanning…"
+            else:
+                title = "New session"
+            out.append(("class:sidebar.header", f"{P}{title}\n"))
+            target = ""
+            if self.scan is not None:
+                target = self._short_target(self.scan.target or "")
+            if self.mode == "viewing":
+                target = self._short_target(self.viewing_target or target)
+            if target:
+                out.append(("class:sidebar.label", f"{P}{target}\n"))
+            out.append(("class:sidebar", "\n"))
+
+            # Context: elapsed + spend.
+            out.append(("class:sidebar.header", f"{P}Context\n"))
+            elapsed = self.scan.elapsed_str() if self.scan is not None else "0:00"
+            cost = self.scan.cost if self.scan is not None else 0.0
+            out.append(("class:sidebar.value", f"{P}{elapsed}"))
+            out.append(("class:sidebar.label", " elapsed\n"))
+            out.append(("class:sidebar.value", f"{P}${cost:.2f}"))
+            out.append(("class:sidebar.label", " spent\n"))
+            out.append(("class:sidebar", "\n"))
+
+            # Findings: severity breakdown.
+            findings = self._current_findings()
+            out.append(("class:sidebar.header", f"{P}Findings\n"))
+            if not findings:
+                out.append(("class:sidebar.label", f"{P}none yet\n"))
+            else:
+                counts: dict[str, int] = {}
+                for f in findings:
+                    counts[(f.severity or "info").lower()] = counts.get(
+                        (f.severity or "info").lower(), 0) + 1
+                for sev, label in (("critical", "Critical"), ("high", "High"),
+                                   ("medium", "Medium"), ("low", "Low"),
+                                   ("info", "Info")):
+                    c = counts.get(sev, 0)
+                    if not c:
+                        continue
+                    out.append((_sev_style(sev), f"{P}● "))
+                    out.append(("class:sidebar.value", f"{c} "))
+                    out.append(("class:sidebar.label", f"{label}\n"))
+            out.append(("class:sidebar", "\n"))
+
+            # Activity: the latest event line.
+            out.append(("class:sidebar.header", f"{P}Activity\n"))
+            msg = (self.scan.last_message if self.scan is not None else "") or "idle"
+            if len(msg) > 34:
+                msg = msg[:33] + "…"
+            out.append(("class:sidebar.label", f"{P}{msg}\n"))
+            return out
+
+        def sidebar_footer():
+            out: list[tuple[str, str]] = [("class:sidebar", f"{P}")]
+            out.extend(self._cwd_fragments("class:sidebar.path.dim",
+                                           "class:sidebar.path.bright"))
+            out.append(("class:sidebar", "\n"))
+            out.append(("class:sidebar.dot", f"{P}● "))
+            out.append(("class:sidebar.path.bright", "OpenHack "))
+            out.append(("class:sidebar.label", OPENHACK_VERSION))
+            return out
+
+        sidebar = HSplit([
+            Window(FormattedTextControl(sidebar_body), wrap_lines=True,
+                   style="class:sidebar", always_hide_cursor=True),
+            Window(FormattedTextControl(sidebar_footer), height=2,
+                   style="class:sidebar", always_hide_cursor=True),
+            Window(height=1, style="class:sidebar"),
+        ], width=D(min=26, preferred=42), style="class:sidebar")
+
+        sidebar_divider = Window(width=1, char="│", style="class:sidebar.sep")
+        sidebar_pane_visible = Condition(lambda: not self.findings_list_hidden)
+
+        # ── Main split: body (left, flexible) + sidebar (right) ───
+        main = VSplit([
+            body,
+            ConditionalContainer(sidebar_divider, filter=sidebar_pane_visible),
+            ConditionalContainer(sidebar, filter=sidebar_pane_visible),
+        ])
+
+        # ── Bottom status row (spinner + esc | usage + hint) ──────
+        def spinner_frags():
+            running = (self.scan is not None and self.scan.end_time is None
+                       and self.mode == "scanning")
+            if running:
+                frame = _SPINNER_FRAMES[self._spin_idx % len(_SPINNER_FRAMES)]
+                out: list[tuple[str, str]] = [("class:spinner.dim", "  ")]
+                for ch in frame:
+                    out.append(("class:spinner.dim" if ch == "·" else "class:spinner", ch))
+                out.append(("", "   "))
+                out.append(("class:status.esc", "esc"))
+                out.append(("class:status.esc.label", " interrupt"))
+                return out
             msg = self.last_status_line or (self.scan.last_message if self.scan else "")
             return [("class:log", f"  {msg}" if msg else "")]
 
+        def usage_frags():
+            parts: list[tuple[str, str]] = []
+            if self.scan is not None:
+                n = len(self._current_findings())
+                parts.append(("class:status.usage", f"{n} findings  ·  ${self.scan.cost:.2f}"))
+                parts.append(("class:status.usage", "    "))
+            parts.append(("class:hint.key", "?"))
+            parts.append(("class:hint", " help"))
+            parts.append(("", "  "))
+            return parts
+
+        bottom_status = VSplit([
+            Window(FormattedTextControl(spinner_frags), height=1, style="class:body"),
+            Window(FormattedTextControl(usage_frags), height=1,
+                   align=WindowAlign.RIGHT, style="class:body"),
+        ], height=1, style="class:body")
+
         return HSplit([
-            Window(height=1),  # top padding
+            Window(height=1, style="class:body"),  # top padding
             header,
-            rule,
+            Window(height=1, style="class:body"),
             tab_bar_window,
-            rule,
-            body,
-            rule,
-            Window(FormattedTextControl(status_line), height=1),
-            VSplit([
-                Window(width=2),
-                self._input_window,
-                Window(FormattedTextControl(lambda: [("class:hint", "  /cancel  /clear")]),
-                       width=20, height=1, align=WindowAlign.RIGHT),
-            ]),
-            Window(height=1),  # bottom padding
-        ])
+            main,
+            Window(height=1, style="class:body"),
+            self._input_box(D(weight=1)),
+            Window(height=1, style="class:body"),
+            bottom_status,
+            Window(height=1, style="class:body"),
+        ], style="class:body")
 
     def _build_sessions_container(self) -> HSplit:
         """Standalone sessions overlay — full-screen picker, no tab bar."""
@@ -2384,7 +2673,7 @@ class OpenHackApp:
         if ok:
             self.last_status_line = (
                 f"copied {len(text):,} chars to clipboard via {tool} · "
-                f"paste into Codex / Claude Code / OpenCode"
+                f"paste into Codex / Claude Code / Cursor"
             )
         else:
             self.last_status_line = (
@@ -3367,12 +3656,20 @@ class OpenHackApp:
     # ── Run ───────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        # Tick the clock every second while scanning.
+        # Animate the spinner (~12fps) and tick the elapsed clock while a scan
+        # is running. The 80ms cadence drives the knight-rider sweep; the clock
+        # only needs whole seconds, tracked via a frame counter.
         async def _ticker():
+            frame = 0
             while True:
-                await asyncio.sleep(1.0)
-                if self.mode == "scanning":
+                await asyncio.sleep(0.08)
+                if self.mode == "scanning" and self.scan is not None and self.scan.end_time is None:
+                    self._spin_idx = (self._spin_idx + 1) % len(_SPINNER_FRAMES)
                     self._invalidate()
+                elif self.mode == "scanning":
+                    frame += 1
+                    if frame % 12 == 0:
+                        self._invalidate()
 
         async def _check_updates():
             info = await fetch_updates()
