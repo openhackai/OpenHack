@@ -251,6 +251,8 @@ def _sev_label(severity: str) -> str:
 # ── Slash command registry ────────────────────────────────────────
 
 _SLASH_COMMANDS = [
+    ("/agent", "Ask the interactive hacking agent to do a task (or just type it)"),
+    ("/plan", "Draft a read-only attack plan for a target/objective"),
     ("/copy", "Copy the selected finding for Codex / Claude Code / Cursor"),
     ("/logout", "Sign out (clears the saved token — requires confirmation)"),
     ("/verify", "Run sandbox/browser verification on loaded findings (`/verify sandbox` or `/verify browser`)"),
@@ -2490,8 +2492,8 @@ class OpenHackApp:
                 self.session.add_user_instruction(text)
                 self.last_status_line = "instruction queued for scan agents"
                 return
-            # Landing: chat about findings.
-            await self._chat(text)
+            # Landing: hand the task to the interactive hacking agent.
+            self._start_agent(text)
             return
 
         parts = text.split(None, 1)
@@ -2533,6 +2535,16 @@ class OpenHackApp:
                 self.last_status_line = f"error: directory not found: {target_path}"
             else:
                 self._start_scan(str(target_path))
+        elif cmd == "/agent":
+            if not arg.strip():
+                self.last_status_line = 'usage: /agent <task> — e.g. /agent recon example.com'
+            else:
+                self._start_agent(arg.strip())
+        elif cmd == "/plan":
+            if not arg.strip():
+                self.last_status_line = 'usage: /plan <objective> — drafts a read-only attack plan'
+            else:
+                self._start_agent(arg.strip(), plan=True)
         elif cmd == "/cost":
             self._cmd_cost()
         elif cmd == "/findings":
@@ -3349,6 +3361,68 @@ class OpenHackApp:
         self.viewing_target = ""
         self._cancel_armed = False
         self.scan_task = asyncio.create_task(self._run_test_scan())
+
+    def _start_agent(self, task: str, plan: bool = False) -> None:
+        """Start the interactive hacking agent (or plan mode) on a task."""
+        if self.mode == "scanning":
+            # A run is in flight — treat this as a follow-up instruction instead.
+            if self.session is not None:
+                self.session.add_user_instruction(task)
+                self.last_status_line = "instruction queued for the agent"
+            return
+        target_dir = os.getcwd()
+        label = "planning" if plan else "agent"
+        self.scan = ScanState(target=f"{target_dir} ({label})")
+        self.mode = "scanning"
+        self.active_tab = "trace"
+        self.viewing_target = ""
+        self._cancel_armed = False
+        self.scan_task = asyncio.create_task(self._run_agent(task, target_dir, plan))
+
+    async def _run_agent(self, task: str, target_dir: str, plan: bool) -> None:
+        reload_settings()
+        session: Optional[Session] = None
+        try:
+            from openhack.agents.interactive import InteractiveAgent, PlanAgent
+
+            session = Session(target_dir=target_dir, on_trace=self._on_trace)
+            self.session = session
+
+            tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True)
+            llm = LLMClient(
+                model=self.model, temperature=0.0, max_tokens=8192,
+                provider=self.provider, prompt_cache_key=session.id,
+            )
+            agent_cls = PlanAgent if plan else InteractiveAgent
+            agent = agent_cls(llm, tools, session)
+
+            result = await agent.run(task, context={"target_dir": target_dir})
+
+            # Surface the final answer in the transcript if the model ended on a
+            # tool call with no closing prose. When it ended with text, BaseAgent
+            # already traced it — don't duplicate.
+            final = (result.get("response") or result.get("partial_result") or "").strip()
+            already = any(
+                e.event_type == "thinking" and (e.content or "").strip() == final
+                for e in session.trace[-3:]
+            )
+            if final and not already:
+                session.add_trace(agent=agent.name, event_type="thinking", content=final)
+            self.last_session = session
+            self.last_status_line = (
+                f"{'plan' if plan else 'agent'} done · {session.total_tokens:,} tokens · "
+                f"${session.total_cost:.4f} · type a follow-up or /clear"
+            )
+        except asyncio.CancelledError:
+            self.last_status_line = "agent stopped"
+            raise
+        except Exception as exc:
+            self.last_status_line = f"agent error: {exc}"
+        finally:
+            if self.scan is not None:
+                self.scan.finish()
+            self.scan_task = None
+            self._invalidate()
 
     def _cancel_scan(self) -> None:
         if self.mode != "scanning":

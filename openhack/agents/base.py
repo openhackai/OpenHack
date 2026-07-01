@@ -202,7 +202,13 @@ class BaseAgent(ABC):
                 if self.tools.is_async_tool(tool_call.name):
                     result = await self.tools.execute_tool_async(tool_call.name, tool_call.arguments)
                 else:
-                    result = self.tools.execute_tool(tool_call.name, tool_call.arguments)
+                    # Run sync tools in a worker thread so a long-running tool
+                    # (nmap, nuclei, a slow shell command) doesn't block the event
+                    # loop — keeps the TUI responsive and the spinner animating.
+                    import asyncio as _asyncio
+                    result = await _asyncio.to_thread(
+                        self.tools.execute_tool, tool_call.name, tool_call.arguments
+                    )
 
                 self.session.add_trace(
                     agent=self.name,
