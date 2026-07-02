@@ -488,14 +488,24 @@ class ScanState:
             args = entry.tool_input or {}
             detail = _short_tool_label(tool, args)
             self.upsert_agent(agent, _STATUS_WORKING, detail)
-            self.last_message = f"{agent} · {detail}"
-            self._append_trace(agent, [
-                ("class:trace.time", ts),
-                ("class:trace.agent", f"  {agent:>24}"),
-                ("class:trace.arrow", "  →  "),
-                ("class:trace.tool", tool),
-                ("class:trace.dim", f"  {detail}" if detail and detail != tool else ""),
-            ])
+            self.last_message = f"{detail}"
+            if str(agent).startswith("openhack"):
+                # Interactive agent: a tool call is a quiet sub-action beneath the
+                # conversation — no agent name, no arrow, just an indented tool tag.
+                self._append_trace(agent, [
+                    ("class:trace.time", ts),
+                    ("class:trace.tool.name", "   " + tool),
+                    ("class:trace.dim", f"  {detail}" if detail and detail != tool else ""),
+                ])
+            else:
+                # Scan pipeline: many named agents, so keep the attribution.
+                self._append_trace(agent, [
+                    ("class:trace.time", ts),
+                    ("class:trace.agent", f"  {agent:>24}"),
+                    ("class:trace.arrow", "  →  "),
+                    ("class:trace.tool", tool),
+                    ("class:trace.dim", f"  {detail}" if detail and detail != tool else ""),
+                ])
             return
 
         if etype == "tool_result":
@@ -1198,23 +1208,17 @@ class OpenHackApp:
             self._trace_follow = True
             self._invalidate()
 
+        # Up / Down scroll the transcript. (They used to cycle a per-agent
+        # "picker" — removed; there's no agent list in a conversation.)
         @kb.add("up", filter=Condition(_on_trace))
         def _t_up(event):
-            _move_trace_agent(-1)
+            self._scroll_trace_by(-3)
 
         @kb.add("down", filter=Condition(_on_trace))
         def _t_down(event):
-            _move_trace_agent(+1)
+            self._scroll_trace_by(+3)
 
-        @kb.add("[", filter=Condition(_on_trace))
-        def _t_prev_agent(event):
-            _move_trace_agent(-1)
-
-        @kb.add("]", filter=Condition(_on_trace))
-        def _t_next_agent(event):
-            _move_trace_agent(+1)
-
-        # PgUp / PgDn scroll the trace content (was Up/Down before).
+        # PgUp / PgDn scroll the trace content by a page.
         @kb.add("pageup", filter=Condition(_on_trace))
         def _t_pgup(event):
             self._scroll_trace_by(-12)
@@ -1394,6 +1398,7 @@ class OpenHackApp:
             "trace.user": OH_MUTED,
             "trace.user.bar": f"bold {OH_MUTED}",
             "trace.agent.bar": f"bold {OH_PRIMARY}",
+            "trace.tool.name": OH_CYAN,
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
             "msg.meta.glyph": OH_PRIMARY,
@@ -2369,11 +2374,15 @@ class OpenHackApp:
 
         keybar = Window(FormattedTextControl(keybar_frags), height=1, style="class:body")
 
+        # The Trace/Findings tab bar is scan furniture. In an agent conversation
+        # there's just the transcript (findings open on demand via /findings), so
+        # hide it there.
+        tabs_visible = Condition(lambda: not self.is_agent_session)
         return HSplit([
             Window(height=1, style="class:body"),  # top padding
             header,
             Window(height=1, style="class:body"),
-            tab_bar_window,
+            ConditionalContainer(tab_bar_window, filter=tabs_visible),
             main,
             Window(height=1, style="class:body"),
             self._input_box(D(weight=1)),
