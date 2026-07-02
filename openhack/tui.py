@@ -417,6 +417,18 @@ class ScanState:
 
         ts = self._ts(entry.timestamp)
 
+        if etype == "user":
+            content_str = str(entry.content or "").strip()
+            if content_str:
+                self.last_message = f"you · {content_str[:60]}"
+                line: list[tuple[str, str]] = [
+                    ("class:trace.time", ts),
+                    ("class:trace.user.bar", "  ▌ "),
+                    ("class:trace.user", content_str),
+                ]
+                self._append_trace(agent, line)
+            return
+
         if etype == "step_start":
             self.current_step = str(entry.content)
             self.last_message = f"step start · {entry.content}"
@@ -1363,6 +1375,8 @@ class OpenHackApp:
             "trace.tool": f"bold {OH_TEXT}",
             "trace.dim": OH_MUTED,
             "trace.step": f"bold {OH_PRIMARY}",
+            "trace.user": f"bold {OH_TEXT}",
+            "trace.user.bar": f"bold {OH_PRIMARY}",
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
             "msg.meta.glyph": OH_PRIMARY,
@@ -3412,6 +3426,9 @@ class OpenHackApp:
 
             session = Session(target_dir=target_dir, on_trace=self._on_trace)
             self.session = session
+            # Echo the user's task into the transcript so both sides of the
+            # conversation are visible.
+            session.add_trace(agent="you", event_type="user", content=task)
 
             tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True)
             llm = LLMClient(
@@ -3451,6 +3468,7 @@ class OpenHackApp:
         session = self.session
         agent = self.agent
         try:
+            session.add_trace(agent="you", event_type="user", content=task)
             result = await agent.continue_run(task)
             self._finalize_agent_turn(session, agent, result, plan=False)
         except asyncio.CancelledError:
