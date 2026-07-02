@@ -423,7 +423,7 @@ class ScanState:
                 self.last_message = f"you · {content_str[:60]}"
                 line: list[tuple[str, str]] = [
                     ("class:trace.time", ts),
-                    ("class:trace.user.bar", "  ▌ "),
+                    ("class:trace.user.bar", " ▌ "),
                     ("class:trace.user", content_str),
                 ]
                 self._append_trace(agent, line)
@@ -511,11 +511,20 @@ class ScanState:
                 # content as markdown — headers, bold, bullets, inline code.
                 if len(content_str) > 2000:
                     content_str = content_str[:1997] + "…"
-                line: list[tuple[str, str]] = [
-                    ("class:trace.time", ts),
-                    ("class:trace.agent", f"  {agent:>24}"),
-                    ("class:trace.arrow", "  ⋯  "),
-                ]
+                if str(agent).startswith("openhack"):
+                    # Interactive agent: render as a clean chat message with a
+                    # green speaker bar (mirrors the grey user bar), no name.
+                    line: list[tuple[str, str]] = [
+                        ("class:trace.time", ts),
+                        ("class:trace.agent.bar", " ▌ "),
+                    ]
+                else:
+                    # Scan pipeline: many named agents, so keep the name label.
+                    line = [
+                        ("class:trace.time", ts),
+                        ("class:trace.agent", f"  {agent:>24}"),
+                        ("class:trace.arrow", "  ⋯  "),
+                    ]
                 line.extend(_render_md_prose(content_str))
                 self._append_trace(agent, line)
             return
@@ -1375,8 +1384,9 @@ class OpenHackApp:
             "trace.tool": f"bold {OH_TEXT}",
             "trace.dim": OH_MUTED,
             "trace.step": f"bold {OH_PRIMARY}",
-            "trace.user": f"bold {OH_TEXT}",
-            "trace.user.bar": f"bold {OH_PRIMARY}",
+            "trace.user": OH_MUTED,
+            "trace.user.bar": f"bold {OH_MUTED}",
+            "trace.agent.bar": f"bold {OH_PRIMARY}",
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
             "msg.meta.glyph": OH_PRIMARY,
