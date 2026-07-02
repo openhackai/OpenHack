@@ -104,10 +104,26 @@ class BaseAgent(ABC):
         context = context or {}
         self.session.current_agent = self.name
 
-        system_prompt = self.get_system_prompt(context)
+        self._system_prompt = self.get_system_prompt(context)
         self.messages = [Message(role="user", content=task)]
         self._seed_existing_instructions()
+        return await self._agent_loop()
 
+    async def continue_run(self, task: str) -> dict:
+        """Continue an existing conversation with a new user turn.
+
+        Unlike run(), this keeps the prior message history and system prompt, so
+        the agent remembers what it just did — used for interactive follow-ups.
+        """
+        if not getattr(self, "_system_prompt", None):
+            # No conversation yet — behave like a fresh run.
+            return await self.run(task)
+        self.session.current_agent = self.name
+        self.messages.append(Message(role="user", content=task))
+        return await self._agent_loop()
+
+    async def _agent_loop(self) -> dict:
+        system_prompt = self._system_prompt
         max_iterations = 50
         iteration = 0
 

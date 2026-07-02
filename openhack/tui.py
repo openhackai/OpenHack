@@ -888,6 +888,11 @@ class OpenHackApp:
         self.scan: Optional[ScanState] = None
         self.session: Optional[Session] = None
         self.scan_task: Optional[asyncio.Task] = None
+        # Interactive-agent conversation state. When an agent session is open and
+        # idle, follow-up input continues the same conversation (rather than being
+        # queued into an already-finished loop).
+        self.agent = None
+        self.is_agent_session: bool = False
         self.last_status_line: str = ""
         self.last_findings: list[Finding] = []  # findings from most recent scan
         self.last_session: Optional[Session] = None
@@ -2484,14 +2489,30 @@ class OpenHackApp:
 
         # Non-slash input.
         if not text.startswith("/"):
-            if self.mode == "scanning" and self.session:
-                low = text.lstrip("-").strip().lower()
+            low = text.lstrip("-").strip().lower()
+            running = self.scan_task is not None and not self.scan_task.done()
+
+            # A run (scan or agent) is actively in flight → queue as a mid-loop
+            # instruction; the agent picks it up on its next iteration.
+            if running and self.session:
                 if low in _CANCEL_PHRASES:
                     self._cancel_scan()
                     return
                 self.session.add_user_instruction(text)
-                self.last_status_line = "instruction queued for scan agents"
+                self.last_status_line = "queued — the agent will pick this up mid-run"
                 return
+
+            # An agent conversation is open but idle → continue it (remembering
+            # everything so far) rather than starting from scratch.
+            if self.is_agent_session and self.agent is not None:
+                self._continue_agent(text)
+                return
+
+            # A finished scan is on screen → chat about its findings.
+            if self.mode == "scanning" and self.session:
+                await self._chat(text)
+                return
+
             # Landing: hand the task to the interactive hacking agent.
             self._start_agent(text)
             return
@@ -2515,6 +2536,8 @@ class OpenHackApp:
         elif cmd == "/clear":
             self.mode = "landing"
             self.scan = None
+            self.agent = None
+            self.is_agent_session = False
             self.active_tab = "trace"
             self.viewing_target = ""
             self.last_status_line = ""
@@ -3346,6 +3369,8 @@ class OpenHackApp:
             return
         self.scan = ScanState(target=target_dir)
         self.mode = "scanning"
+        self.agent = None
+        self.is_agent_session = False
         self.active_tab = "trace"
         self.viewing_target = ""
         self._cancel_armed = False
@@ -3363,12 +3388,12 @@ class OpenHackApp:
         self.scan_task = asyncio.create_task(self._run_test_scan())
 
     def _start_agent(self, task: str, plan: bool = False) -> None:
-        """Start the interactive hacking agent (or plan mode) on a task."""
-        if self.mode == "scanning":
+        """Start a fresh interactive hacking agent (or plan mode) on a task."""
+        if self.scan_task is not None and not self.scan_task.done():
             # A run is in flight — treat this as a follow-up instruction instead.
             if self.session is not None:
                 self.session.add_user_instruction(task)
-                self.last_status_line = "instruction queued for the agent"
+                self.last_status_line = "queued — the agent will pick this up mid-run"
             return
         target_dir = os.getcwd()
         label = "planning" if plan else "agent"
@@ -3395,24 +3420,11 @@ class OpenHackApp:
             )
             agent_cls = PlanAgent if plan else InteractiveAgent
             agent = agent_cls(llm, tools, session)
+            self.agent = agent
+            self.is_agent_session = True
 
             result = await agent.run(task, context={"target_dir": target_dir})
-
-            # Surface the final answer in the transcript if the model ended on a
-            # tool call with no closing prose. When it ended with text, BaseAgent
-            # already traced it — don't duplicate.
-            final = (result.get("response") or result.get("partial_result") or "").strip()
-            already = any(
-                e.event_type == "thinking" and (e.content or "").strip() == final
-                for e in session.trace[-3:]
-            )
-            if final and not already:
-                session.add_trace(agent=agent.name, event_type="thinking", content=final)
-            self.last_session = session
-            self.last_status_line = (
-                f"{'plan' if plan else 'agent'} done · {session.total_tokens:,} tokens · "
-                f"${session.total_cost:.4f} · type a follow-up or /clear"
-            )
+            self._finalize_agent_turn(session, agent, result, plan)
         except asyncio.CancelledError:
             self.last_status_line = "agent stopped"
             raise
@@ -3423,6 +3435,51 @@ class OpenHackApp:
                 self.scan.finish()
             self.scan_task = None
             self._invalidate()
+
+    def _continue_agent(self, task: str) -> None:
+        """Continue the open agent conversation with a follow-up turn."""
+        if self.agent is None:
+            self._start_agent(task)
+            return
+        # Re-arm the spinner/elapsed clock for the new turn while keeping the
+        # existing transcript on screen.
+        if self.scan is not None:
+            self.scan.end_time = None
+        self.scan_task = asyncio.create_task(self._run_continue(task))
+
+    async def _run_continue(self, task: str) -> None:
+        session = self.session
+        agent = self.agent
+        try:
+            result = await agent.continue_run(task)
+            self._finalize_agent_turn(session, agent, result, plan=False)
+        except asyncio.CancelledError:
+            self.last_status_line = "agent stopped"
+            raise
+        except Exception as exc:
+            self.last_status_line = f"agent error: {exc}"
+        finally:
+            if self.scan is not None:
+                self.scan.finish()
+            self.scan_task = None
+            self._invalidate()
+
+    def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
+        # Surface the final answer in the transcript if the model ended on a
+        # tool call with no closing prose. When it ended with text, BaseAgent
+        # already traced it — don't duplicate.
+        final = (result.get("response") or result.get("partial_result") or "").strip()
+        already = any(
+            e.event_type == "thinking" and (e.content or "").strip() == final
+            for e in session.trace[-3:]
+        )
+        if final and not already:
+            session.add_trace(agent=agent.name, event_type="thinking", content=final)
+        self.last_session = session
+        self.last_status_line = (
+            f"{'plan' if plan else 'agent'} done · {session.total_tokens:,} tokens · "
+            f"${session.total_cost:.4f} · type a follow-up or /clear"
+        )
 
     def _cancel_scan(self) -> None:
         if self.mode != "scanning":
