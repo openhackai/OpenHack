@@ -1548,6 +1548,7 @@ class OpenHackApp:
         inner = HSplit([
             Window(height=1, style="class:input.box"),  # airy top padding
             self._input_window,
+            Window(height=1, style="class:input.box"),  # gap before the model line
             Window(
                 FormattedTextControl(self._model_line),
                 height=1, style="class:input.box",
@@ -2299,7 +2300,13 @@ class OpenHackApp:
         ], width=D(min=26, preferred=42), style="class:sidebar")
 
         sidebar_divider = Window(width=1, char="│", style="class:sidebar.sep")
-        sidebar_pane_visible = Condition(lambda: not self.findings_list_hidden)
+        # The scan sidebar (Session/Context/Findings/Activity) is meaningful for a
+        # real scan pipeline. In an interactive agent conversation it's just noise
+        # ("Scan complete", "none yet") — findings count + cost already live in the
+        # bottom bar — so hide it there and let the chat use the full width.
+        sidebar_pane_visible = Condition(
+            lambda: not self.findings_list_hidden and not self.is_agent_session
+        )
 
         # ── Main split: body (left, flexible) + sidebar (right) ───
         main = VSplit([
