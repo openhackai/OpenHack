@@ -421,6 +421,8 @@ class ScanState:
             content_str = str(entry.content or "").strip()
             if content_str:
                 self.last_message = f"you · {content_str[:60]}"
+                if self.trace_lines:
+                    self._append_trace(agent, [("", "")])  # blank line between messages
                 line: list[tuple[str, str]] = [
                     ("class:trace.time", ts),
                     ("class:trace.user.bar", " ▌ "),
@@ -514,6 +516,8 @@ class ScanState:
                 if str(agent).startswith("openhack"):
                     # Interactive agent: render as a clean chat message with a
                     # green speaker bar (mirrors the grey user bar), no name.
+                    if self.trace_lines:
+                        self._append_trace(agent, [("", "")])  # blank line between messages
                     line: list[tuple[str, str]] = [
                         ("class:trace.time", ts),
                         ("class:trace.agent.bar", " ▌ "),
@@ -1992,9 +1996,13 @@ class OpenHackApp:
             FormattedTextControl(lambda: [("class:rule", "│\n") for _ in range(0, 200)]),
             width=1,
         )
+        # The left "agents" list is a scan-pipeline filter (many named agents).
+        # In an interactive agent conversation there's only the operator + agent,
+        # so it's just noise — hide the whole column there.
+        show_agents = Condition(lambda: not self.is_agent_session)
         trace_pane = VSplit([
-            trace_sidebar,
-            trace_sep,
+            ConditionalContainer(trace_sidebar, filter=show_agents),
+            ConditionalContainer(trace_sep, filter=show_agents),
             VSplit([
                 Window(width=1),
                 trace_window,
