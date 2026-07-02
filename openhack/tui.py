@@ -1334,6 +1334,9 @@ class OpenHackApp:
             # hints
             "hint": OH_MUTED,
             "hint.key": OH_TEXT,
+            "keybar": OH_MUTED,
+            "keybar.key": OH_TEXT,
+            "keybar.sep": OH_BORDER,
             "rule": OH_BORDER_SUB,
             # spinner / status row
             "spinner": OH_SECONDARY,
@@ -1765,8 +1768,7 @@ class OpenHackApp:
                 out.append(("class:tab.key", f" {i} "))
                 out.append((cls, f" {label} "))
                 out.append(("", "  "))
-            out.append(("class:hint",
-                        "    ←/→ tab · ↑↓ scroll · [ ] finding · < > resize · Ctrl+B hide · /sessions"))
+            # Shortcuts moved to the bottom keybar to keep the top uncluttered.
             return out
 
         tab_bar_window = Window(FormattedTextControl(tab_bar), height=1)
@@ -2327,9 +2329,6 @@ class OpenHackApp:
             if self.scan is not None:
                 n = len(self._current_findings())
                 parts.append(("class:status.usage", f"{n} findings  ·  ${self.scan.cost:.2f}"))
-                parts.append(("class:status.usage", "    "))
-            parts.append(("class:hint.key", "?"))
-            parts.append(("class:hint", " help"))
             parts.append(("", "  "))
             return parts
 
@@ -2338,6 +2337,30 @@ class OpenHackApp:
             Window(FormattedTextControl(usage_frags), height=1,
                    align=WindowAlign.RIGHT, style="class:body"),
         ], height=1, style="class:body")
+
+        # ── Keybar: shortcuts live here at the bottom, not crammed by the tabs.
+        def keybar_frags():
+            # Context-aware: a conversation doesn't need the findings/resize keys.
+            if self.is_agent_session:
+                items = [
+                    ("⏎", "send"), ("↑↓", "scroll"),
+                    ("/clear", "reset"), ("?", "help"),
+                ]
+            else:
+                items = [
+                    ("←/→", "tab"), ("↑↓", "scroll"), ("[ ]", "finding"),
+                    ("< >", "resize"), ("Ctrl+B", "sidebar"),
+                    ("/sessions", "past scans"), ("?", "help"),
+                ]
+            out: list[tuple[str, str]] = [("", "  ")]
+            for i, (key, label) in enumerate(items):
+                if i:
+                    out.append(("class:keybar.sep", " · "))
+                out.append(("class:keybar.key", key))
+                out.append(("class:keybar", f" {label}"))
+            return out
+
+        keybar = Window(FormattedTextControl(keybar_frags), height=1, style="class:body")
 
         return HSplit([
             Window(height=1, style="class:body"),  # top padding
@@ -2349,6 +2372,7 @@ class OpenHackApp:
             self._input_box(D(weight=1)),
             Window(height=1, style="class:body"),
             bottom_status,
+            keybar,
             Window(height=1, style="class:body"),
         ], style="class:body")
 
