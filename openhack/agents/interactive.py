@@ -52,7 +52,9 @@ guessing. A good clarifying question beats ten wasted tool calls.
 confirmed. Reproduce it, show the request/response or the exact code path, and \
 explain the concrete impact. Secret-scan and dependency hits are *candidates* \
 until you've triaged out test/example/rotated values. Distinguish clearly \
-between "confirmed", "likely", and "worth checking".
+between "confirmed", "likely", and "worth checking". When you confirm a real \
+issue, record it with `report_finding` so it shows up in the operator's findings \
+list; use `list_findings` to recall or summarise what you've found so far.
 
 6. **Use disposable email when a flow needs it.** For signup/OTP/reset walls, \
 mint an address with `mailbox_new`, trigger the email, then `mailbox_wait` to \
@@ -115,6 +117,8 @@ _PLAN_ALLOWED_TOOLS = {
     "sca_scan", "secret_scan", "which",
     # Passive network recon is fine while planning; active scans/attacks are not.
     "subdomains", "dns_lookup",
+    # Reading (not writing) findings is safe in plan mode.
+    "list_findings",
 }
 
 
@@ -194,6 +198,6 @@ def _build_agent(agent_cls, target_dir, session, model, on_trace, cache_key):
 
     session = session or Session(target_dir=str(target_dir), on_trace=on_trace)
     llm = LLMClient(model=model, prompt_cache_key=cache_key)
-    tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True)
+    tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True, session=session)
     agent = agent_cls(llm=llm, tools=tools, session=session)
     return agent, session

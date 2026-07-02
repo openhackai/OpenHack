@@ -215,7 +215,7 @@ CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
     "You help users understand vulnerability scan results, explain security concepts, "
     "and advise on remediation. Be concise and direct. "
-    "If the user asks you to scan, tell them to use /full-scan or /scan <path>."
+    "If the user asks you to scan, tell them to use /scan <path>."
 )
 
 
@@ -251,29 +251,26 @@ def _sev_label(severity: str) -> str:
 # ── Slash command registry ────────────────────────────────────────
 
 _SLASH_COMMANDS = [
-    ("/agent", "Ask the interactive hacking agent to do a task (or just type it)"),
     ("/plan", "Draft a read-only attack plan for a target/objective"),
-    ("/copy", "Copy the selected finding for Codex / Claude Code / Cursor"),
-    ("/logout", "Sign out (clears the saved token — requires confirmation)"),
-    ("/verify", "Run sandbox/browser verification on loaded findings (`/verify sandbox` or `/verify browser`)"),
-    ("/mouse", "Toggle mouse capture — off lets you drag-to-select text natively"),
-    ("/discord", "Open the OpenHack Discord in your browser"),
-    ("/scan", "Full scan on a specific directory (defaults to current)"),
-    ("/pause", "Pause the running scan (Ctrl+C also pauses)"),
-    ("/resume", "Resume a paused scan"),
-    ("/cancel", "Cancel the running scan permanently"),
+    ("/scan", "Run the full multi-agent scan pipeline on a directory (defaults to current)"),
+    ("/findings", "Show findings from the current session"),
+    ("/verify", "Verify loaded findings (`/verify sandbox` or `/verify browser`)"),
+    ("/copy", "Copy the selected finding as an AI-fix prompt to the clipboard"),
+    ("/pause", "Pause the running scan/agent (Ctrl+C also pauses)"),
+    ("/resume", "Resume a paused run"),
+    ("/cancel", "Stop the running scan/agent"),
+    ("/clear", "Clear the conversation / return to landing"),
     ("/sessions", "Browse and re-load past scan results"),
-    ("/findings", "Re-display findings from last scan"),
-    ("/sidebar", "Show/hide the Findings list sidebar (Ctrl+B)"),
-    ("/login", "Re-login with OpenHack account (browser flow)"),
-    ("/setup", "Interactive setup wizard"),
+    ("/provider", "Switch LLM provider (openhack, openai, anthropic, …)"),
+    ("/model", "Set or show the model ID"),
     ("/config", "Show or set configuration"),
-    ("/provider", "Switch provider"),
-    ("/model", "Override model ID"),
-    ("/cost", "Show cost breakdown from last scan"),
-    ("/clear", "Clear scan history (returns to landing)"),
+    ("/cost", "Show cost + tokens for the current session"),
+    ("/mouse", "Toggle mouse capture (off = drag-to-select text)"),
+    ("/login", "Sign in to your OpenHack account"),
+    ("/logout", "Sign out (clears the saved token)"),
+    ("/setup", "Run the setup wizard"),
+    ("/discord", "Open the OpenHack Discord in your browser"),
     ("/help", "Show available commands"),
-    ("/test", "Run a simulated scan (no LLM)"),
     ("/quit", "Exit"),
 ]
 
@@ -2577,6 +2574,7 @@ class OpenHackApp:
             # An agent conversation is open but idle → continue it (remembering
             # everything so far) rather than starting from scratch.
             if self.is_agent_session and self.agent is not None:
+                self.active_tab = "trace"  # return from a /findings view to the chat
                 self._continue_agent(text)
                 return
 
@@ -2630,11 +2628,6 @@ class OpenHackApp:
                 self.last_status_line = f"error: directory not found: {target_path}"
             else:
                 self._start_scan(str(target_path))
-        elif cmd == "/agent":
-            if not arg.strip():
-                self.last_status_line = 'usage: /agent <task> — e.g. /agent recon example.com'
-            else:
-                self._start_agent(arg.strip())
         elif cmd == "/plan":
             if not arg.strip():
                 self.last_status_line = 'usage: /plan <objective> — drafts a read-only attack plan'
@@ -2646,13 +2639,8 @@ class OpenHackApp:
             self._cmd_findings()
         elif cmd == "/config":
             self._cmd_config(arg)
-        elif cmd == "/test":
-            self._start_test_scan()
         elif cmd == "/sessions":
             self._open_sessions_overlay()
-        elif cmd == "/sidebar":
-            self.findings_list_hidden = not self.findings_list_hidden
-            self.last_status_line = "sidebar hidden" if self.findings_list_hidden else "sidebar shown"
         elif cmd == "/copy":
             self._cmd_copy_fix()
         elif cmd == "/verify":
@@ -2671,14 +2659,38 @@ class OpenHackApp:
         self.last_status_line = lines[0]
 
     def _cmd_provider(self, name: str) -> None:
+        from openhack import providers as _providers
+
         name = name.lower().strip()
-        if name not in PROVIDER_DEFAULTS:
-            self.last_status_line = f"unknown provider: {name}"
+        if not name:
+            self.last_status_line = (
+                "providers: " + ", ".join(_providers.list_providers())
+                + " · usage: /provider <name>"
+            )
             return
-        self.provider = resolve_provider(name)
-        self.model = PROVIDER_DEFAULTS[name]
-        save_user_config({"provider": self.provider, "model": self.model})
-        self.last_status_line = f"switched to {name} ({self.model})"
+        if not _providers.is_known(name):
+            self.last_status_line = (
+                f"unknown provider: {name} · try one of: "
+                + ", ".join(_providers.list_providers())
+            )
+            return
+
+        self.provider = name
+        if name == "openhack":
+            self.model = settings.openhack_model_id or "kimi-k2.5"
+            save_user_config({"provider": name, "model": self.model})
+            self.last_status_line = f"switched to openhack ({self.model})"
+            return
+
+        resolved = _providers.resolve(name)
+        self.model = resolved.model
+        save_user_config({"provider": name, "model": self.model})
+        if resolved.missing_key_env:
+            self.last_status_line = (
+                f"switched to {name} ({self.model}) — set {resolved.missing_key_env} to use it"
+            )
+        else:
+            self.last_status_line = f"switched to {name} ({self.model})"
 
     def _cmd_model(self, arg: str) -> None:
         if arg:
@@ -2988,12 +3000,17 @@ class OpenHackApp:
         )
 
     def _cmd_findings(self) -> None:
-        findings = (self.last_session.findings if self.last_session else None) or self.last_findings
+        findings = self._current_findings()
         if not findings:
-            self.last_status_line = "no findings to display"
+            self.last_status_line = (
+                "no findings yet — run /scan, or ask the agent to investigate and record findings"
+            )
             return
-        self.last_findings = list(findings)
-        self.last_status_line = f"{len(findings)} finding(s)"
+        # Switch to the findings view. Since the tab bar is hidden in agent
+        # sessions, esc or typing a message returns to the transcript.
+        self.active_tab = "findings"
+        self.findings_selected = 0
+        self.last_status_line = f"{len(findings)} finding(s) · esc or type to return to chat"
 
     def _cmd_config(self, arg: str) -> None:
         if not arg.strip():
@@ -3484,11 +3501,19 @@ class OpenHackApp:
 
             session = Session(target_dir=target_dir, on_trace=self._on_trace)
             self.session = session
+            # Bubble agent-reported findings (report_finding tool) into the
+            # ScanState so /findings can show them.
+            _orig_add = session.add_finding
+            def _bubble(f, _orig=_orig_add):
+                _orig(f)
+                if self.scan is not None and f not in self.scan.findings:
+                    self.scan.findings.append(f)
+            session.add_finding = _bubble  # type: ignore[method-assign]
             # Echo the user's task into the transcript so both sides of the
             # conversation are visible.
             session.add_trace(agent="you", event_type="user", content=task)
 
-            tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True)
+            tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True, session=session)
             llm = LLMClient(
                 model=self.model, temperature=0.0, max_tokens=8192,
                 provider=self.provider, prompt_cache_key=session.id,

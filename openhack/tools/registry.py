@@ -26,7 +26,7 @@ class ToolRegistry:
     disposable mailbox) used by the interactive agent.
     """
 
-    def __init__(self, target_dir: Path, include_agent_tools: bool = False):
+    def __init__(self, target_dir: Path, include_agent_tools: bool = False, session=None):
         self.target_dir = target_dir
         self.fs_tools = FileSystemTools(target_dir)
         self.nextjs_tools = NextJSTools(self.fs_tools)
@@ -46,6 +46,11 @@ class ToolRegistry:
                 self.shell_tools, self.security_tools, self.mailbox_tools,
                 self.recon_tools, self.oob_tools, self.browser_tools,
             ]
+            # Findings tools need the session to read/write findings.
+            if session is not None:
+                from .findings import FindingsTools
+                self.findings_tools = FindingsTools(session)
+                self._tool_sources.append(self.findings_tools)
 
         self._tool_handlers = {}
         self._async_handlers = {}

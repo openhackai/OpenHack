@@ -320,6 +320,62 @@ def test_oob_poll_parses_hits(monkeypatch):
     assert result["interactions"] == 1
 
 
+# ---------------------------------------------------------------- findings
+
+def _session(tmp_path):
+    from openhack.agents.session import Session
+    return Session(target_dir=str(tmp_path))
+
+
+def test_report_and_list_findings(tmp_path):
+    from openhack.tools.findings import FindingsTools
+
+    sess = _session(tmp_path)
+    ft = FindingsTools(sess)
+    out = ft.report_finding(title="SQLi in login", severity="high",
+                            description="unparameterized query", category="sqli",
+                            file_path="app/login.py", line_number=42)
+    assert out["recorded"] is True
+    assert out["total_findings"] == 1
+    assert len(sess.findings) == 1
+
+    listed = ft.list_findings()
+    assert listed["count"] == 1
+    assert listed["findings"][0]["title"] == "SQLi in login"
+    assert listed["findings"][0]["severity"] == "high"
+
+
+def test_report_finding_normalizes_bad_severity(tmp_path):
+    from openhack.tools.findings import FindingsTools
+
+    ft = FindingsTools(_session(tmp_path))
+    ft.report_finding(title="x", severity="spicy")
+    assert ft.list_findings()["findings"][0]["severity"] == "medium"
+
+
+def test_report_finding_requires_title(tmp_path):
+    from openhack.tools.findings import FindingsTools
+
+    assert "error" in FindingsTools(_session(tmp_path)).report_finding(title="")
+
+
+def test_registry_registers_findings_tools_with_session(tmp_path):
+    sess = _session(tmp_path)
+    reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True, session=sess)
+    names = {t["name"] for t in reg.get_all_tool_definitions()}
+    assert "report_finding" in names
+    assert "list_findings" in names
+    # A finding recorded via the tool lands in the session.
+    reg.execute_tool("report_finding", {"title": "t", "severity": "low"})
+    assert len(sess.findings) == 1
+
+
+def test_registry_without_session_has_no_findings_tools(tmp_path):
+    reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True)
+    names = {t["name"] for t in reg.get_all_tool_definitions()}
+    assert "report_finding" not in names
+
+
 # ----------------------------------------------------------------- browser
 
 def test_browser_degrades_without_playwright(monkeypatch):
