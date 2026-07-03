@@ -3540,16 +3540,23 @@ class OpenHackApp:
             self.agent = agent
             self.is_agent_session = True
 
+            # Persist immediately so even a crashed first turn leaves a record.
+            self._write_report(session, target_dir, status="running")
+            status = "completed"
             result = await agent.run(task, context={"target_dir": target_dir})
             self._finalize_agent_turn(session, agent, result, plan)
         except asyncio.CancelledError:
             self.last_status_line = "agent stopped"
+            status = "cancelled"
             raise
         except Exception as exc:
             self.last_status_line = f"agent error: {exc}"
+            status = "failed"
         finally:
             if self.scan is not None:
                 self.scan.finish()
+            if session is not None:
+                self._write_report(session, target_dir, status=status)
             self.scan_task = None
             self._invalidate()
 
@@ -3567,18 +3574,23 @@ class OpenHackApp:
     async def _run_continue(self, task: str) -> None:
         session = self.session
         agent = self.agent
+        status = "completed"
         try:
             session.add_trace(agent="you", event_type="user", content=task)
             result = await agent.continue_run(task)
             self._finalize_agent_turn(session, agent, result, plan=False)
         except asyncio.CancelledError:
             self.last_status_line = "agent stopped"
+            status = "cancelled"
             raise
         except Exception as exc:
             self.last_status_line = f"agent error: {exc}"
+            status = "failed"
         finally:
             if self.scan is not None:
                 self.scan.finish()
+            if session is not None:
+                self._write_report(session, session.target_dir, status=status)
             self.scan_task = None
             self._invalidate()
 
@@ -3749,8 +3761,14 @@ class OpenHackApp:
                     "tool_output": tool_output,
                 }
 
+            # First user message doubles as a human-readable title for /sessions.
+            title = next(
+                (str(e.content) for e in session.trace if e.event_type == "user"), ""
+            )[:140]
             report = {
                 "version": 2,
+                "kind": "agent" if self.is_agent_session else "scan",
+                "title": title,
                 "scan_id": session.id,
                 "target_dir": target_dir,
                 "provider": self.provider,
