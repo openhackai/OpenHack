@@ -211,6 +211,10 @@ class _PlaceholderProcessor(Processor):
 
 PROVIDER_DEFAULTS = {"openhack": "kimi-k2.5"}
 
+# Models the OpenHack hosted provider serves (must match the inference backend's
+# MODEL_MAP). Shown by `/model` so users can discover what they can switch to.
+OPENHACK_MODELS = ["kimi-k2.5", "gemma-4-31b", "mistral-large-2512"]
+
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
     "You help users understand vulnerability scan results, explain security concepts, "
@@ -2693,12 +2697,25 @@ class OpenHackApp:
             self.last_status_line = f"switched to {name} ({self.model})"
 
     def _cmd_model(self, arg: str) -> None:
-        if arg:
-            self.model = arg
-            save_user_config({"model": arg})
-            self.last_status_line = f"model set to {arg}"
-        else:
-            self.last_status_line = f"current model: {self.model}"
+        arg = arg.strip()
+        if not arg:
+            if self.provider == "openhack":
+                avail = " · ".join(
+                    (m + " ←" if m == self.model else m) for m in OPENHACK_MODELS
+                )
+                self.last_status_line = f"model: {self.model}  ·  available: {avail}  ·  switch with /model <id>"
+            else:
+                self.last_status_line = (
+                    f"model: {self.model} ({self.provider}) · /model <id> to switch to any model your provider serves"
+                )
+            return
+        self.model = arg
+        save_user_config({"model": arg})
+        known = self.provider != "openhack" or arg in OPENHACK_MODELS
+        self.last_status_line = (
+            f"model set to {arg}" if known
+            else f"model set to {arg} — note: not in OpenHack's served list, requests may fail"
+        )
 
     # ── Copy finding for AI agent ─────────────────────────────────
 
