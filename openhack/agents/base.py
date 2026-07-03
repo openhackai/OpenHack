@@ -30,6 +30,9 @@ class BaseAgent(ABC):
         self.session = session
         self.messages: list[Message] = []
         self._instructions_watermark: int = 0
+        # Optional per-token stream hook: stream_callback(kind, delta) where kind
+        # is "content" or "reasoning". Set by a UI to render tokens live.
+        self.stream_callback = None
 
         context_limit = MODEL_CONTEXT_LIMITS.get(llm.model, DEFAULT_CONTEXT_LIMIT)
         self.context_manager = ContextWindowManager(
@@ -44,6 +47,15 @@ class BaseAgent(ABC):
 
     def get_tools(self) -> list[dict]:
         return self.tools.get_all_tool_definitions()
+
+    def _stream_chunk(self, kind: str, delta: str) -> None:
+        """Forward streamed tokens to the UI hook, if one is attached."""
+        cb = self.stream_callback
+        if cb is not None:
+            try:
+                cb(kind, delta)
+            except Exception:
+                pass
 
     def _inject_pending_instructions(self) -> None:
         """Pull any new user instructions from the session and append them to messages."""
@@ -145,6 +157,7 @@ class BaseAgent(ABC):
                     messages=self.messages,
                     tools=self.get_tools(),
                     system=system_prompt,
+                    on_chunk=self._stream_chunk,
                 )
             except openai.BadRequestError as e:
                 err_msg = str(e)

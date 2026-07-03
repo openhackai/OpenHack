@@ -929,6 +929,11 @@ class OpenHackApp:
         # queued into an already-finished loop).
         self.agent = None
         self.is_agent_session: bool = False
+        # Live token stream: the in-progress agent message, rendered at the tail
+        # of the transcript and cleared once the turn commits its trace line.
+        self._stream_buf: str = ""
+        self._stream_reasoning: str = ""
+        self._stream_last_invalidate: float = 0.0
         self.last_status_line: str = ""
         self.last_findings: list[Finding] = []  # findings from most recent scan
         self.last_session: Optional[Session] = None
@@ -1399,6 +1404,7 @@ class OpenHackApp:
             "trace.user": OH_MUTED,
             "trace.user.bar": f"bold {OH_MUTED}",
             "trace.agent.bar": f"bold {OH_PRIMARY}",
+            "trace.stream": OH_TEXT,
             "trace.tool.name": OH_CYAN,
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
@@ -1851,7 +1857,10 @@ class OpenHackApp:
             return {name}
 
         def _trace_text_raw():
+            streaming = bool(self._stream_buf or self._stream_reasoning)
             if self.scan is None or not self.scan.trace_lines:
+                if streaming:
+                    return self._stream_line()
                 return [("class:pane.empty", "  no trace yet — start a scan with /scan <path>")]
             wanted = _selected_trace_agents()
             out: list[tuple[str, str]] = []
@@ -1866,6 +1875,10 @@ class OpenHackApp:
             if matched == 0 and wanted is not None:
                 label = next(iter(wanted)) if len(wanted) == 1 else f"{len(wanted)} agents"
                 return [("class:pane.empty", f"  no events from {label} (yet)")]
+            # Append the in-progress agent message as it streams in.
+            if streaming:
+                out.append(("", "\n"))
+                out.extend(self._stream_line())
             return out
 
         def trace_text():
@@ -3537,6 +3550,7 @@ class OpenHackApp:
             )
             agent_cls = PlanAgent if plan else InteractiveAgent
             agent = agent_cls(llm, tools, session)
+            agent.stream_callback = self._on_agent_stream
             self.agent = agent
             self.is_agent_session = True
 
@@ -3558,6 +3572,8 @@ class OpenHackApp:
             if session is not None:
                 self._write_report(session, target_dir, status=status)
             self.scan_task = None
+            self._stream_buf = ""
+            self._stream_reasoning = ""
             self._invalidate()
 
     def _continue_agent(self, task: str) -> None:
@@ -3592,6 +3608,8 @@ class OpenHackApp:
             if session is not None:
                 self._write_report(session, session.target_dir, status=status)
             self.scan_task = None
+            self._stream_buf = ""
+            self._stream_reasoning = ""
             self._invalidate()
 
     def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
@@ -3643,9 +3661,52 @@ class OpenHackApp:
         self.last_status_line = "scan resumed"
         self._invalidate()
 
+    def _on_agent_stream(self, kind: str, delta: str) -> None:
+        """Accumulate streamed tokens (answer + reasoning) and repaint the tail."""
+        if not delta:
+            return
+        if kind == "content":
+            self._stream_buf += delta
+        elif kind == "reasoning":
+            self._stream_reasoning += delta
+        else:
+            return
+        # Throttle repaints so a fast stream doesn't thrash the renderer.
+        now = time.monotonic()
+        if now - self._stream_last_invalidate >= 0.03:
+            self._stream_last_invalidate = now
+            self._invalidate()
+
+    def _stream_line(self) -> list[tuple[str, str]]:
+        """Render the in-progress turn: the answer as it streams, or — before the
+        answer starts — a dim live 'thinking…' tail for reasoning models."""
+        if self._stream_buf:
+            text = self._stream_buf
+            if len(text) > 4000:
+                text = "…" + text[-4000:]
+            return [
+                ("class:trace.agent.bar", " ▌ "),
+                ("class:trace.stream", text),
+                ("class:trace.agent.bar", "▌"),  # caret marking the live cursor
+            ]
+        reasoning = self._stream_reasoning.strip().replace("\n", " ")
+        if len(reasoning) > 160:
+            reasoning = "…" + reasoning[-160:]
+        return [
+            ("class:trace.agent.bar", " ▌ "),
+            ("class:trace.dim", "thinking… "),
+            ("class:trace.dim", reasoning),
+            ("class:trace.agent.bar", "▌"),
+        ]
+
     def _on_trace(self, entry: TraceEntry) -> None:
         if self.scan is None:
             return
+        # The turn's text just committed as a trace line — drop the live buffers
+        # so we don't render the same text twice.
+        if entry.event_type in ("thinking", "tool_call"):
+            self._stream_buf = ""
+            self._stream_reasoning = ""
         self.scan.update_from_trace(entry)
         # Live-tick the elapsed clock by invalidating.
         self._invalidate()
