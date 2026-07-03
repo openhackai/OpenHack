@@ -72,8 +72,10 @@ PROVIDERS = [
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
         "models": [
-            ("glm-5.2", "GLM-5.2", "Flagship security analysis model (default)"),
-            ("kimi-k2.5", "Kimi K2.5", "Alternative reasoning model"),
+            ("glm-5.2", "GLM 5.2", "Reasoning model by Z.ai (default)"),
+            ("kimi-k2.5", "Kimi K2.5", "Flagship security analysis model by Moonshot"),
+            ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
+            ("mistral-large-2512", "Mistral Large", "Open-weight dense model by Mistral"),
         ],
         "default_model": "glm-5.2",
     },
@@ -229,6 +231,39 @@ async def _prompt_base_url(existing: Optional[str] = None) -> str:
     except (EOFError, KeyboardInterrupt):
         return existing
     return url if url else existing
+
+
+# ── Model selection ───────────────────────────────────────────────
+
+async def _pick_model_async(
+    provider: dict,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    default_model: str,
+) -> str:
+    """Let the user pick from the models the API actually serves.
+
+    Fetches the live model list from GET /v1/models; falls back to the
+    provider's hardcoded list if the call fails. Returns the chosen model id.
+    """
+    from openhack.agents.llm import fetch_available_models
+
+    described = {mid: (label, desc) for mid, label, desc in provider["models"]}
+    fetched = fetch_available_models(api_key=api_key, base_url=base_url)
+    model_ids = fetched or [m[0] for m in provider["models"]]
+
+    items: list[tuple[str, str, str]] = []
+    for mid in model_ids:
+        label, desc = described.get(mid, (mid, ""))
+        items.append((mid, label, desc))
+    if not items:
+        return default_model
+
+    default_idx = next((i for i, (mid, _, _) in enumerate(items) if mid == default_model), 0)
+    idx = await _select_menu_async("Choose a model", items, default_idx=default_idx)
+    if idx < 0:
+        return default_model
+    return items[idx][0]
 
 
 # ── Summary / confirmation ────────────────────────────────────────
@@ -389,6 +424,11 @@ async def _run_wizard(is_first_time: bool = True) -> bool:
             _html("")
             return False
         model_id = model_input if model_input else existing_model
+
+    # ── Step 2b: Pick a model (login / API-key paths) ────────────
+    # Custom setup already asked for a model string above.
+    if setup_choice in (0, 1) and api_key:
+        model_id = await _pick_model_async(provider, api_key, base_url, default_model)
 
     # ── Step 3: Summary & confirm ─────────────────────────────────
     org_name = login_result.org_name if login_result else None

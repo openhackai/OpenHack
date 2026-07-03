@@ -5,6 +5,7 @@ LLM client for OpenHack.
 import asyncio
 import json
 import logging
+import urllib.request
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
 
@@ -13,6 +14,35 @@ import openai
 from openhack.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def fetch_available_models(
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Optional[list[str]]:
+    """Fetch the model IDs the inference API currently serves.
+
+    Calls GET <base_url>/models with the bearer key. Returns the list of model
+    IDs, or None on any failure (no key, network error, bad response) so callers
+    can fall back to a hardcoded list.
+    """
+    key = api_key or settings.openhack_api_key
+    base = (base_url or settings.openhack_base_url).rstrip("/")
+    if not key:
+        return None
+    try:
+        req = urllib.request.Request(
+            f"{base}/models",
+            headers={"Authorization": f"Bearer {key}", "User-Agent": "openhack"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as e:
+        logger.debug(f"fetch_available_models failed: {e}")
+        return None
+    models = [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+    return models or None
 
 
 @dataclass
@@ -67,11 +97,13 @@ class LLMResponse:
 class LLMClient:
     """LLM client for OpenHack."""
 
+    # Client-side cost estimate for the TUI only — the inference layer tracks
+    # real cost server-side. Gemma is free on OpenRouter; Mistral/GLM are approx.
     PRICING = {
-        # NOTE: glm-5.2 pricing is a placeholder (mirrors kimi) for the local
-        # cost display — set the real per-1M rates once confirmed.
-        "glm-5.2": {"input": 0.50, "output": 2.80},
         "kimi-k2.5": {"input": 0.50, "output": 2.80},
+        "glm-5.2": {"input": 1.15, "output": 4.53},
+        "gemma-4-31b": {"input": 0.00, "output": 0.00},
+        "mistral-large-2512": {"input": 1.60, "output": 4.40},
     }
 
     # Set to True for the rest of the session when the endpoint rejects

@@ -78,6 +78,44 @@ def test_llmclient_missing_key_raises_clear_error(monkeypatch):
     assert "GROQ_API_KEY" in str(exc.value)
 
 
+def test_fetch_available_models_parses(monkeypatch):
+    import openhack.agents.llm as llm
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return b'{"object":"list","data":[{"id":"glm-5.2"},{"id":"kimi-k2.5"},{"id":"gemma-4-31b"}]}'
+
+    monkeypatch.setattr(llm.settings, "openhack_api_key", "sk-test", raising=False)
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+    models = llm.fetch_available_models(api_key="sk-test")
+    assert models == ["glm-5.2", "kimi-k2.5", "gemma-4-31b"]
+
+
+def test_fetch_available_models_none_without_key(monkeypatch):
+    import openhack.agents.llm as llm
+    # No explicit key and no configured key -> None (don't hit the network).
+    monkeypatch.setattr(llm.settings, "openhack_api_key", None, raising=False)
+    assert llm.fetch_available_models(api_key="") is None
+
+
+def test_fetch_available_models_none_on_error(monkeypatch):
+    import openhack.agents.llm as llm
+
+    def boom(*a, **k):
+        raise OSError("network down")
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", boom)
+    assert llm.fetch_available_models(api_key="sk-test") is None
+
+
+def test_pricing_covers_all_served_models():
+    from openhack.agents.llm import LLMClient
+    for m in ("glm-5.2", "kimi-k2.5", "gemma-4-31b", "mistral-large-2512"):
+        assert m in LLMClient.PRICING
+
+
 def test_llmclient_unknown_provider_cost_is_zero(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from openhack.agents.llm import LLMClient
