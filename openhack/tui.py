@@ -513,6 +513,16 @@ class ScanState:
             row = self.agents.get(agent)
             if row and row.status[0] == "▸":
                 row.status = _STATUS_RUNNING
+            # For the interactive agent, show a compact one-line result under the
+            # tool call so the operator sees the outcome (exit code / count /
+            # error). Full output is preserved in the session JSON.
+            if str(agent).startswith("openhack"):
+                summary = _summarize_tool_output(entry.tool_output)
+                if summary:
+                    self._append_trace(agent, [
+                        ("class:trace.time", ts),
+                        ("class:trace.dim", "     " + summary),
+                    ])
             return
 
         if etype == "thinking":
@@ -865,6 +875,41 @@ def _render_markdown_with_code(text: str, default_file: str = "") -> list[tuple[
 def _short_tool_label(tool: str, args: dict) -> str:
     path = args.get("path", "")
     pattern = args.get("pattern", "")
+
+    # ── Interactive agent tools: surface the actual command/target so the
+    #    operator sees exactly what ran. ──────────────────────────────────
+    def _clip(s: str, n: int = 200) -> str:
+        s = str(s)
+        return s if len(s) <= n else s[: n - 1] + "…"
+
+    if tool == "run_command":
+        return _clip(args.get("command", ""))
+    if tool == "which":
+        return _clip(args.get("tool", ""))
+    if tool == "subdomains":
+        return _clip(args.get("domain", ""))
+    if tool in ("http_probe", "port_scan", "nuclei_scan"):
+        target = args.get("target", "")
+        extra = args.get("ports") or args.get("severity") or args.get("tags") or ""
+        return _clip(f"{target}{('  ' + str(extra)) if extra else ''}".strip())
+    if tool == "dns_lookup":
+        return _clip(f"{args.get('name', '')} {args.get('record_type', 'A')}".strip())
+    if tool in ("sca_scan", "secret_scan"):
+        return _clip(args.get("path", "") or ".")
+    if tool == "mailbox_new":
+        return _clip(args.get("label", "") or "new address")
+    if tool == "mailbox_wait":
+        return _clip(f"wait {args.get('to', '')} /{args.get('match', '')}/".strip())
+    if tool == "mailbox_list":
+        return _clip(args.get("to", "") or "recent")
+    if tool == "oob_register":
+        return _clip(args.get("label", "") or "callback url")
+    if tool == "oob_poll":
+        return _clip(args.get("marker", ""))
+    if tool == "browser_fetch":
+        return _clip(args.get("url", ""))
+    if tool == "list_findings":
+        return "list findings"
     # Paths are already relative to the project root (tools are rooted at
     # target_dir), so we surface them verbatim in the trace.
     if tool == "read_file" and path:
@@ -904,6 +949,32 @@ def _short_tool_label(tool: str, args: dict) -> str:
     if path:
         return f"{tool} {path}"
     return tool
+
+
+def _summarize_tool_output(out) -> str:
+    """One-line result summary for a tool call in the interactive transcript."""
+    if not isinstance(out, dict):
+        s = str(out).strip().replace("\n", " ")
+        return (s[:120] + "…") if len(s) > 120 else s
+    if "error" in out:
+        return f"error: {str(out['error'])[:120]}"
+    if "exit_code" in out:
+        note = f"exit {out['exit_code']}"
+        if out.get("timed_out"):
+            note = "timed out"
+        return note
+    for key, label in (
+        ("count", "results"), ("interactions", "callbacks"),
+        ("vulnerable_packages", "vulnerable packages"),
+        ("files_scanned", "files scanned"), ("total_findings", "findings"),
+    ):
+        if key in out:
+            return f"{out[key]} {label}"
+    if "installed" in out:
+        return "installed" if out["installed"] else "not installed"
+    if "subdomains" in out:
+        return f"{out.get('count', len(out['subdomains']))} subdomains"
+    return ""
 
 
 # ── App ───────────────────────────────────────────────────────────
@@ -1914,9 +1985,11 @@ class OpenHackApp:
             self._trace_scroll = max(0, self._trace_scroll + delta)
             # If we scrolled down past the visible content end, re-enable follow.
             if delta > 0 and self.scan and self.scan.trace_lines:
+                # Each entry is (agent, fragments); a rendered line is 1 + the
+                # newlines inside its fragment texts.
                 total_lines = sum(
-                    sum(frag[1].count("\n") for frag in line) + 1
-                    for line in self.scan.trace_lines
+                    sum(frag[1].count("\n") for frag in fragments if len(frag) > 1) + 1
+                    for _agent, fragments in self.scan.trace_lines
                 )
                 info = self._trace_window.render_info if hasattr(self, '_trace_window') else None
                 window_height = info.window_height if info is not None else 20
