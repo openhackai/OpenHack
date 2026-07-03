@@ -72,9 +72,10 @@ PROVIDERS = [
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
         "models": [
-            ("kimi-k2.5", "Kimi K2.5", "Flagship security analysis model"),
+            ("glm-5.2", "GLM-5.2", "Flagship security analysis model (default)"),
+            ("kimi-k2.5", "Kimi K2.5", "Alternative reasoning model"),
         ],
-        "default_model": "kimi-k2.5",
+        "default_model": "glm-5.2",
     },
 ]
 

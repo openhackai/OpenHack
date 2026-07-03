@@ -68,6 +68,9 @@ class LLMClient:
     """LLM client for OpenHack."""
 
     PRICING = {
+        # NOTE: glm-5.2 pricing is a placeholder (mirrors kimi) for the local
+        # cost display — set the real per-1M rates once confirmed.
+        "glm-5.2": {"input": 0.50, "output": 2.80},
         "kimi-k2.5": {"input": 0.50, "output": 2.80},
     }
 

@@ -209,11 +209,11 @@ class _PlaceholderProcessor(Processor):
 
 
 
-PROVIDER_DEFAULTS = {"openhack": "kimi-k2.5"}
+PROVIDER_DEFAULTS = {"openhack": "glm-5.2"}
 
 # Models the OpenHack hosted provider serves (must match the inference backend's
 # MODEL_MAP). Shown by `/model` so users can discover what they can switch to.
-OPENHACK_MODELS = ["kimi-k2.5", "gemma-4-31b", "mistral-large-2512"]
+OPENHACK_MODELS = ["glm-5.2", "kimi-k2.5", "gemma-4-31b", "mistral-large-2512"]
 
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
@@ -1530,7 +1530,7 @@ class OpenHackApp:
             ("class:input.box", "  "),
             ("class:input.model.agent", "Scan"),
             ("class:input.model.sep", " · "),
-            ("class:input.model.name", self.model or "kimi-k2.5"),
+            ("class:input.model.name", self.model or "glm-5.2"),
             ("class:input.model.provider", f"  {self.provider}"),
         ]
 
@@ -2681,7 +2681,7 @@ class OpenHackApp:
 
         self.provider = name
         if name == "openhack":
-            self.model = settings.openhack_model_id or "kimi-k2.5"
+            self.model = settings.openhack_model_id or "glm-5.2"
             save_user_config({"provider": name, "model": self.model})
             self.last_status_line = f"switched to openhack ({self.model})"
             return
