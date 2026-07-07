@@ -187,6 +187,14 @@ PROVIDER_DEFAULTS = {"openhack": "glm-5.2"}
 # MODEL_MAP). Shown by `/model` so users can discover what they can switch to.
 OPENHACK_MODELS = ["glm-5.2", "kimi-k2.5", "gemma-4-31b", "mistral-large-2512"]
 
+# Display label + one-line description per served model, for the /model picker.
+OPENHACK_MODEL_INFO = {
+    "glm-5.2": ("GLM 5.2", "Reasoning model by Z.ai · default"),
+    "kimi-k2.5": ("Kimi K2.5", "Flagship security model by Moonshot"),
+    "gemma-4-31b": ("Gemma 4 31B", "Open-weight model by Google · free"),
+    "mistral-large-2512": ("Mistral Large", "Open-weight dense model by Mistral"),
+}
+
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
     "You help users understand vulnerability scan results, explain security concepts, "
@@ -423,7 +431,9 @@ class OpenHackCompleter(Completer):
 
         if not text or (len(words) == 1 and not text.endswith(" ")):
             prefix = text.lstrip()
-            if not prefix or prefix.startswith("/"):
+            # Only surface the command list once the user starts a command with
+            # "/" — an empty box shouldn't dump every command into a popup.
+            if prefix.startswith("/"):
                 for cmd, desc in _SLASH_COMMANDS:
                     if cmd.startswith(prefix):
                         yield Completion(cmd, start_position=-len(prefix), display_meta=desc)
@@ -1137,6 +1147,8 @@ class OpenHackApp:
         # Sessions tab state
         self.sessions_index: list[dict] = []
         self.sessions_selected: int = 0
+        self.model_index: list[dict] = []
+        self.model_selected: int = 0
         self.viewing_target: str = ""  # header label when in "viewing" mode
         # Findings tab selection (split pane: list left, details right)
         self.findings_selected: int = 0
@@ -1302,6 +1314,9 @@ class OpenHackApp:
 
         def _in_sessions() -> bool:
             return self.mode == "sessions"
+
+        def _in_models() -> bool:
+            return self.mode == "models"
 
         def _input_empty() -> bool:
             return not self.input_buffer.text
@@ -1495,6 +1510,27 @@ class OpenHackApp:
         def _esc_sessions(event):
             self._close_sessions_overlay()
 
+        # Model picker keybindings.
+        @kb.add("up", filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_up(event):
+            if self.model_index:
+                self.model_selected = max(0, self.model_selected - 1)
+                self._invalidate()
+
+        @kb.add("down", filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_down(event):
+            if self.model_index:
+                self.model_selected = min(len(self.model_index) - 1, self.model_selected + 1)
+                self._invalidate()
+
+        @kb.add("enter", filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_enter(event):
+            self._select_model_from_picker()
+
+        @kb.add("escape", eager=True, filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_esc(event):
+            self._close_model_picker()
+
         return kb
 
     def _cycle_tab(self, direction: int) -> None:
@@ -1650,15 +1686,18 @@ class OpenHackApp:
     def _build_layout(self) -> Layout:
         is_landing = Condition(lambda: self.mode == "landing")
         is_sessions = Condition(lambda: self.mode == "sessions")
+        is_models = Condition(lambda: self.mode == "models")
         is_scanning = Condition(lambda: self.mode in ("scanning", "viewing"))
 
         landing = self._build_landing_container()
         scan = self._build_scan_container()
         sessions = self._build_sessions_container()
+        models = self._build_model_container()
 
         body = HSplit([
             ConditionalContainer(content=landing, filter=is_landing),
             ConditionalContainer(content=sessions, filter=is_sessions),
+            ConditionalContainer(content=models, filter=is_models),
             ConditionalContainer(content=scan, filter=is_scanning),
         ])
 
@@ -2682,6 +2721,75 @@ class OpenHackApp:
             Window(height=1),
         ])
 
+    def _build_model_container(self) -> HSplit:
+        """Standalone model picker — full-screen, scroll with ↑/↓, enter selects."""
+        def header_text():
+            return [
+                ("class:header.brand", "openhack"),
+                ("class:header.sep", "  ·  "),
+                ("class:header.target", "model"),
+                ("class:header.sep", "    "),
+                ("class:header.meta", f"{len(self.model_index)} available"),
+            ]
+
+        def models_text():
+            out: list[tuple[str, str]] = [("", "\n")]
+            if not self.model_index:
+                out.append(("class:pane.empty", "  no models available\n"))
+                return out
+            for i, m in enumerate(self.model_index):
+                selected = i == self.model_selected
+                active = m["id"] == self.model
+                cls = "class:session.row.selected" if selected else "class:session.row"
+                pointer = "❯ " if selected else "  "
+                mark = "  ●" if active else "   "
+                out.append((cls, f"  {pointer}{m['label']}"))
+                out.append(("class:session.meta", f"    {m['id']}"))
+                out.append(("class:sev.low" if active else "class:session.meta", f"{mark}"))
+                out.append(("", "\n"))
+                if m.get("desc"):
+                    out.append(("class:session.meta", f"      {m['desc']}"))
+                out.append(("", "\n\n"))
+            return out
+
+        def hint_text():
+            return [
+                ("class:hint", "  ↑/↓ "),
+                ("class:hint.key", "navigate"),
+                ("class:hint", "   enter "),
+                ("class:hint.key", "select"),
+                ("class:hint", "   esc "),
+                ("class:hint.key", "cancel"),
+            ]
+
+        header = Window(FormattedTextControl(header_text), height=1)
+        rule = Window(FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1)
+
+        def _models_cursor() -> Point:
+            # Row 0 = leading blank. Each model = 3 rows (label, desc, blank).
+            return Point(x=0, y=1 + self.model_selected * 3)
+
+        body = Window(
+            FormattedTextControl(
+                models_text, focusable=False,
+                get_cursor_position=_models_cursor,
+            ),
+            wrap_lines=False,
+            always_hide_cursor=True,
+        )
+        hint = Window(FormattedTextControl(hint_text), height=1)
+
+        return HSplit([
+            Window(height=1),
+            header,
+            rule,
+            body,
+            rule,
+            hint,
+            VSplit([Window(width=2), self._input_window]),
+            Window(height=1),
+        ])
+
     _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
     def _current_findings(self) -> list[Finding]:
@@ -2921,15 +3029,8 @@ class OpenHackApp:
     def _cmd_model(self, arg: str) -> None:
         arg = arg.strip()
         if not arg:
-            if self.provider == "openhack":
-                avail = " · ".join(
-                    (m + " ←" if m == self.model else m) for m in OPENHACK_MODELS
-                )
-                self.last_status_line = f"model: {self.model}  ·  available: {avail}  ·  switch with /model <id>"
-            else:
-                self.last_status_line = (
-                    f"model: {self.model} ({self.provider}) · /model <id> to switch to any model your provider serves"
-                )
+            # Open the scrollable picker instead of dumping a string.
+            self._open_model_picker()
             return
         self.model = arg
         save_user_config({"model": arg})
@@ -3090,6 +3191,40 @@ class OpenHackApp:
         self.mode = target_mode
         self.previous_mode = None
         self.last_status_line = ""
+
+    # ── Model picker overlay ──────────────────────────────────────
+    def _open_model_picker(self) -> None:
+        """Open a full-screen, scrollable model picker."""
+        ids = list(OPENHACK_MODELS)
+        # If we're on a BYOK provider whose model isn't in the OpenHack list,
+        # still show the current one so the picker reflects reality.
+        if self.model and self.model not in ids:
+            ids = [self.model, *ids]
+        self.model_index = [
+            {"id": mid, **dict(zip(("label", "desc"),
+             OPENHACK_MODEL_INFO.get(mid, (mid, ""))))}
+            for mid in ids
+        ]
+        self.model_selected = next(
+            (i for i, m in enumerate(self.model_index) if m["id"] == self.model), 0
+        )
+        self.previous_mode = self.mode
+        self.mode = "models"
+        self.last_status_line = ""
+        self._invalidate()
+
+    def _close_model_picker(self) -> None:
+        self.mode = self.previous_mode or "landing"
+        self.previous_mode = None
+        self._invalidate()
+
+    def _select_model_from_picker(self) -> None:
+        if self.model_index:
+            chosen = self.model_index[self.model_selected]["id"]
+            self.model = chosen
+            save_user_config({"model": chosen})
+            self.last_status_line = f"model set to {chosen}"
+        self._close_model_picker()
 
     def _refresh_sessions_index(self) -> None:
         scans_dir = Path.home() / ".openhack" / "scans"
