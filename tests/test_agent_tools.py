@@ -481,7 +481,8 @@ def test_interactive_agent_system_prompt_has_operating_principles(tmp_path):
     lower = prompt.lower()
     # Core behaviours from the product vision.
     assert "swiss-army" in lower
-    assert "head start" in lower          # static tools first
+    assert "exactly what's asked" in lower  # scope discipline (do only the ask)
+    assert "deterministic tools first" in lower  # static tools first (broad tasks)
     assert "plan" in lower                 # plan then act
     assert "ask" in lower                  # asks questions
     assert "verify" in lower or "confirm" in lower
