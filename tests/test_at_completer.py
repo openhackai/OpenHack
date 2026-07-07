@@ -81,6 +81,57 @@ def test_path_completion_empty_query_lists_toplevel_first():
     assert out[0] in ("@openhack/", "@tests/", "@README.md")
 
 
+# ------------------------------------------------------- navigation (../ etc)
+
+def test_at_dotdot_offers_parent():
+    c = OpenHackCompleter()
+    out = list(c._path_completions(".."))
+    assert out[0].text == "@../"
+    assert out[0].display_meta_text == "dir"
+
+
+def test_at_parent_lists_siblings(tmp_path, monkeypatch):
+    # tmp_path/
+    #   proj/   <- cwd
+    #   sibling-a/  sibling-b/  note.txt
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "sibling-a").mkdir()
+    (tmp_path / "sibling-b").mkdir()
+    (tmp_path / "note.txt").write_text("x")
+    monkeypatch.chdir(tmp_path / "proj")
+    c = OpenHackCompleter()
+
+    out = [x.text for x in c._path_completions("../")]
+    assert "@../sibling-a/" in out
+    assert "@../sibling-b/" in out
+    assert "@../note.txt" in out
+    # Directories are listed before files.
+    assert out.index("@../sibling-a/") < out.index("@../note.txt")
+
+
+def test_at_parent_prefix_filters(tmp_path, monkeypatch):
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "openhack-cli").mkdir()
+    (tmp_path / "openhack-inference").mkdir()
+    (tmp_path / "unrelated").mkdir()
+    monkeypatch.chdir(tmp_path / "proj")
+    c = OpenHackCompleter()
+
+    out = [x.text for x in c._path_completions("../openhack-")]
+    assert set(out) == {"@../openhack-cli/", "@../openhack-inference/"}
+
+
+def test_at_navigational_meta_and_replacement(tmp_path, monkeypatch):
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "sib").mkdir()
+    monkeypatch.chdir(tmp_path / "proj")
+    c = OpenHackCompleter()
+    hit = next(x for x in c._path_completions("../s") if x.text == "@../sib/")
+    assert hit.display_meta_text == "dir"
+    # '@../s' is 5 chars — the whole token is replaced.
+    assert hit.start_position == -5
+
+
 def test_build_index_skips_noise_and_dotfiles(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text("x")

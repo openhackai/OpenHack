@@ -321,6 +321,18 @@ class OpenHackCompleter(Completer):
         return entries
 
     def _path_completions(self, partial: str):
+        # Navigational paths (parent dir, absolute, home) browse the filesystem
+        # directly — the cwd index can't see outside the working tree.
+        if partial in ("..", "."):
+            yield Completion(
+                "@" + partial + "/", start_position=-(len(partial) + 1),
+                display=partial + "/", display_meta="dir",
+            )
+            return
+        if partial.startswith(("../", "./", "/", "~")):
+            yield from self._fs_listing(partial)
+            return
+
         if self._at_index is None:
             self._at_index = self._build_at_index()
         q = partial.lower()
@@ -350,6 +362,53 @@ class OpenHackCompleter(Completer):
                 display=path,
                 display_meta="dir" if is_dir else "file",
             )
+
+    def _fs_listing(self, partial: str):
+        """Browse the filesystem for a navigational @path (../, ./, /, ~).
+
+        Lists the immediate children of the directory portion of `partial`,
+        filtered by the name prefix being typed — directories first — so the
+        user can walk up (../) and into sibling trees.
+        """
+        # Split into the directory portion and the name prefix being typed.
+        if partial.endswith("/"):
+            dir_part, name_prefix = partial, ""
+        else:
+            cut = partial.rfind("/")
+            dir_part = partial[: cut + 1] if cut >= 0 else ""
+            name_prefix = partial[cut + 1:] if cut >= 0 else partial
+
+        expanded = os.path.expanduser(dir_part) if dir_part else "."
+        try:
+            base = Path(expanded)
+            if not base.is_dir():
+                return
+            children = sorted(
+                base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
+            )
+        except OSError:
+            return
+
+        want = name_prefix.lower()
+        shown = 0
+        for child in children:
+            name = child.name
+            if name.startswith(".") and not name_prefix.startswith("."):
+                continue
+            if want and not name.lower().startswith(want):
+                continue
+            try:
+                is_dir = child.is_dir()
+            except OSError:
+                is_dir = False
+            path = dir_part + name + ("/" if is_dir else "")
+            yield Completion(
+                "@" + path, start_position=-(len(partial) + 1),
+                display=path, display_meta="dir" if is_dir else "file",
+            )
+            shown += 1
+            if shown >= 40:
+                return
 
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor
