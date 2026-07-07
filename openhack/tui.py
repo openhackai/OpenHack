@@ -119,37 +119,9 @@ _WORDMARK = "OpenHack"
 
 
 # ── Knight-rider spinner ──────────────────────────────────────────
-# A bidirectional scanner that sweeps one bright diamond back and forth across
-# a row of dim dots — shown while the scanner is working.
-_SPIN_WIDTH = 8
-_SPIN_TRAIL = "◆⬩⬪·"  # head → tail shades, then inactive dot
-
-
-def _build_spinner_frames() -> list[str]:
-    """One forward-and-back sweep of the bright head with a fading trail."""
-    frames: list[str] = []
-    seq = list(range(_SPIN_WIDTH)) + list(range(_SPIN_WIDTH - 2, 0, -1))
-    forward = True
-    for head in seq:
-        # Direction of travel flips at the endpoints; the trail lags behind.
-        if head == _SPIN_WIDTH - 1:
-            forward = False
-        elif head == 0:
-            forward = True
-        cells = []
-        for i in range(_SPIN_WIDTH):
-            dist = (head - i) if forward else (i - head)
-            if dist == 0:
-                cells.append(_SPIN_TRAIL[0])
-            elif 0 < dist < len(_SPIN_TRAIL) - 1:
-                cells.append(_SPIN_TRAIL[dist])
-            else:
-                cells.append("·")
-        frames.append("".join(cells))
-    return frames
-
-
-_SPINNER_FRAMES = _build_spinner_frames()
+# A smooth single-cell braille spinner shown while the agent/scan is working.
+# Ten frames of a rotating dot — clean, legible, and renders in any terminal.
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 def _abbrev_home(path: str) -> str:
@@ -1422,6 +1394,7 @@ class OpenHackApp:
             # spinner / status row
             "spinner": OH_SECONDARY,
             "spinner.dim": OH_BORDER,
+            "status.working": OH_TEXT,
             "status.esc": OH_TEXT,
             "status.esc.label": OH_MUTED,
             "status.usage": OH_MUTED,
@@ -1928,7 +1901,14 @@ class OpenHackApp:
             return {name}
 
         def _trace_text_raw():
-            streaming = bool(self._stream_buf or self._stream_reasoning)
+            # Show the live tail whenever the agent turn is in flight — even
+            # before any token streams — so waiting shows an animated spinner.
+            running = bool(
+                self.is_agent_session and self.scan is not None
+                and self.scan.end_time is None
+                and self.scan_task is not None and not self.scan_task.done()
+            )
+            streaming = bool(self._stream_buf or self._stream_reasoning or running)
             if self.scan is None or not self.scan.trace_lines:
                 if streaming:
                     return self._stream_line()
@@ -2413,10 +2393,14 @@ class OpenHackApp:
                        and self.mode == "scanning")
             if running:
                 frame = _SPINNER_FRAMES[self._spin_idx % len(_SPINNER_FRAMES)]
-                out: list[tuple[str, str]] = [("class:spinner.dim", "  ")]
-                for ch in frame:
-                    out.append(("class:spinner.dim" if ch == "·" else "class:spinner", ch))
-                out.append(("", "   "))
+                elapsed = self.scan.elapsed_str() if self.scan else ""
+                out: list[tuple[str, str]] = [
+                    ("class:spinner", f"  {frame}  "),
+                    ("class:status.working", self._processing_verb()),
+                ]
+                if elapsed:
+                    out.append(("class:spinner.dim", f"  {elapsed}"))
+                out.append(("class:spinner.dim", "   ·   "))
                 out.append(("class:status.esc", "esc"))
                 out.append(("class:status.esc.label", " interrupt"))
                 return out
@@ -3734,6 +3718,16 @@ class OpenHackApp:
         self.last_status_line = "scan resumed"
         self._invalidate()
 
+    def _processing_verb(self) -> str:
+        """A short word for what the agent is doing right now."""
+        if self._stream_buf:
+            return "responding"
+        if self._stream_reasoning:
+            return "thinking"
+        if not self.is_agent_session:
+            return "scanning"
+        return "working"
+
     def _on_agent_stream(self, kind: str, delta: str) -> None:
         """Accumulate streamed tokens (answer + reasoning) and repaint the tail."""
         if not delta:
@@ -3751,8 +3745,10 @@ class OpenHackApp:
             self._invalidate()
 
     def _stream_line(self) -> list[tuple[str, str]]:
-        """Render the in-progress turn: the answer as it streams, or — before the
-        answer starts — a dim live 'thinking…' tail for reasoning models."""
+        """Render the in-progress turn at the transcript tail: the answer as it
+        streams, a live reasoning tail, or — before anything streams — an
+        animated spinner so waiting never looks frozen."""
+        frame = _SPINNER_FRAMES[self._spin_idx % len(_SPINNER_FRAMES)]
         if self._stream_buf:
             text = self._stream_buf
             if len(text) > 4000:
@@ -3762,14 +3758,19 @@ class OpenHackApp:
                 ("class:trace.stream", text),
                 ("class:trace.agent.bar", "▌"),  # caret marking the live cursor
             ]
-        reasoning = self._stream_reasoning.strip().replace("\n", " ")
-        if len(reasoning) > 160:
-            reasoning = "…" + reasoning[-160:]
+        if self._stream_reasoning:
+            reasoning = self._stream_reasoning.strip().replace("\n", " ")
+            if len(reasoning) > 160:
+                reasoning = "…" + reasoning[-160:]
+            return [
+                ("class:spinner", f" {frame} "),
+                ("class:trace.dim", "thinking · "),
+                ("class:trace.dim", reasoning),
+            ]
+        # Nothing streamed yet — a live spinner + verb so the wait feels alive.
         return [
-            ("class:trace.agent.bar", " ▌ "),
-            ("class:trace.dim", "thinking… "),
-            ("class:trace.dim", reasoning),
-            ("class:trace.agent.bar", "▌"),
+            ("class:spinner", f" {frame} "),
+            ("class:trace.dim", self._processing_verb() + "…"),
         ]
 
     def _on_trace(self, entry: TraceEntry) -> None:
