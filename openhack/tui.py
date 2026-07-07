@@ -265,8 +265,101 @@ _CANCEL_PHRASES = {
 
 
 class OpenHackCompleter(Completer):
+    # Directories skipped when indexing files for @-references.
+    _AT_SKIP_DIRS = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
+        ".next", ".nuxt", ".output", "vendor", "target", "coverage",
+        ".mypy_cache", ".pytest_cache", ".tox", ".idea", ".vscode",
+        ".openhack-evidence",
+    }
+    _AT_CAP = 6000  # max entries indexed
+
+    def __init__(self) -> None:
+        self._at_index: Optional[list[tuple[str, bool]]] = None
+
+    # ── @path references (OpenCode-style file/dir picker) ─────────────
+    @staticmethod
+    def _active_at_token(text: str) -> Optional[str]:
+        """If the cursor is in an '@<partial>' token, return <partial>, else None.
+
+        The '@' must start a token (input start or after whitespace), and the
+        partial can't contain whitespace (we're still typing the path).
+        """
+        at = text.rfind("@")
+        if at == -1:
+            return None
+        if at > 0 and not text[at - 1].isspace():
+            return None
+        frag = text[at + 1:]
+        if any(c.isspace() for c in frag):
+            return None
+        return frag
+
+    def _build_at_index(self) -> list[tuple[str, bool]]:
+        """Walk the cwd once, collecting (relative_path, is_dir) for @ matching."""
+        entries: list[tuple[str, bool]] = []
+        root = Path.cwd()
+        try:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [
+                    d for d in dirnames
+                    if d not in self._AT_SKIP_DIRS and not d.startswith(".")
+                ]
+                rel_dir = os.path.relpath(dirpath, root)
+                for d in sorted(dirnames):
+                    p = d if rel_dir == "." else f"{rel_dir}/{d}"
+                    entries.append((p + "/", True))
+                for f in sorted(filenames):
+                    if f.startswith("."):
+                        continue
+                    p = f if rel_dir == "." else f"{rel_dir}/{f}"
+                    entries.append((p, False))
+                if len(entries) >= self._AT_CAP:
+                    break
+        except OSError:
+            pass
+        return entries
+
+    def _path_completions(self, partial: str):
+        if self._at_index is None:
+            self._at_index = self._build_at_index()
+        q = partial.lower()
+        scored: list[tuple[int, int, str, bool]] = []
+        for path, is_dir in self._at_index:
+            name = path.rstrip("/").rsplit("/", 1)[-1].lower()
+            full = path.lower()
+            if not q:
+                # No query yet: show top-level entries first (dirs before files).
+                depth = full.rstrip("/").count("/")
+                score = depth * 2 + (0 if is_dir else 1)
+            elif name.startswith(q):
+                score = 0
+            elif q in name:
+                score = 2
+            elif q in full:
+                score = 4
+            else:
+                continue
+            scored.append((score, len(path), path, is_dir))
+        scored.sort(key=lambda r: (r[0], r[1], r[2]))
+        replace = -(len(partial) + 1)  # also replace the leading '@'
+        for _score, _len, path, is_dir in scored[:30]:
+            yield Completion(
+                "@" + path,
+                start_position=replace,
+                display=path,
+                display_meta="dir" if is_dir else "file",
+            )
+
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor
+
+        # @path reference works anywhere in the message (even mid-sentence).
+        at_token = self._active_at_token(text)
+        if at_token is not None:
+            yield from self._path_completions(at_token)
+            return
+
         words = text.split()
 
         if not text or (len(words) == 1 and not text.endswith(" ")):
