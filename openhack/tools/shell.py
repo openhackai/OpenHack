@@ -25,9 +25,11 @@ class ShellTools:
     """Run shell commands on behalf of the agent, with timeouts and output caps."""
 
     # Hard ceiling on captured output so a chatty tool can't blow the context
-    # window. The agent is told when output was truncated so it can re-run with
-    # its own filtering (grep/head) if it needs more.
-    MAX_OUTPUT_CHARS = 60_000
+    # window. Kept deliberately tight: a verbose tool (sqlmap, nmap, a big curl)
+    # re-sends its output on every subsequent agent turn, so an oversized result
+    # inflates cost super-linearly. The agent is told when output was truncated
+    # and can re-run with its own filtering (grep/head/-v0) for more.
+    MAX_OUTPUT_CHARS = 20_000
     DEFAULT_TIMEOUT = 300  # seconds
     MAX_TIMEOUT = 3600
 
