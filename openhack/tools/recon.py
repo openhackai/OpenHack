@@ -10,6 +10,7 @@ templated scanning with nuclei.
 """
 
 import json
+import shlex
 import subprocess
 from shutil import which
 from typing import Optional
@@ -157,6 +158,48 @@ class ReconTools:
             })
         return {"tool": "nuclei", "target": target, "count": len(findings), "findings": findings[:300]}
 
+    def sqlmap_test(
+        self,
+        url: str,
+        data: Optional[str] = None,
+        cookie: Optional[str] = None,
+        extra: Optional[str] = None,
+        timeout: int = 900,
+    ) -> dict:
+        """Test a URL for SQL injection with sqlmap (fully automated, --batch).
+
+        Prefer this over hand-crafting injection payloads — sqlmap detects the
+        injection point, DBMS and technique in one call. Pass `data` for a POST
+        body, `cookie` for an authenticated session, and `extra` for sqlmap flags
+        (e.g. "--dump -T users", "--current-db", "-p id", "--level 3 --risk 2").
+        """
+        if not url:
+            return {"error": "missing_url"}
+        if which("sqlmap") is None:
+            return _missing("sqlmap", "brew install sqlmap")
+        cmd = ["sqlmap", "-u", url, "--batch", "--disable-coloring"]
+        if data:
+            cmd += ["--data", data]
+        if cookie:
+            cmd += ["--cookie", cookie]
+        if extra:
+            cmd += shlex.split(extra)
+        try:
+            proc = _run(cmd, timeout=min(timeout, 1800))
+        except subprocess.TimeoutExpired:
+            return {"tool": "sqlmap", "error": "timeout",
+                    "note": "sqlmap exceeded the timeout — narrow with -p <param> or lower --level."}
+        out = _cap(proc.stdout + ("\n" + proc.stderr if proc.stderr else ""))
+        low = proc.stdout.lower()
+        injectable = ("is vulnerable" in low or "injectable" in low
+                      or "sqlmap identified the following injection point" in low)
+        return {
+            "tool": "sqlmap",
+            "target": url,
+            "injectable": injectable,
+            "output": out,
+        }
+
     # -------------------------------------------------------------- tool specs
 
     def get_tool_definitions(self) -> list[dict]:
@@ -224,6 +267,27 @@ class ReconTools:
                     "required": ["target"],
                 },
             },
+            {
+                "name": "sqlmap_test",
+                "description": (
+                    "Test a URL for SQL injection with sqlmap (automated). Prefer this "
+                    "over hand-crafting SQLi payloads — it finds the injection point, "
+                    "DBMS and technique, and can dump data, in one call. Pass `data` for "
+                    "POST, `cookie` for auth, and `extra` for sqlmap flags "
+                    "(e.g. '--dump -T users', '--current-db', '-p id', '--level 3')."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Target URL, incl. a parameter to test, e.g. http://host/item?id=1"},
+                        "data": {"type": "string", "description": "POST body to test instead of the query string."},
+                        "cookie": {"type": "string", "description": "Cookie header for an authenticated session."},
+                        "extra": {"type": "string", "description": "Extra sqlmap flags, e.g. '--dump -T users' or '-p id --level 3'."},
+                        "timeout": {"type": "integer", "description": "Max seconds (default 900)."},
+                    },
+                    "required": ["url"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, arguments: dict) -> dict:
@@ -235,6 +299,7 @@ class ReconTools:
             "port_scan": self.port_scan,
             "dns_lookup": self.dns_lookup,
             "nuclei_scan": self.nuclei_scan,
+            "sqlmap_test": self.sqlmap_test,
         }
         if name not in tools:
             return {"error": f"Unknown tool: {name}"}

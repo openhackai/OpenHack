@@ -278,6 +278,32 @@ def test_recon_dns_missing_name():
     assert "error" in r.dns_lookup("")
 
 
+def test_sqlmap_missing_tool(monkeypatch):
+    monkeypatch.setattr("openhack.tools.recon.which", lambda _: None)
+    r = ReconTools()
+    out = r.sqlmap_test("http://x/item?id=1")
+    assert out["error"] == "tool_not_installed"
+    assert out["tool"] == "sqlmap"
+
+
+def test_sqlmap_parses_injectable(monkeypatch):
+    import openhack.tools.recon as recon
+
+    class FakeProc:
+        stdout = "sqlmap identified the following injection point\nParameter: id (GET)"
+        stderr = ""
+
+    monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/sqlmap")
+    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    r = ReconTools()
+    out = r.sqlmap_test("http://x/item?id=1")
+    assert out["injectable"] is True
+
+
+def test_sqlmap_missing_url():
+    assert "error" in ReconTools().sqlmap_test("")
+
+
 # --------------------------------------------------------------------- oob
 
 def test_oob_register_generates_unique_marker():
@@ -438,7 +464,7 @@ def test_registry_includes_agent_tools_when_requested(tmp_path):
     for expected in ("run_command", "which", "sca_scan", "secret_scan",
                      "mailbox_new", "mailbox_wait", "read_file",
                      "subdomains", "http_probe", "port_scan", "nuclei_scan",
-                     "oob_register", "oob_poll"):
+                     "sqlmap_test", "oob_register", "oob_poll"):
         assert expected in names
 
 
