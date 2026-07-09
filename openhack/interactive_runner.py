@@ -140,9 +140,47 @@ def run_task(task: str, target_dir: Optional[str] = None, model: Optional[str] =
     except KeyboardInterrupt:
         session.cancel()
         print(_c(_MUTED, "\n  interrupted"))
+        _persist_run(session, task, target, "cancelled")
         return {"error": "interrupted"}
     _print_result(result, session, fallback=state.get("last_text", ""))
+    _persist_run(session, task, target, "completed")
     return result
+
+
+def _persist_run(session, task: str, target: str, status: str) -> None:
+    """Write a full structured trace of the run (every tool input/output, cost,
+    findings) to ~/.openhack/scans/<id>.json for later review. Never fails the run."""
+    try:
+        import json
+        report_dir = Path.home() / ".openhack" / "scans"
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        def _trace(e):
+            out = e.tool_output
+            if out is not None and not isinstance(out, (dict, list, int, float, bool)):
+                s = str(out)
+                out = s if len(s) <= 8000 else s[:8000] + "…"
+            return {
+                "timestamp": e.timestamp, "agent": e.agent, "event_type": e.event_type,
+                "content": e.content, "tool_name": e.tool_name,
+                "tool_input": e.tool_input, "tool_output": out,
+            }
+
+        report = {
+            "version": 2, "kind": "hack", "task": task, "scan_id": session.id,
+            "target_dir": target, "status": status,
+            "cost": session.get_cost_breakdown(),
+            "findings": [f.to_dict() for f in session.findings],
+            "trace": [_trace(e) for e in session.trace],
+        }
+        path = report_dir / f"{session.id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as fp:
+            json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
+        import os as _os
+        _os.replace(tmp, path)
+    except Exception:
+        pass
 
 
 def run_plan(objective: str, target_dir: Optional[str] = None, model: Optional[str] = None) -> dict:
