@@ -40,6 +40,10 @@ class BaseAgent(ABC):
         self._ledger: list[str] = []
         self._call_cache: dict[str, tuple[int, str]] = {}
         self._stale_turns: int = 0
+        # Result summaries seen so far. Real thrash varies one arg each attempt so
+        # exact-call dedup never fires, but the *results* stop changing — no novel
+        # signal. Tracking result novelty is what actually catches near-dup thrash.
+        self._seen_summaries: set[str] = set()
 
         context_limit = MODEL_CONTEXT_LIMITS.get(llm.model, DEFAULT_CONTEXT_LIMIT)
         self.context_manager = ContextWindowManager(
@@ -128,6 +132,7 @@ class BaseAgent(ABC):
         self._ledger = []
         self._call_cache = {}
         self._stale_turns = 0
+        self._seen_summaries = set()
         self._seed_existing_instructions()
         return await self._agent_loop()
 
@@ -286,6 +291,7 @@ class BaseAgent(ABC):
             self.messages.append(assistant_msg)
 
             made_new_call = False
+            gained_signal = False
             for tool_call in response.tool_calls:
                 self.session.add_trace(
                     agent=self.name,
@@ -327,6 +333,13 @@ class BaseAgent(ABC):
                     self._ledger.append(
                         f"t{iteration} · {tool_call.name} {self._arg_hint(tool_call.arguments)} → {summary}"
                     )
+                    # Novelty = a result summary we haven't seen before. Near-dup
+                    # thrash (same endpoint, tweaked payload, same "not injectable"
+                    # response) produces no new summary, so it never counts as signal.
+                    novelty_key = f"{tool_call.name}::{summary}"
+                    if novelty_key not in self._seen_summaries:
+                        gained_signal = True
+                        self._seen_summaries.add(novelty_key)
 
                 self.session.add_trace(
                     agent=self.name,
@@ -344,15 +357,19 @@ class BaseAgent(ABC):
                 )
                 self.messages.append(tool_result.to_message())
 
-            # Progress-aware stop: if the agent produced no new action this turn
-            # (only repeats), it's thrashing. Give it a few turns to recover, then
-            # bail rather than burning the full iteration budget re-deriving dead ends.
-            if made_new_call:
+            # Progress-aware stop: a turn is "productive" only if it ran a genuinely
+            # new call AND that call produced a novel result (new signal). Turns that
+            # only repeat calls — or run new calls that yield already-seen results
+            # (near-dup thrash: same endpoint, tweaked payload, same response) — are
+            # stale. Bail after enough consecutive stale turns rather than grinding
+            # to the iteration cap re-deriving dead ends.
+            if made_new_call and gained_signal:
                 self._stale_turns = 0
             else:
                 self._stale_turns += 1
                 if self._stale_turns >= stale_limit:
-                    logger.info(f"[{self.name}] Stopping: {self._stale_turns} turns with no new action (thrash)")
+                    reason = "no new action" if not made_new_call else "no new signal"
+                    logger.info(f"[{self.name}] Stopping: {self._stale_turns} turns with {reason} (thrash)")
                     return {
                         "error": "No further progress",
                         "partial_result": self.messages[-1].content if self.messages else "",
