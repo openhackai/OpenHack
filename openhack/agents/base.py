@@ -33,6 +33,13 @@ class BaseAgent(ABC):
         # Optional per-token stream hook: stream_callback(kind, delta) where kind
         # is "content" or "reasoning". Set by a UI to render tokens live.
         self.stream_callback = None
+        # Durable working memory that survives compaction (fixes the thrash
+        # death-spiral): a compact ledger of every action taken + its result,
+        # re-injected each turn; a cache of calls already made (anti-repetition);
+        # and a counter of consecutive no-new-progress turns (progress-aware stop).
+        self._ledger: list[str] = []
+        self._call_cache: dict[str, tuple[int, str]] = {}
+        self._stale_turns: int = 0
 
         context_limit = MODEL_CONTEXT_LIMITS.get(llm.model, DEFAULT_CONTEXT_LIMIT)
         self.context_manager = ContextWindowManager(
@@ -118,8 +125,59 @@ class BaseAgent(ABC):
 
         self._system_prompt = self.get_system_prompt(context)
         self.messages = [Message(role="user", content=task)]
+        self._ledger = []
+        self._call_cache = {}
+        self._stale_turns = 0
         self._seed_existing_instructions()
         return await self._agent_loop()
+
+    # ── Durable working memory (anti-thrash) ──────────────────────────
+    @staticmethod
+    def _call_key(name: str, args: dict) -> str:
+        try:
+            a = json.dumps(args, sort_keys=True)
+        except Exception:
+            a = str(args)
+        return f"{name}::{a}"
+
+    @staticmethod
+    def _arg_hint(args: dict) -> str:
+        if not isinstance(args, dict):
+            return ""
+        for k in ("command", "url", "payload", "target", "path", "to", "marker", "pattern", "domain", "name"):
+            v = args.get(k)
+            if isinstance(v, str) and v:
+                return v if len(v) <= 90 else v[:87] + "…"
+        try:
+            s = json.dumps(args)
+        except Exception:
+            s = str(args)
+        return s if len(s) <= 90 else s[:87] + "…"
+
+    @staticmethod
+    def _result_summary(result) -> str:
+        if isinstance(result, dict):
+            if "error" in result:
+                return f"error: {str(result['error'])[:90]}"
+            if "exit_code" in result:
+                out = (str(result.get("stdout", "")) or "").strip().replace("\n", " ")
+                return f"exit {result['exit_code']}" + (f" · {out[:90]}" if out else "")
+            for k in ("injectable", "fired", "installed", "count", "interactions", "status", "vulnerable_packages"):
+                if k in result:
+                    return f"{k}={result[k]}"
+        s = str(result).strip().replace("\n", " ")
+        return s[:110] + ("…" if len(s) > 110 else "")
+
+    def _ledger_block(self) -> str:
+        """A pinned record of actions taken — injected every turn, never compacted."""
+        if not self._ledger:
+            return ""
+        recent = self._ledger[-45:]
+        return (
+            "\n\n## Actions already taken (do NOT repeat these — build on what you learned):\n"
+            + "\n".join(recent)
+            + "\nIf you find yourself about to repeat an action above, do something different instead."
+        )
 
     async def continue_run(self, task: str) -> dict:
         """Continue an existing conversation with a new user turn.
@@ -136,7 +194,11 @@ class BaseAgent(ABC):
 
     async def _agent_loop(self) -> dict:
         system_prompt = self._system_prompt
-        max_iterations = 50
+        # Raised from 50: the real governor is now the progress-aware stop below,
+        # which bails when the agent thrashes and lets it keep going when it's
+        # still gaining signal. Configurable via settings.agent_max_iterations.
+        max_iterations = getattr(settings, "agent_max_iterations", 120)
+        stale_limit = getattr(settings, "agent_stale_turn_limit", 8)
         iteration = 0
 
         while iteration < max_iterations:
@@ -152,11 +214,15 @@ class BaseAgent(ABC):
 
             self._preflight_compact(system_prompt)
 
+            # Pin the durable action-ledger into the system prompt every turn so
+            # the agent always sees what it already tried, even after compaction.
+            effective_system = system_prompt + self._ledger_block()
+
             try:
                 response = await self.llm.chat(
                     messages=self.messages,
                     tools=self.get_tools(),
-                    system=system_prompt,
+                    system=effective_system,
                     on_chunk=self._stream_chunk,
                 )
             except openai.BadRequestError as e:
@@ -172,7 +238,7 @@ class BaseAgent(ABC):
                         response = await self.llm.chat(
                             messages=self.messages,
                             tools=self.get_tools(),
-                            system=system_prompt,
+                            system=effective_system,
                         )
                     except openai.BadRequestError as e2:
                         err_msg2 = str(e2)
@@ -219,6 +285,7 @@ class BaseAgent(ABC):
             )
             self.messages.append(assistant_msg)
 
+            made_new_call = False
             for tool_call in response.tool_calls:
                 self.session.add_trace(
                     agent=self.name,
@@ -228,15 +295,37 @@ class BaseAgent(ABC):
                     tool_input=tool_call.arguments,
                 )
 
-                if self.tools.is_async_tool(tool_call.name):
-                    result = await self.tools.execute_tool_async(tool_call.name, tool_call.arguments)
+                key = self._call_key(tool_call.name, tool_call.arguments)
+                if key in self._call_cache:
+                    # Anti-repetition: this exact call already ran — don't
+                    # re-execute (saves tokens) and nudge the agent to move on.
+                    prev_turn, prev_summ = self._call_cache[key]
+                    result = {
+                        "repeated_call": True,
+                        "note": (
+                            f"You already ran this exact call on turn {prev_turn}; the "
+                            f"result was: {prev_summ}. Re-running it won't help — try a "
+                            f"different payload, endpoint, or technique."
+                        ),
+                    }
                 else:
-                    # Run sync tools in a worker thread so a long-running tool
-                    # (nmap, nuclei, a slow shell command) doesn't block the event
-                    # loop — keeps the TUI responsive and the spinner animating.
-                    import asyncio as _asyncio
-                    result = await _asyncio.to_thread(
-                        self.tools.execute_tool, tool_call.name, tool_call.arguments
+                    made_new_call = True
+                    if self.tools.is_async_tool(tool_call.name):
+                        result = await self.tools.execute_tool_async(tool_call.name, tool_call.arguments)
+                    else:
+                        # Run sync tools in a worker thread so a long-running tool
+                        # (nmap, nuclei, a slow shell command) doesn't block the
+                        # event loop — keeps the TUI responsive and spinner animating.
+                        import asyncio as _asyncio
+                        result = await _asyncio.to_thread(
+                            self.tools.execute_tool, tool_call.name, tool_call.arguments
+                        )
+                    # Record this genuine attempt into the durable ledger + cache
+                    # (survives compaction, so the agent never forgets it tried it).
+                    summary = self._result_summary(result)
+                    self._call_cache[key] = (iteration, summary)
+                    self._ledger.append(
+                        f"t{iteration} · {tool_call.name} {self._arg_hint(tool_call.arguments)} → {summary}"
                     )
 
                 self.session.add_trace(
@@ -254,6 +343,20 @@ class BaseAgent(ABC):
                     content=truncated_content,
                 )
                 self.messages.append(tool_result.to_message())
+
+            # Progress-aware stop: if the agent produced no new action this turn
+            # (only repeats), it's thrashing. Give it a few turns to recover, then
+            # bail rather than burning the full iteration budget re-deriving dead ends.
+            if made_new_call:
+                self._stale_turns = 0
+            else:
+                self._stale_turns += 1
+                if self._stale_turns >= stale_limit:
+                    logger.info(f"[{self.name}] Stopping: {self._stale_turns} turns with no new action (thrash)")
+                    return {
+                        "error": "No further progress",
+                        "partial_result": self.messages[-1].content if self.messages else "",
+                    }
 
             if self.context_manager.needs_compaction():
                 self.messages = self.context_manager.compact_messages(self.messages)

@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     tool_result_max_lines: int = 200
     checkpoint_enabled: bool = True
 
+    # Agentic loop governor. The hard cap is a backstop; the real control is the
+    # progress-aware stop (bail after N consecutive turns with no new action).
+    agent_max_iterations: int = 120
+    agent_stale_turn_limit: int = 8
+
     # Scan scoping — exclude paths that are never production web attack surface
     scan_exclude_patterns: list[str] = [
         "**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**",
