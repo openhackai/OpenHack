@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
+    "grok-4.5": 500_000,
     "kimi-k2.5": 128_000,
     "glm-5.2": 128_000,
     "gemma-4-31b": 128_000,

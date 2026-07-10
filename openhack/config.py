@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     openhack_api_key: Optional[str] = None
     openhack_base_url: str = ""
     openhack_app_url: str = ""
-    openhack_model_id: str = "glm-5.2"
+    openhack_model_id: str = "grok-4.5"
 
     openhack_org_id: Optional[str] = None
     openhack_org_slug: Optional[str] = None

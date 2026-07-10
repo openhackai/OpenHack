@@ -72,12 +72,13 @@ PROVIDERS = [
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
         "models": [
-            ("glm-5.2", "GLM 5.2", "Reasoning model by Z.ai (default)"),
+            ("grok-4.5", "Grok 4.5", "Frontier model by xAI · strongest exploitation (default)"),
+            ("glm-5.2", "GLM 5.2", "Reasoning model by Z.ai · fast & cost-efficient"),
             ("kimi-k2.5", "Kimi K2.5", "Flagship security analysis model by Moonshot"),
             ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
             ("mistral-large-2512", "Mistral Large", "Open-weight dense model by Mistral"),
         ],
-        "default_model": "glm-5.2",
+        "default_model": "grok-4.5",
     },
 ]
 
