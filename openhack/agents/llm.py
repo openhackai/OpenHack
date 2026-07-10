@@ -104,6 +104,7 @@ class LLMClient:
         "glm-5.2": {"input": 1.15, "output": 4.53},
         "gemma-4-31b": {"input": 0.00, "output": 0.00},
         "mistral-large-2512": {"input": 1.60, "output": 4.40},
+        "grok-4.5": {"input": 2.00, "output": 6.00},
     }
 
     # Set to True for the rest of the session when the endpoint rejects
