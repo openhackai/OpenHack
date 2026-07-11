@@ -26,7 +26,8 @@ class ToolRegistry:
     disposable mailbox) used by the interactive agent.
     """
 
-    def __init__(self, target_dir: Path, include_agent_tools: bool = False, session=None):
+    def __init__(self, target_dir: Path, include_agent_tools: bool = False, session=None,
+                 include_stateful_browser: bool = False, browser_base_url: str = ""):
         self.target_dir = target_dir
         self.fs_tools = FileSystemTools(target_dir)
         self.nextjs_tools = NextJSTools(self.fs_tools)
@@ -46,6 +47,16 @@ class ToolRegistry:
                 self.shell_tools, self.security_tools, self.mailbox_tools,
                 self.recon_tools, self.oob_tools, self.browser_tools,
             ]
+            # Stateful (persistent-session) browser — opt-in, for specialist
+            # exploiters (e.g. XSS victim-bot flows). Off by default so the
+            # generalist agent's toolset is unchanged.
+            if include_stateful_browser:
+                from .stateful_browser import StatefulBrowserTools
+                self.stateful_browser_tools = StatefulBrowserTools(
+                    base_url=browser_base_url,
+                    evidence_dir=target_dir / ".openhack-evidence",
+                )
+                self._tool_sources.append(self.stateful_browser_tools)
             # Findings tools need the session to read/write findings.
             if session is not None:
                 from .findings import FindingsTools
