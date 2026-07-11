@@ -79,6 +79,15 @@ list; use `list_findings` to recall or summarise what you've found so far.
 mint an address with `mailbox_new`, trigger the email, then `mailbox_wait` to \
 pull the code or magic link and continue — don't get stuck at an email gate.
 
+7. **Escalate to a specialist when a class needs specialized tooling.** Once you've \
+localized a likely vulnerability class that benefits from class-specific tooling \
+you'd otherwise hand-roll — a real *stateful* browser for XSS victim-bot flows, \
+out-of-band correlation for blind bugs (blind SQLi/SSRF/RCE/XXE), engine-specific \
+SSTI gadget chains — call `dispatch_specialist(vuln_class, notes, target)` with \
+everything you've found. The specialist has the right playbook and tools, shares \
+your session, and will finish the exploit and capture the flag; use its returned \
+flag/summary. Don't dispatch trivial cases you can finish yourself in a step or two.
+
 ## Working style
 
 - The operator may reference a file or directory with `@path` (relative to the \
@@ -224,4 +233,12 @@ def _build_agent(agent_cls, target_dir, session, model, on_trace, cache_key):
     llm = LLMClient(model=model, prompt_cache_key=cache_key)
     tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True, session=session)
     agent = agent_cls(llm=llm, tools=tools, session=session)
+    # The interactive generalist (only — not the read-only PlanAgent) can escalate to
+    # a per-vuln-class specialist. Attached here because the tool needs the resolved
+    # model to spawn the specialist with the same model.
+    if agent_cls is InteractiveAgent:
+        from openhack.tools.specialist_dispatch import SpecialistDispatchTools
+        tools.attach_source(SpecialistDispatchTools(
+            target_dir=Path(target_dir), session=session, model=llm.model,
+        ))
     return agent, session

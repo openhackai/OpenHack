@@ -81,3 +81,29 @@ def test_generalist_registry_unchanged(tmp_path):
     names = set(reg._async_handlers) | set(reg._tool_handlers)
     assert "browser_fetch" in names          # generalist keeps the one-shot browser
     assert "browser_navigate" not in names   # but NOT the stateful one
+
+
+def test_dispatch_tool_only_on_interactive(tmp_path):
+    """dispatch_specialist reaches the generalist, but not PlanAgent or specialists."""
+    from openhack.agents.interactive import build_interactive_agent, build_plan_agent
+
+    agent, _ = build_interactive_agent(str(tmp_path))
+    assert "dispatch_specialist" in {t["name"] for t in agent.get_tools()}
+
+    plan, _ = build_plan_agent(str(tmp_path))
+    assert "dispatch_specialist" not in {t["name"] for t in plan.get_tools()}
+
+    sess = Session(target_dir=str(tmp_path))
+    xss = build_specialist("xss", str(tmp_path), sess)
+    assert "dispatch_specialist" not in {t["name"] for t in xss.get_tools()}  # no recursion
+
+
+def test_attach_source_is_additive(tmp_path):
+    """attach_source adds a tool without dropping existing ones."""
+    sess = Session(target_dir=str(tmp_path))
+    reg = ToolRegistry(target_dir=tmp_path, include_agent_tools=True, session=sess)
+    before = set(reg._async_handlers) | set(reg._tool_handlers)
+    from openhack.tools.specialist_dispatch import SpecialistDispatchTools
+    reg.attach_source(SpecialistDispatchTools(tmp_path, sess, model="grok-4.5"))
+    after = set(reg._async_handlers) | set(reg._tool_handlers)
+    assert before < after and "dispatch_specialist" in after

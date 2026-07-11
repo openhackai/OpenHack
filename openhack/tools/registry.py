@@ -69,12 +69,21 @@ class ToolRegistry:
 
     def _register_tools(self):
         for source in self._tool_sources:
-            is_async = getattr(source, "is_async", False)
-            for tool in source.get_tool_definitions():
-                if is_async:
-                    self._async_handlers[tool["name"]] = source.execute_tool_async
-                else:
-                    self._tool_handlers[tool["name"]] = source.execute_tool
+            self._register_source(source)
+
+    def _register_source(self, source):
+        is_async = getattr(source, "is_async", False)
+        for tool in source.get_tool_definitions():
+            if is_async:
+                self._async_handlers[tool["name"]] = source.execute_tool_async
+            else:
+                self._tool_handlers[tool["name"]] = source.execute_tool
+
+    def attach_source(self, source) -> None:
+        """Add a tool source after construction (e.g. specialist dispatch, which
+        needs the built agent's model). Additive — leaves existing tools intact."""
+        self._tool_sources.append(source)
+        self._register_source(source)
 
     def get_all_tool_definitions(self) -> list[dict]:
         tools = []
