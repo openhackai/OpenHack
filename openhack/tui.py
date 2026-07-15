@@ -75,14 +75,14 @@ from openhack.updates import Announcement, UpdateInfo, fetch_updates, save_dismi
 # The brand system: tinted dark neutrals (cool green family, never pure
 # black/white) carrying one signal-green accent used with restraint, plus a
 # warm coral as the secondary. Values are the resolved brand tokens.
-OH_BG        = "#0A1311"  # Deep Ink — the green-tinted near-black canvas
-OH_PANEL     = "#111A17"  # Ash — sidebar / elevated surface
-OH_ELEM      = "#16211C"  # element surface (input box / message box)
+OH_BG        = "#000000"  # solid black canvas
+OH_PANEL     = "#0A0A0A"  # near-black sidebar / elevated surface (neutral)
+OH_ELEM      = "#101010"  # element surface (input box / message box) — neutral
 OH_TEXT      = "#E8EAE9"  # Chalk — primary foreground (cool near-white)
 OH_MUTED     = "#7E8784"  # Stone — secondary / dimmed text
-OH_BORDER    = "#243029"  # default border
-OH_BORDER_A  = "#2D3531"  # active border
-OH_BORDER_SUB= "#1A211D"  # subtle border / divider
+OH_BORDER    = "#2A2A2A"  # default border (neutral grey, no green tint)
+OH_BORDER_A  = "#3A3A3A"  # active border (neutral)
+OH_BORDER_SUB= "#181818"  # subtle border / divider (neutral)
 OH_PRIMARY   = "#00B97E"  # Signal Green — THE accent (brand, used sparingly)
 OH_SECONDARY = "#00B97E"  # accent bars + spinner share the one signal green
 OH_ACCENT    = "#1CC584"  # brighter green (headings / keywords)
