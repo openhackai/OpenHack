@@ -475,6 +475,32 @@ class OpenHackCompleter(Completer):
                     yield Completion(str(child) + "/", start_position=-len(partial))
             except OSError:
                 pass
+        elif cmd in ("/cd", "/cwd"):
+            # Directory-only completion (cd only takes dirs), mirroring /scan.
+            # `@dir` mentions also work — the @-completer handles those and
+            # _cmd_cd strips the leading '@'.
+            partial = words[-1] if len(words) > 1 and not text.endswith(" ") else ""
+            base = os.path.expanduser(partial) if partial else "."
+            try:
+                base_path = Path(base)
+                if base_path.is_dir() and (not partial or partial.endswith(("/", "~"))):
+                    parent, prefix = base_path, ""
+                else:
+                    parent = base_path.parent if base_path.parent.is_dir() else Path(".")
+                    prefix = base_path.name
+                for child in sorted(parent.iterdir()):
+                    if child.name.startswith(".") or not child.is_dir():
+                        continue
+                    if prefix and not child.name.startswith(prefix):
+                        continue
+                    # Preserve the user's typed prefix style (e.g. ~/ , ../).
+                    typed_dir = partial[: partial.rfind("/") + 1] if "/" in partial else ""
+                    yield Completion(
+                        typed_dir + child.name + "/", start_position=-len(partial),
+                        display=child.name + "/", display_meta="dir",
+                    )
+            except OSError:
+                pass
 
 
 # ── Agent/finding state derived from trace entries ────────────────
@@ -3001,6 +3027,9 @@ class OpenHackApp:
         /scan target, @-file completion, the agent root, the landing footer —
         follows the new directory."""
         raw = arg.strip()
+        # Tolerate the '@dir' mention style — the @-completer inserts an @ prefix.
+        if raw.startswith("@"):
+            raw = raw[1:].strip()
         if not raw:
             self.last_status_line = f"cwd: {_abbrev_home(os.getcwd())} — usage: /cd <path>"
             return
