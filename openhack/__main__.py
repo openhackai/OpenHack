@@ -2,17 +2,18 @@
 Entry point for OpenHack.
 
 Usage:
-  openhack                          Launch interactive TUI
-  openhack hack "<task>" [path]     Run one hacking task headlessly (no TUI)
-  openhack plan "<objective>" [path] Draft a read-only attack plan (no TUI)
-  openhack agent [path]             Interactive agent prompt loop (no TUI)
-  openhack scan [path]              Scan a repository (headless, defaults to .)
-  openhack sessions                 List all saved scan sessions
-  openhack resume <id>              Resume a previous scan session
-  openhack classify [path]          Classify frameworks and detect entry points
-  openhack login                    Log in to your OpenHack account
-  openhack setup                    Run the setup wizard
-  openhack --help                   Show usage
+  openhack [path]                     Launch the interactive TUI (path defaults to .)
+  openhack --scan [path]              Scan a repository (headless, defaults to .)
+  openhack --hack "<task>" [path]     Run one hacking task headlessly (no TUI)
+  openhack --plan "<objective>" [path] Draft a read-only attack plan (no TUI)
+  openhack --agent [path]             Interactive agent prompt loop (no TUI)
+  openhack --sessions                 List all saved scan sessions
+  openhack --resume <id>              Resume a previous scan session
+  openhack --classify [path]          Classify frameworks and detect entry points
+  openhack --providers                List LLM providers you can connect
+  openhack --login                    Log in to your OpenHack account
+  openhack --setup                    Run the setup wizard
+  openhack --help                     Show usage
 """
 
 import sys
@@ -27,13 +28,13 @@ def _cmd_scan():
 
     if not target.is_dir():
         print(f"Error: '{target_arg}' is not a directory.")
-        print("Usage: openhack scan [path]")
+        print("Usage: openhack --scan [path]")
         return
 
     from openhack.config import settings
     if not settings.openhack_api_key:
         print("Error: not logged in.")
-        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
         return
 
     import asyncio
@@ -52,7 +53,7 @@ def _cmd_hack():
 
     task = sys.argv[2] if len(sys.argv) > 2 else None
     if not task:
-        print('Usage: openhack hack "<task>" [path]')
+        print('Usage: openhack --hack "<task>" [path]')
         print('Example: openhack hack "check this repo for exposed secrets and vulnerable deps"')
         return
 
@@ -64,7 +65,7 @@ def _cmd_hack():
     from openhack.config import settings
     if not settings.openhack_api_key:
         print("Error: not logged in.")
-        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
         return
 
     from openhack.interactive_runner import run_task
@@ -80,7 +81,7 @@ def _cmd_plan():
 
     objective = sys.argv[2] if len(sys.argv) > 2 else None
     if not objective:
-        print('Usage: openhack plan "<objective>" [path]')
+        print('Usage: openhack --plan "<objective>" [path]')
         print('Example: openhack plan "find auth and access-control bugs in this app"')
         return
 
@@ -92,7 +93,7 @@ def _cmd_plan():
     from openhack.config import settings
     if not settings.openhack_api_key:
         print("Error: not logged in.")
-        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
         return
 
     from openhack.interactive_runner import run_plan
@@ -114,7 +115,7 @@ def _cmd_agent():
     from openhack.config import settings
     if not settings.openhack_api_key:
         print("Error: not logged in.")
-        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
         return
 
     from openhack.interactive_runner import run_repl
@@ -179,7 +180,7 @@ def _cmd_resume():
 
     session_id = sys.argv[2] if len(sys.argv) > 2 else None
     if not session_id:
-        print("Usage: openhack resume <session_id>")
+        print("Usage: openhack --resume <session_id>")
         return
 
     scans_dir = Path.home() / ".openhack" / "scans"
@@ -220,7 +221,7 @@ def _cmd_resume():
     from openhack.config import settings
     if not settings.openhack_api_key:
         print("Error: not logged in.")
-        print("Run 'openhack login' to set up your account, or set OPENHACK_API_KEY.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
         return
 
     import asyncio
@@ -260,7 +261,7 @@ def _cmd_classify():
     session.entry_points = entry_points
     session.save()
     print(f"  Session saved: {sid}")
-    print(f"  Run 'openhack resume {sid}' to scan\n")
+    print(f"  Run 'openhack --resume {sid}' to scan\n")
 
 
 def _cmd_login():
@@ -290,30 +291,24 @@ COMMANDS = {
 }
 
 
-def main():
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1]
+def _launch_tui(target=None):
+    """Launch the interactive TUI, optionally targeting a directory.
 
-        if cmd in ("--help", "-h", "help"):
-            print(__doc__)
+    Everything in the TUI reads os.getcwd(), so pointing it at a path is just a
+    chdir before startup (the same thing the in-app /cd command does).
+    """
+    import os
+    from pathlib import Path
+
+    if target is not None:
+        p = Path(target).expanduser()
+        if not p.is_dir():
+            print(f"Error: '{target}' is not a directory.")
+            print("Usage: openhack [path]   (launches the TUI; path defaults to .)")
             return
+        os.chdir(p.resolve())
 
-        if cmd in ("--version", "-v", "version"):
-            from openhack import __version__
-            print(f"openhack {__version__}")
-            return
-
-        if cmd in COMMANDS:
-            COMMANDS[cmd]()
-            return
-
-        print(f"Unknown command: {cmd}")
-        print("Run 'openhack --help' for usage.")
-        return
-
-    # Default: launch TUI
     from openhack.setup import needs_first_time_setup, run_first_time_setup
-
     try:
         if needs_first_time_setup():
             completed = run_first_time_setup()
@@ -325,6 +320,48 @@ def main():
         tui_main()
     except KeyboardInterrupt:
         print()
+
+
+def main():
+    if len(sys.argv) > 1:
+        first = sys.argv[1]
+
+        if first in ("--help", "-h", "help"):
+            print(__doc__)
+            return
+
+        if first in ("--version", "-v", "version"):
+            from openhack import __version__
+            print(f"openhack {__version__}")
+            return
+
+        # Preferred form is a --flag (e.g. `openhack --scan`); the bare-word
+        # form (`openhack scan`) still works for back-compat. A flag/subcommand
+        # sits in argv[1] exactly where the old subcommand did, so the _cmd_*
+        # handlers read their positional args unchanged.
+        name = first[2:] if first.startswith("--") else first
+        if name in COMMANDS:
+            # A bare word that happens to name an existing directory is a path
+            # for the TUI, not a subcommand (so `openhack scan/` opens ./scan).
+            from pathlib import Path
+            if not first.startswith("--") and Path(first).expanduser().is_dir():
+                _launch_tui(first)
+                return
+            COMMANDS[name]()
+            return
+
+        if first.startswith("-"):
+            print(f"Unknown option: {first}")
+            print("Run 'openhack --help' for usage.")
+            return
+
+        # A bare argument that isn't a subcommand is treated as a path: open the
+        # TUI targeting that directory.
+        _launch_tui(first)
+        return
+
+    # No args: launch the TUI on the current directory.
+    _launch_tui()
 
 
 if __name__ == "__main__":

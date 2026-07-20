@@ -4250,7 +4250,7 @@ class OpenHackApp:
                     )
                 else:
                     self.last_status_line = (
-                        f"scan cancelled · resume with: openhack resume {session.id}"
+                        f"scan cancelled · resume with: openhack --resume {session.id}"
                     )
             else:
                 self.last_status_line = (
@@ -4261,7 +4261,7 @@ class OpenHackApp:
             if session is not None:
                 self._write_report(session, target_dir, status="failed")
                 self.last_status_line = (
-                    f"scan failed: {exc} · retry with: openhack resume {session.id}"
+                    f"scan failed: {exc} · retry with: openhack --resume {session.id}"
                 )
             else:
                 self.last_status_line = f"scan failed: {exc}"

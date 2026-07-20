@@ -130,28 +130,31 @@ The TUI captures mouse events by default (for scrolling and clicking). To select
 For CI, scripts, or one-off scans where you don't want the TUI:
 
 ```bash
-openhack scan /path/to/repo
+openhack --scan /path/to/repo
 ```
 
 OpenHack runs the same pipeline as the TUI, prints progress to stdout, writes a JSON report to `~/.openhack/scans/<session-id>.json`, and exits.
 
 
-| Command                    | Description                                              |
-| -------------------------- | -------------------------------------------------------- |
-| `openhack`                 | Launch interactive TUI                                   |
-| `openhack scan [path]`     | Full scan, headless (defaults to `.`)                    |
-| `openhack sessions`        | List all saved scans                                     |
-| `openhack resume <id>`     | Resume a scan from its last checkpoint                   |
-| `openhack classify [path]` | Classify frameworks + detect entry points (no LLM calls) |
-| `openhack login`           | Log in to your OpenHack account                          |
-| `openhack setup`           | Run the setup wizard                                     |
-| `openhack --help`          | Show usage                                               |
+| Command                      | Description                                              |
+| ---------------------------- | -------------------------------------------------------- |
+| `openhack [path]`            | Launch the interactive TUI (path defaults to `.`)        |
+| `openhack --scan [path]`     | Full scan, headless (defaults to `.`)                    |
+| `openhack --hack "<task>"`   | Run one hacking task headlessly                          |
+| `openhack --plan "<obj>"`    | Draft a read-only attack plan                            |
+| `openhack --sessions`        | List all saved scans                                     |
+| `openhack --resume <id>`     | Resume a scan from its last checkpoint                   |
+| `openhack --classify [path]` | Classify frameworks + detect entry points (no LLM calls) |
+| `openhack --login`           | Log in to your OpenHack account                          |
+| `openhack --setup`           | Run the setup wizard                                     |
+| `openhack --help`            | Show usage                                               |
 
+> Bare-word forms (`openhack scan`) still work, but `--flags` are the documented interface.
 
 Scans are checkpointed after each pipeline stage. If a scan is interrupted or fails, resume it:
 
 ```bash
-openhack resume <session-id>
+openhack --resume <session-id>
 ```
 
 ## Configuration
