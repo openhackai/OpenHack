@@ -238,6 +238,7 @@ def _sev_label(severity: str) -> str:
 _SLASH_COMMANDS = [
     ("/plan", "Draft a read-only attack plan for a target/objective"),
     ("/scan", "Run the full multi-agent scan pipeline on a directory (defaults to current)"),
+    ("/cd", "Change the working directory — /cd <path>"),
     ("/findings", "Show findings from the current session"),
     ("/verify", "Verify loaded findings (`/verify sandbox` or `/verify browser`)"),
     ("/copy", "Copy the selected finding as an AI-fix prompt to the clipboard"),
@@ -1844,7 +1845,7 @@ class OpenHackApp:
         ]
 
         def tagline():
-            return [("class:tagline", "The open-source security agent · hunts and verifies vulnerabilities")]
+            return [("class:tagline", "The open-source security agent")]
 
         def tip():
             cfg = load_user_config()
@@ -2963,6 +2964,8 @@ class OpenHackApp:
                 self.last_status_line = f"error: directory not found: {target_path}"
             else:
                 self._start_scan(str(target_path))
+        elif cmd in ("/cd", "/cwd"):
+            self._cmd_cd(arg)
         elif cmd == "/plan":
             if not arg.strip():
                 self.last_status_line = 'usage: /plan <objective> — drafts a read-only attack plan'
@@ -2992,6 +2995,36 @@ class OpenHackApp:
     def _show_help(self) -> None:
         lines = ["commands: " + ", ".join(c for c, _ in _SLASH_COMMANDS)]
         self.last_status_line = lines[0]
+
+    def _cmd_cd(self, arg: str) -> None:
+        """Change the working directory. Everything that reads os.getcwd() —
+        /scan target, @-file completion, the agent root, the landing footer —
+        follows the new directory."""
+        raw = arg.strip()
+        if not raw:
+            self.last_status_line = f"cwd: {_abbrev_home(os.getcwd())} — usage: /cd <path>"
+            return
+        target = Path(os.path.expanduser(raw))
+        if not target.is_absolute():
+            target = Path(os.getcwd()) / target
+        try:
+            target = target.resolve()
+        except OSError:
+            pass
+        if not target.exists():
+            self.last_status_line = f"error: no such directory: {target}"
+            return
+        if not target.is_dir():
+            self.last_status_line = f"error: not a directory: {target}"
+            return
+        try:
+            os.chdir(target)
+        except OSError as e:
+            self.last_status_line = f"error: cd failed: {e}"
+            return
+        # Invalidate the @-file completion index so it rebuilds for the new cwd.
+        self._at_index = None
+        self.last_status_line = f"cwd → {_abbrev_home(os.getcwd())}"
 
     def _cmd_provider(self, name: str) -> None:
         from openhack import providers as _providers
