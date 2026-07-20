@@ -13,6 +13,7 @@ Usage:
   openhack --providers                List LLM providers you can connect
   openhack --login                    Log in to your OpenHack account
   openhack --setup                    Run the setup wizard
+  openhack --showkey                  Print the raw bytes your terminal sends (key diagnostic)
   openhack --help                     Show usage
 """
 
@@ -264,6 +265,52 @@ def _cmd_classify():
     print(f"  Run 'openhack --resume {sid}' to scan\n")
 
 
+def _cmd_showkey():
+    """Print the raw byte sequence your terminal sends for each keypress.
+
+    Diagnostic for key-binding issues (e.g. Option+Backspace): run it, press
+    the key, and it prints the exact bytes so a binding can target them.
+    """
+    import os
+    import select
+
+    try:
+        import termios
+        import tty
+    except ImportError:
+        print("showkey needs a POSIX terminal.")
+        return
+    if not sys.stdin.isatty():
+        print("Run this in a real terminal (stdin is not a TTY).")
+        return
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    print("Press keys to see what your terminal sends (Ctrl-C to quit).", flush=True)
+    print("Try: Option+Backspace, Ctrl-W, Option+Left.\n", flush=True)
+    try:
+        tty.setraw(fd)
+        while True:
+            if not select.select([fd], [], [], None)[0]:
+                continue
+            buf = os.read(fd, 1)
+            # Drain the rest of a multi-byte escape sequence.
+            while select.select([fd], [], [], 0.02)[0]:
+                buf += os.read(fd, 1)
+            if buf in (b"\x03", b"\x04"):  # Ctrl-C / Ctrl-D
+                break
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)  # restore to print
+            hexs = " ".join(f"\\x{c:02x}" for c in buf)
+            pretty = buf.decode("latin-1").replace("\x1b", "ESC")
+            print(f"  {hexs:<20}  ({pretty!r})", flush=True)
+            tty.setraw(fd)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    print(flush=True)
+
+
 def _cmd_login():
     """Run the device login flow."""
     from openhack.setup import run_first_time_setup
@@ -288,6 +335,7 @@ COMMANDS = {
     "classify": _cmd_classify,
     "login": _cmd_login,
     "setup": _cmd_setup,
+    "showkey": _cmd_showkey,
 }
 
 

@@ -1359,6 +1359,23 @@ class OpenHackApp:
             buf.start_selection()
             buf.cursor_position += pos
 
+        # Option/Meta + Backspace — erase the word before the cursor (the
+        # standard word-delete every shell/editor does). macOS sends ESC + DEL
+        # (\x1b\x7f) which prompt_toolkit parses as (escape, c-h); the ESC+BS and
+        # Option+forward-delete variants land on (escape, delete). We bind them
+        # explicitly and eagerly so the behavior is deterministic and can't be
+        # pre-empted by the lone-escape handlers.
+        @kb.add("escape", "backspace", eager=True, filter=~modal_open)
+        @kb.add("escape", "delete", eager=True, filter=~modal_open)
+        @kb.add("c-w", eager=True, filter=~modal_open)
+        def _delete_word_before(event):
+            buf = event.current_buffer
+            pos = buf.document.find_previous_word_beginning()
+            if pos:
+                buf.delete_before_cursor(-pos)
+            elif buf.document.text_before_cursor:
+                buf.delete_before_cursor(len(buf.document.text_before_cursor))
+
         # Tab navigation — only in scanning/viewing modes, and only when the
         # input is empty so they don't conflict with typing.
         def _in_tabs() -> bool:
