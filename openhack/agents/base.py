@@ -190,6 +190,12 @@ class BaseAgent(ABC):
         Unlike run(), this keeps the prior message history and system prompt, so
         the agent remembers what it just did — used for interactive follow-ups.
         """
+        # A new user-initiated turn clears any prior interrupt (ESC/cancel).
+        # Without this, session.cancelled stays True and _agent_loop breaks on
+        # iteration 0, returning the user's own message as partial_result —
+        # which then gets echoed back as the agent's "answer" (the follow-up
+        # appears twice and the agent never actually runs).
+        self.session.cancelled = False
         if not getattr(self, "_system_prompt", None):
             # No conversation yet — behave like a fresh run.
             return await self.run(task)
