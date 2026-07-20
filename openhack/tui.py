@@ -1172,6 +1172,7 @@ class OpenHackApp:
         self.last_session: Optional[Session] = None
         self.chat_history: list[Message] = []
         self._cancel_armed = False
+        self._interrupting = False
         # Sessions tab state
         self.sessions_index: list[dict] = []
         self.sessions_selected: int = 0
@@ -1311,9 +1312,32 @@ class OpenHackApp:
         def _escape_completion(event):
             event.current_buffer.cancel_completion()
 
+        # ESC while a run is in flight — interrupt it (like Ctrl-C in Claude
+        # Code). Eager so it fires on the first press, ahead of text input and
+        # the word-select escape-sequences (those keep working when idle).
+        is_running = Condition(
+            lambda: (
+                self.scan_task is not None
+                and not self.scan_task.done()
+                and self.mode == "scanning"
+            )
+        )
+
+        @kb.add(
+            "escape",
+            eager=True,
+            filter=is_running & ~modal_open & ~Condition(_completion_open),
+        )
+        def _escape_interrupt(event):
+            self._interrupt_run()
+
+        # ESC while idle — clear a half-typed line (non-eager so the two-key
+        # Option+Shift+arrow word-select sequences still resolve).
         @kb.add("escape", eager=False, filter=~Condition(_completion_open))
         def _escape(event):
-            pass
+            buf = event.current_buffer
+            if buf.text:
+                buf.reset()
 
         # Option+Shift+Left/Right — select word (macOS sends Escape + ShiftLeft/Right)
         @kb.add("escape", "s-left")
@@ -3900,6 +3924,7 @@ class OpenHackApp:
         self.active_tab = "trace"
         self.viewing_target = ""
         self._cancel_armed = False
+        self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_scan(target_dir))
 
     def _start_test_scan(self) -> None:
@@ -3911,6 +3936,7 @@ class OpenHackApp:
         self.active_tab = "trace"
         self.viewing_target = ""
         self._cancel_armed = False
+        self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_test_scan())
 
     def _start_agent(self, task: str, plan: bool = False) -> None:
@@ -3928,6 +3954,7 @@ class OpenHackApp:
         self.active_tab = "trace"
         self.viewing_target = ""
         self._cancel_armed = False
+        self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_agent(task, target_dir, plan))
 
     async def _run_agent(self, task: str, target_dir: str, plan: bool) -> None:
@@ -3967,7 +3994,11 @@ class OpenHackApp:
             result = await agent.run(task, context={"target_dir": target_dir})
             self._finalize_agent_turn(session, agent, result, plan)
         except asyncio.CancelledError:
-            self.last_status_line = "agent stopped"
+            self.last_status_line = (
+                "interrupted · type a follow-up to continue"
+                if self._interrupting
+                else "agent stopped"
+            )
             status = "cancelled"
             raise
         except Exception as exc:
@@ -3981,6 +4012,7 @@ class OpenHackApp:
             self.scan_task = None
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._interrupting = False
             self._invalidate()
 
     def _continue_agent(self, task: str) -> None:
@@ -4003,7 +4035,11 @@ class OpenHackApp:
             result = await agent.continue_run(task)
             self._finalize_agent_turn(session, agent, result, plan=False)
         except asyncio.CancelledError:
-            self.last_status_line = "agent stopped"
+            self.last_status_line = (
+                "interrupted · type a follow-up to continue"
+                if self._interrupting
+                else "agent stopped"
+            )
             status = "cancelled"
             raise
         except Exception as exc:
@@ -4017,6 +4053,7 @@ class OpenHackApp:
             self.scan_task = None
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._interrupting = False
             self._invalidate()
 
     def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
@@ -4046,6 +4083,19 @@ class OpenHackApp:
         if self.scan_task and not self.scan_task.done():
             self.scan_task.cancel()
 
+    def _interrupt_run(self) -> None:
+        """ESC during a run — stop the agent/scan but keep the transcript and
+        any findings so the user can ask a follow-up (unlike /cancel, which
+        tears the session down)."""
+        if self.scan_task is None or self.scan_task.done():
+            return
+        self._interrupting = True
+        self.last_status_line = "interrupting…"
+        if self.session is not None:
+            self.session.cancel()
+        self.scan_task.cancel()
+        self._invalidate()
+
     def _pause_scan(self) -> None:
         if self.mode != "scanning" or self.session is None:
             self.last_status_line = "no scan is running"
@@ -4070,6 +4120,8 @@ class OpenHackApp:
 
     def _processing_verb(self) -> str:
         """A short word for what the agent is doing right now."""
+        if self._interrupting:
+            return "interrupting"
         if self._stream_buf:
             return "responding"
         if self._stream_reasoning:
@@ -4190,11 +4242,20 @@ class OpenHackApp:
         except asyncio.CancelledError:
             if session is not None:
                 self._write_report(session, target_dir, status="cancelled")
-                self.last_status_line = (
-                    f"scan cancelled · resume with: openhack resume {session.id}"
-                )
+                if self._interrupting:
+                    n = len(session.findings)
+                    self.last_status_line = (
+                        f"scan interrupted · {n} finding(s) kept · "
+                        "ask about them, or /scan to restart"
+                    )
+                else:
+                    self.last_status_line = (
+                        f"scan cancelled · resume with: openhack resume {session.id}"
+                    )
             else:
-                self.last_status_line = "scan cancelled"
+                self.last_status_line = (
+                    "scan interrupted" if self._interrupting else "scan cancelled"
+                )
             raise
         except Exception as exc:
             if session is not None:
@@ -4208,6 +4269,7 @@ class OpenHackApp:
             if self.scan is not None:
                 self.scan.finish()
             self.scan_task = None
+            self._interrupting = False
             # On scan completion, jump from Trace → Findings so the user
             # lands on the results without having to switch tabs.
             self.active_tab = "findings"
