@@ -162,6 +162,12 @@ class Settings(BaseSettings):
     browser_max_exploit_attempts: int = 7
     browser_timeout_ms: int = 30000
 
+    # Negotiate the Kitty keyboard protocol (CSI-u) in the TUI so modifier
+    # combos that legacy terminal encoding collapses — Option/Alt+Backspace,
+    # lone Escape, Ctrl+key — arrive disambiguated. Harmless on terminals that
+    # don't support it (they ignore the request). Set false to force legacy.
+    kitty_keyboard_protocol: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

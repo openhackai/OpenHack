@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -1234,10 +1235,29 @@ class OpenHackApp:
         self.layout = self._build_layout()
         self.style = self._build_style()
 
+        # Kitty keyboard protocol: swap in a CSI-u-aware input so modifier
+        # combos legacy encoding collapses (Option+Backspace, lone Escape,
+        # Ctrl+key) arrive disambiguated on terminals that support it. Falls
+        # back silently to the default input everywhere else. main() pushes the
+        # protocol on the terminal when self.kitty_active is set.
+        self._input = None
+        self.kitty_active = False
+        if settings.kitty_keyboard_protocol and sys.platform != "win32":
+            try:
+                if sys.stdin.isatty():
+                    from openhack.kitty_keys import KittyVt100Input
+
+                    self._input = KittyVt100Input(sys.stdin)
+                    self.kitty_active = True
+            except Exception:
+                self._input = None
+                self.kitty_active = False
+
         self.app: Application = Application(
             layout=self.layout,
             key_bindings=self.kb,
             style=self.style,
+            input=self._input,
             full_screen=True,
             # Filter-driven so /mouse can toggle native copy on demand.
             # When False, the terminal's built-in drag-to-select works.
@@ -4563,15 +4583,39 @@ def _configure_logging() -> None:
 
 
 def main():
-    signal.signal(signal.SIGHUP, lambda *_: os._exit(1))
-    signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
+    app = None
+
+    def _restore_terminal() -> None:
+        # Pop the Kitty keyboard protocol so we never leave the terminal in a
+        # foreign keyboard state — including on SIGHUP/SIGTERM, which os._exit
+        # past the finally below.
+        try:
+            if app is not None and getattr(app, "kitty_active", False):
+                from openhack import kitty_keys
+
+                kitty_keys.disable()
+        except Exception:
+            pass
+
+    def _on_fatal_signal(*_):
+        _restore_terminal()
+        os._exit(1)
+
+    signal.signal(signal.SIGHUP, _on_fatal_signal)
+    signal.signal(signal.SIGTERM, _on_fatal_signal)
     _configure_logging()
 
     app = OpenHackApp()
+    if getattr(app, "kitty_active", False):
+        from openhack import kitty_keys
+
+        kitty_keys.enable()
     try:
         asyncio.run(app.run())
     except KeyboardInterrupt:
         pass
+    finally:
+        _restore_terminal()
 
 
 # ── Back-compat aliases for existing imports ──────────────────────

@@ -125,6 +125,10 @@ The TUI captures mouse events by default (for scrolling and clicking). To select
 - **Linux / Windows**: Hold `Shift` and drag to select.
 - **Or**: Run `/mouse` to disable mouse capture entirely — the terminal's native selection works normally until you toggle it back on.
 
+## Keyboard
+
+OpenHack negotiates the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) on startup, so on terminals that support it (iTerm2 3.5+, kitty, Ghostty, WezTerm, Alacritty) modifier combos that legacy terminals collapse arrive disambiguated — **Option/Alt+Backspace** deletes the previous word, a lone `Esc` is distinct from an escape sequence, etc. Terminals that don't support it are unaffected (`Ctrl-W` deletes a word everywhere). Set `OPENHACK_KITTY_KEYBOARD_PROTOCOL=false` to force legacy input.
+
 ## CLI commands (headless)
 
 For CI, scripts, or one-off scans where you don't want the TUI:
