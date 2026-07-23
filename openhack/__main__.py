@@ -268,8 +268,10 @@ def _cmd_classify():
 def _cmd_showkey():
     """Print the raw byte sequence your terminal sends for each keypress.
 
-    Diagnostic for key-binding issues (e.g. Option+Backspace): run it, press
-    the key, and it prints the exact bytes so a binding can target them.
+    Diagnostic for key-binding issues (e.g. Option+Backspace). It turns on the
+    Kitty keyboard protocol AND xterm modifyOtherKeys, probes which the terminal
+    supports, then prints the exact bytes each key produces so a binding can
+    target them.
     """
     import os
     import select
@@ -286,15 +288,40 @@ def _cmd_showkey():
 
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    print("Press keys to see what your terminal sends (Ctrl-C to quit).", flush=True)
+
+    # Enable both disambiguation protocols so we see what the terminal emits
+    # *with* them on. Kitty: CSI > 1 u (push). modifyOtherKeys: CSI > 4 ; 2 m.
+    KITTY_QUERY = "\x1b[?u"
+    KITTY_ON, KITTY_OFF = "\x1b[>1u", "\x1b[<u"
+    MOK_ON, MOK_OFF = "\x1b[>4;2m", "\x1b[>4;0m"
+
+    def _read_all(timeout):
+        out = b""
+        while select.select([fd], [], [], timeout)[0]:
+            out += os.read(fd, 1)
+            timeout = 0.02
+        return out
+
+    print("Key diagnostic — press keys to see the raw bytes (Ctrl-C to quit).", flush=True)
     print("Try: Option+Backspace, Ctrl-W, Option+Left.\n", flush=True)
     try:
         tty.setraw(fd)
+        # Probe Kitty-protocol support: the terminal replies to CSI ? u only if
+        # it implements the protocol.
+        sys.stdout.write(KITTY_QUERY); sys.stdout.flush()
+        reply = _read_all(0.3)
+        kitty = reply.startswith(b"\x1b[?") and reply.endswith(b"u")
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        print(f"  Kitty keyboard protocol: {'SUPPORTED' if kitty else 'not supported'}"
+              f"  (reply={reply!r})", flush=True)
+        print("  Enabling Kitty + modifyOtherKeys for this session…\n", flush=True)
+        tty.setraw(fd)
+        sys.stdout.write(KITTY_ON + MOK_ON); sys.stdout.flush()
+
         while True:
             if not select.select([fd], [], [], None)[0]:
                 continue
             buf = os.read(fd, 1)
-            # Drain the rest of a multi-byte escape sequence.
             while select.select([fd], [], [], 0.02)[0]:
                 buf += os.read(fd, 1)
             if buf in (b"\x03", b"\x04"):  # Ctrl-C / Ctrl-D
@@ -302,11 +329,15 @@ def _cmd_showkey():
             termios.tcsetattr(fd, termios.TCSADRAIN, old)  # restore to print
             hexs = " ".join(f"\\x{c:02x}" for c in buf)
             pretty = buf.decode("latin-1").replace("\x1b", "ESC")
-            print(f"  {hexs:<20}  ({pretty!r})", flush=True)
+            print(f"  {hexs:<24}  ({pretty!r})", flush=True)
             tty.setraw(fd)
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            sys.stdout.write(KITTY_OFF + MOK_OFF); sys.stdout.flush()
+        except Exception:
+            pass
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
     print(flush=True)
 
