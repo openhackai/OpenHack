@@ -810,9 +810,10 @@ class ScanState:
             return
 
     def _ts(self, t: float) -> str:
-        rel = max(0, int(t - self.start_time))
-        m, s = divmod(rel, 60)
-        return f"[{m}:{s:02d}]"
+        # Per-line elapsed timer removed — the trace reads cleaner without the
+        # [m:ss] gutter. (Kept as a no-op so the ~20 render sites stay intact;
+        # the pinned status bar still shows total elapsed.)
+        return ""
 
 
 # ── Syntax highlighting ───────────────────────────────────────────
