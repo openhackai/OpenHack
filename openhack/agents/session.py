@@ -2,6 +2,8 @@
 Session management for vulnerability scanning.
 """
 
+import os
+import signal
 import threading
 import time
 from typing import Any, Optional
@@ -137,6 +139,13 @@ class Session:
         self._instructions_lock = threading.Lock()
         self._instructions_version: int = 0
         self.cancelled: bool = False
+        # Subprocesses currently running on behalf of this session (spawned via
+        # tools/process.run_killable). Tracked so cancel()/interrupt can signal-
+        # kill them immediately instead of waiting for the worker thread that's
+        # blocked on them. Guarded because tools register from worker threads
+        # while cancel() fires from the event-loop thread.
+        self._active_procs: set = set()
+        self._proc_lock = threading.Lock()
         # Pause control: an asyncio.Event that's *set* when running (default)
         # and *cleared* when paused. Agents call `await wait_if_paused()`
         # between iterations, which blocks while the event is cleared.
@@ -167,15 +176,57 @@ class Session:
         """If the session is paused, await until resumed. No-op when not paused."""
         await self._ensure_pause_event().wait()
 
+    def register_process(self, proc) -> None:
+        """Track a live subprocess so cancel()/interrupt can kill it."""
+        with self._proc_lock:
+            self._active_procs.add(proc)
+
+    def unregister_process(self, proc) -> None:
+        with self._proc_lock:
+            self._active_procs.discard(proc)
+
+    def kill_active_processes(self) -> None:
+        """Terminate every subprocess running for this session — SIGTERM now,
+        SIGKILL any survivors ~0.4s later. This is what makes an interrupt stop a
+        long-running tool at once: killing the child unblocks the worker thread
+        waiting on it, so the agent loop breaks at its next checkpoint instead of
+        after the command finishes on its own.
+        """
+        with self._proc_lock:
+            procs = list(self._active_procs)
+        survivors: list[tuple[Any, int]] = []
+        for p in procs:
+            try:
+                if p.poll() is not None:
+                    continue  # already exited & reaped — its PID may be recycled
+                pgid = os.getpgid(p.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                survivors.append((p, pgid))
+            except (ProcessLookupError, PermissionError, OSError):
+                pass  # already gone / not ours
+        if survivors:
+            def _sigkill() -> None:
+                for p, pgid in survivors:
+                    try:
+                        if p.poll() is None:  # still alive → force it
+                            os.killpg(pgid, signal.SIGKILL)
+                    except OSError:
+                        pass
+            t = threading.Timer(0.4, _sigkill)
+            t.daemon = True
+            t.start()
+
     def cancel(self) -> None:
         """Set the cancellation flag so all agents break out of their loops.
 
         Also resumes the pause event so paused agents wake up and see the
-        cancellation flag instead of blocking forever.
+        cancellation flag instead of blocking forever, and kills any subprocess
+        a tool is currently blocked on so the stop is immediate.
         """
         self.cancelled = True
         if self._pause_event is not None:
             self._pause_event.set()
+        self.kill_active_processes()
 
     def add_user_instruction(self, text: str) -> None:
         """Thread-safe: queue an instruction from the user during a running scan."""

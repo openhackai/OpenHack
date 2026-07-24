@@ -15,9 +15,7 @@ import subprocess
 from shutil import which
 from typing import Optional
 
-
-def _run(cmd: list[str], timeout: int, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=stdin)
+from openhack.tools.process import run_killable
 
 
 def _missing(tool: str, install_hint: str) -> dict:
@@ -38,6 +36,14 @@ def _cap(text: str) -> str:
 class ReconTools:
     """Subdomain, HTTP, port, DNS and templated-scan reconnaissance."""
 
+    def __init__(self, session=None):
+        # When set, recon subprocesses register with the session so ESC/cancel
+        # can kill them immediately (see tools/process.run_killable).
+        self._session = session
+
+    def _run(self, cmd: list[str], timeout: int, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
+        return run_killable(cmd, session=self._session, timeout=timeout, input=stdin)
+
     def subdomains(self, domain: str, timeout: int = 180) -> dict:
         """Enumerate subdomains of a domain with subfinder (passive)."""
         if not domain:
@@ -45,7 +51,7 @@ class ReconTools:
         if which("subfinder") is None:
             return _missing("subfinder", "brew install subfinder")
         try:
-            proc = _run(["subfinder", "-silent", "-d", domain], timeout=min(timeout, 600))
+            proc = self._run(["subfinder", "-silent", "-d", domain], timeout=min(timeout, 600))
         except subprocess.TimeoutExpired:
             return {"tool": "subfinder", "error": "timeout"}
         hosts = [h for h in proc.stdout.splitlines() if h.strip()]
@@ -62,7 +68,7 @@ class ReconTools:
         targets = [t.strip() for t in target.split(",") if t.strip()]
         if which("httpx") is not None:
             try:
-                proc = _run(
+                proc = self._run(
                     ["httpx", "-silent", "-json", "-status-code", "-title",
                      "-tech-detect", "-web-server", "-no-color"],
                     timeout=min(timeout, 300),
@@ -84,7 +90,7 @@ class ReconTools:
         for t in targets[:20]:
             url = t if t.startswith("http") else f"http://{t}"
             try:
-                proc = _run(["curl", "-sS", "-I", "-m", "15", url], timeout=30)
+                proc = self._run(["curl", "-sS", "-I", "-m", "15", url], timeout=30)
                 out.append({"target": url, "headers": _cap(proc.stdout)})
             except subprocess.TimeoutExpired:
                 out.append({"target": url, "error": "timeout"})
@@ -103,7 +109,7 @@ class ReconTools:
             cmd += ["--top-ports", "1000"]
         cmd.append(target)
         try:
-            proc = _run(cmd, timeout=min(timeout, 900))
+            proc = self._run(cmd, timeout=min(timeout, 900))
         except subprocess.TimeoutExpired:
             return {"tool": "nmap", "error": "timeout", "note": "Narrow the port range or raise timeout."}
         return {"tool": "nmap", "target": target, "output": _cap(proc.stdout), "stderr": proc.stderr[:500]}
@@ -116,7 +122,7 @@ class ReconTools:
             return _missing("dig", "usually preinstalled; install bind tools")
         rtype = (record_type or "A").upper()
         try:
-            proc = _run(["dig", "+short", name, rtype], timeout=30)
+            proc = self._run(["dig", "+short", name, rtype], timeout=30)
         except subprocess.TimeoutExpired:
             return {"tool": "dig", "error": "timeout"}
         answers = [a for a in proc.stdout.splitlines() if a.strip()]
@@ -139,7 +145,7 @@ class ReconTools:
         if tags:
             cmd += ["-tags", tags]
         try:
-            proc = _run(cmd, timeout=min(timeout, 1800))
+            proc = self._run(cmd, timeout=min(timeout, 1800))
         except subprocess.TimeoutExpired:
             return {"tool": "nuclei", "error": "timeout"}
         findings = []
@@ -185,7 +191,7 @@ class ReconTools:
         if extra:
             cmd += shlex.split(extra)
         try:
-            proc = _run(cmd, timeout=min(timeout, 1800))
+            proc = self._run(cmd, timeout=min(timeout, 1800))
         except subprocess.TimeoutExpired:
             return {"tool": "sqlmap", "error": "timeout",
                     "note": "sqlmap exceeded the timeout — narrow with -p <param> or lower --level."}

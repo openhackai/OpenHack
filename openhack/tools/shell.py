@@ -20,6 +20,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from openhack.tools.process import run_killable
+
 
 class ShellTools:
     """Run shell commands on behalf of the agent, with timeouts and output caps."""
@@ -33,8 +35,11 @@ class ShellTools:
     DEFAULT_TIMEOUT = 300  # seconds
     MAX_TIMEOUT = 3600
 
-    def __init__(self, workdir: Optional[Path] = None):
+    def __init__(self, workdir: Optional[Path] = None, session=None):
         self.workdir = Path(workdir).resolve() if workdir else Path.cwd()
+        # When set, spawned commands register with the session so ESC/cancel can
+        # kill them immediately (see tools/process.run_killable).
+        self._session = session
 
     # ------------------------------------------------------------------ tools
 
@@ -67,12 +72,12 @@ class ShellTools:
                 return {"error": f"Working directory does not exist: {workdir}"}
 
         try:
-            proc = subprocess.run(
+            proc = run_killable(
                 command,
+                session=self._session,
                 shell=True,
                 cwd=str(cwd),
                 input=stdin,
-                capture_output=True,
                 text=True,
                 timeout=effective_timeout,
                 env=os.environ.copy(),

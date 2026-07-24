@@ -150,8 +150,6 @@ def test_sca_scan_fallback_without_osv(tmp_path, monkeypatch):
 
 
 def test_sca_scan_uses_osv_when_present(tmp_path, monkeypatch):
-    import subprocess as _sp
-
     sample = {
         "results": [
             {
@@ -179,7 +177,7 @@ def test_sca_scan_uses_osv_when_present(tmp_path, monkeypatch):
         stderr = ""
 
     monkeypatch.setattr("openhack.tools.security_tools.which", lambda _: "/usr/bin/osv-scanner")
-    monkeypatch.setattr(_sp, "run", lambda *a, **k: FakeProc())
+    monkeypatch.setattr("openhack.tools.security_tools.run_killable", lambda *a, **k: FakeProc())
     sec = SecurityTools(workdir=tmp_path)
     result = sec.sca_scan()
     assert result["engine"] == "osv-scanner"
@@ -247,7 +245,7 @@ def test_recon_subdomains_parses_output(monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/subfinder")
-    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(recon.ReconTools, "_run", lambda self, *a, **k: FakeProc())
     r = ReconTools()
     result = r.subdomains("example.com")
     assert result["count"] == 2
@@ -266,7 +264,7 @@ def test_recon_nuclei_parses_jsonl(monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/nuclei")
-    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(recon.ReconTools, "_run", lambda self, *a, **k: FakeProc())
     r = ReconTools()
     result = r.nuclei_scan("https://x")
     assert result["count"] == 1
@@ -294,7 +292,7 @@ def test_sqlmap_parses_injectable(monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(recon, "which", lambda _: "/usr/bin/sqlmap")
-    monkeypatch.setattr(recon, "_run", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(recon.ReconTools, "_run", lambda self, *a, **k: FakeProc())
     r = ReconTools()
     out = r.sqlmap_test("http://x/item?id=1")
     assert out["injectable"] is True

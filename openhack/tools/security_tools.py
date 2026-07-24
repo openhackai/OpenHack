@@ -19,6 +19,8 @@ from pathlib import Path
 from shutil import which
 from typing import Optional
 
+from openhack.tools.process import run_killable
+
 
 # ------------------------------------------------------------------ secrets
 
@@ -63,8 +65,11 @@ class SecurityTools:
     MAX_FILE_BYTES = 2_000_000
     MAX_SECRET_HITS = 200
 
-    def __init__(self, workdir: Optional[Path] = None):
+    def __init__(self, workdir: Optional[Path] = None, session=None):
         self.workdir = Path(workdir).resolve() if workdir else Path.cwd()
+        # When set, osv-scanner registers with the session so ESC/cancel can
+        # kill it immediately (see tools/process.run_killable).
+        self._session = session
 
     # ------------------------------------------------------------------ paths
 
@@ -92,10 +97,10 @@ class SecurityTools:
             return self._sca_fallback(target)
 
         try:
-            proc = subprocess.run(
+            proc = run_killable(
                 ["osv-scanner", "scan", "source", "--format", "json",
                  "--recursive", "--allow-no-lockfiles", str(target)],
-                capture_output=True, text=True, timeout=600,
+                session=self._session, timeout=600,
             )
         except subprocess.TimeoutExpired:
             return {"engine": "osv-scanner", "error": "osv-scanner timed out after 600s"}

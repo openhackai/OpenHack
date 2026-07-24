@@ -18,11 +18,18 @@ import subprocess
 from shutil import which
 from typing import Optional
 
+from openhack.tools.process import run_killable
+
 
 class MailboxTools:
     """Mint disposable inboxes and wait for verification mail."""
 
     WAIT_HARD_CAP = 600  # seconds
+
+    def __init__(self, session=None):
+        # When set, the `inbox` CLI (esp. the blocking mailbox_wait poll)
+        # registers with the session so ESC/cancel can kill it immediately.
+        self._session = session
 
     def _available(self) -> Optional[dict]:
         """Return an error dict if the mailbox isn't usable, else None."""
@@ -46,9 +53,9 @@ class MailboxTools:
         return None
 
     def _run(self, args: list[str], timeout: int) -> subprocess.CompletedProcess:
-        return subprocess.run(
+        return run_killable(
             ["inbox", *args],
-            capture_output=True, text=True, timeout=timeout,
+            session=self._session, timeout=timeout,
             env=os.environ.copy(),
         )
 

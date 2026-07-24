@@ -4544,6 +4544,12 @@ class OpenHackApp:
         finally:
             tick_task.cancel()
             if self.scan_task and not self.scan_task.done():
+                # Kill any subprocess a tool is blocked on before tearing down.
+                # asyncio.run() waits on the executor's worker thread after this
+                # returns, so without killing the child, quitting mid-tool hangs
+                # the (already-erased) terminal until the command's own timeout.
+                if self.session is not None:
+                    self.session.cancel()
                 self.scan_task.cancel()
                 try:
                     await self.scan_task

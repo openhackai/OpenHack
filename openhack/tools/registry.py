@@ -37,10 +37,10 @@ class ToolRegistry:
         self._tool_sources = [self.fs_tools, self.nextjs_tools, self.ast_tools]
 
         if include_agent_tools:
-            self.shell_tools = ShellTools(workdir=target_dir)
-            self.security_tools = SecurityTools(workdir=target_dir)
-            self.mailbox_tools = MailboxTools()
-            self.recon_tools = ReconTools()
+            self.shell_tools = ShellTools(workdir=target_dir, session=session)
+            self.security_tools = SecurityTools(workdir=target_dir, session=session)
+            self.mailbox_tools = MailboxTools(session=session)
+            self.recon_tools = ReconTools(session=session)
             self.oob_tools = OOBTools()
             self.browser_tools = BrowserTools(evidence_dir=target_dir / ".openhack-evidence")
             self._tool_sources += [
