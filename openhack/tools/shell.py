@@ -35,11 +35,22 @@ class ShellTools:
     DEFAULT_TIMEOUT = 300  # seconds
     MAX_TIMEOUT = 3600
 
-    def __init__(self, workdir: Optional[Path] = None, session=None):
+    def __init__(self, workdir: Optional[Path] = None, session=None, shells=None):
         self.workdir = Path(workdir).resolve() if workdir else Path.cwd()
         # When set, spawned commands register with the session so ESC/cancel can
         # kill them immediately (see tools/process.run_killable).
         self._session = session
+        # Shared ShellManager for background shells (run_in_background). Lets the
+        # agent launch a listener/server/long scan and keep working; the same
+        # manager backs the TUI's /bashes view. Lazily created if not supplied.
+        self._shells = shells
+        self._bash_cursors: dict[str, int] = {}
+
+    def _ensure_shells(self):
+        if self._shells is None:
+            from openhack.shells import ShellManager
+            self._shells = ShellManager()
+        return self._shells
 
     # ------------------------------------------------------------------ tools
 
@@ -47,6 +58,7 @@ class ShellTools:
         self,
         command: str,
         timeout: Optional[int] = None,
+        run_in_background: bool = False,
         workdir: Optional[str] = None,
         stdin: Optional[str] = None,
     ) -> dict:
@@ -57,6 +69,29 @@ class ShellTools:
         """
         if not command or not command.strip():
             return {"error": "Empty command"}
+
+        # Background: hand off to the ShellManager and return immediately with an
+        # id the agent can poll with bash_output / stop with kill_shell.
+        if run_in_background:
+            cwd = str(self.workdir)
+            if workdir:
+                candidate = Path(workdir)
+                resolved = (candidate if candidate.is_absolute() else self.workdir / candidate).resolve()
+                if not resolved.is_dir():
+                    return {"error": f"Working directory does not exist: {workdir}"}
+                cwd = str(resolved)
+            try:
+                sid = self._ensure_shells().spawn(command, cwd=cwd)
+            except OSError as e:
+                return {"error": f"Failed to start background command: {e}"}
+            return {
+                "shell_id": sid,
+                "status": "running",
+                "note": (
+                    f"Started in the background as {sid}. Poll its output with "
+                    f"bash_output(shell_id='{sid}') and stop it with kill_shell(shell_id='{sid}')."
+                ),
+            }
 
         effective_timeout = min(
             int(timeout) if timeout else self.DEFAULT_TIMEOUT, self.MAX_TIMEOUT
@@ -126,6 +161,29 @@ class ShellTools:
         path = _which(name)
         return {"tool": name, "installed": path is not None, "path": path}
 
+    def bash_output(self, shell_id: str) -> dict:
+        """Return output produced by a background shell since the last poll."""
+        if self._shells is None:
+            return {"error": "no background shells"}
+        sh = self._shells.get(shell_id)
+        if sh is None:
+            return {"error": f"no such shell: {shell_id}"}
+        lines, cursor = sh.since(self._bash_cursors.get(shell_id, 0))
+        self._bash_cursors[shell_id] = cursor
+        return {
+            "shell_id": shell_id,
+            "status": sh.status,
+            "exit_code": sh.returncode,
+            "output": self._cap("\n".join(lines)),
+        }
+
+    def kill_shell(self, shell_id: str) -> dict:
+        """Terminate a background shell (SIGTERM → SIGKILL)."""
+        if self._shells is None or self._shells.get(shell_id) is None:
+            return {"error": f"no such shell: {shell_id}"}
+        self._shells.kill(shell_id)
+        return {"shell_id": shell_id, "killed": True}
+
     # ----------------------------------------------------------------- helpers
 
     def _decode(self, blob) -> str:
@@ -175,6 +233,15 @@ class ShellTools:
                             "type": "integer",
                             "description": "Max seconds to wait before killing the command (default 300, max 3600).",
                         },
+                        "run_in_background": {
+                            "type": "boolean",
+                            "description": (
+                                "Run the command in the background and return immediately with a "
+                                "shell_id instead of blocking. Use for long-lived processes — a "
+                                "listener, an HTTP server, a long scan — then read its output with "
+                                "bash_output and stop it with kill_shell. Default false."
+                            ),
+                        },
                         "workdir": {
                             "type": "string",
                             "description": "Directory to run in (absolute, or relative to the session root). Defaults to the session root.",
@@ -204,6 +271,39 @@ class ShellTools:
                     "required": ["tool"],
                 },
             },
+            {
+                "name": "bash_output",
+                "description": (
+                    "Read new output from a background shell (one started with "
+                    "run_command run_in_background=true). Returns output produced since "
+                    "your last bash_output call for that shell, plus its status and exit "
+                    "code. Poll this to watch a background process make progress."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "shell_id": {
+                            "type": "string",
+                            "description": "The id returned by run_command run_in_background=true, e.g. 'sh1'.",
+                        },
+                    },
+                    "required": ["shell_id"],
+                },
+            },
+            {
+                "name": "kill_shell",
+                "description": "Stop a background shell started with run_command run_in_background=true.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "shell_id": {
+                            "type": "string",
+                            "description": "The id of the background shell to terminate, e.g. 'sh1'.",
+                        },
+                    },
+                    "required": ["shell_id"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, arguments: dict) -> dict:
@@ -212,6 +312,8 @@ class ShellTools:
         tools = {
             "run_command": self.run_command,
             "which": self.which,
+            "bash_output": self.bash_output,
+            "kill_shell": self.kill_shell,
         }
         if name not in tools:
             return {"error": f"Unknown tool: {name}"}

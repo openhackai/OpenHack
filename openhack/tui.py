@@ -67,6 +67,7 @@ from openhack.config import (
     _PROVIDER_KEY_FIELDS,
 )
 from openhack.setup import run_setup_command
+from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
 from openhack.prompts.project_context import build_project_context
 from openhack.updates import Announcement, UpdateInfo, fetch_updates, save_dismissed
@@ -248,6 +249,7 @@ _SLASH_COMMANDS = [
     ("/cancel", "Stop the running scan/agent"),
     ("/clear", "Clear the conversation / return to landing"),
     ("/sessions", "Browse and re-load past scan results"),
+    ("/bashes", "Watch and kill background shells (started with !cmd &)"),
     ("/provider", "Switch LLM provider (openhack, openai, anthropic, …)"),
     ("/model", "Set or show the model ID"),
     ("/config", "Show or set configuration"),
@@ -809,6 +811,49 @@ class ScanState:
             ])
             return
 
+        # ── Bang / shell mode ──────────────────────────────────────
+        if etype == "shell_start":
+            cmd = str(entry.content or "")
+            self.last_message = f"shell · {cmd[:60]}"
+            if self.trace_lines:
+                self._append_trace(agent, [("", "")])  # spacer before a new command
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.user.bar", " ▌ "),
+                ("class:trace.shell.cmd", f"$ {cmd}"),
+            ])
+            return
+
+        if etype == "shell_output":
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.shell", f"  {entry.content}"),
+            ])
+            return
+
+        if etype == "shell_end":
+            data = entry.content if isinstance(entry.content, dict) else {}
+            if data.get("interrupted"):
+                note = "interrupted"
+            elif "error" in data:
+                note = f"error · {data['error']}"
+            else:
+                note = f"exit {data.get('exit_code', 0)}"
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.dim", f"  ↳ {note}"),
+            ])
+            return
+
+        if etype == "shell_bg":
+            data = entry.content if isinstance(entry.content, dict) else {}
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.shell.cmd", f"  {data.get('id', 'sh?')} "),
+                ("class:trace.dim", f"started in background · {data.get('command', '')}"),
+            ])
+            return
+
     def _ts(self, t: float) -> str:
         # Per-line elapsed timer removed — the trace reads cleaner without the
         # [m:ss] gutter. (Kept as a no-op so the ~20 render sites stay intact;
@@ -1175,6 +1220,14 @@ class OpenHackApp:
         self.chat_history: list[Message] = []
         self._cancel_armed = False
         self._interrupting = False
+        # Shell (bang) mode: the live foreground shell process + a flag for the
+        # spinner verb, plus the shared background-shell manager (also used by
+        # the agent's run_in_background tool).
+        self._shell_proc = None
+        self._shell_active = False
+        self.shells = ShellManager()
+        self.shells_selected: int = 0
+        self._shells_were_running = False  # ticker edge-detect for /bashes repaint
         # Sessions tab state
         self.sessions_index: list[dict] = []
         self.sessions_selected: int = 0
@@ -1621,6 +1674,36 @@ class OpenHackApp:
         def _m_esc(event):
             self._close_model_picker()
 
+        # Background-shell watcher (/bashes).
+        def _in_shells() -> bool:
+            return self.mode == "shells"
+
+        @kb.add("up", filter=Condition(lambda: _in_shells() and _input_empty()))
+        def _sh_up(event):
+            self.shells_selected = max(0, self.shells_selected - 1)
+            self._invalidate()
+
+        @kb.add("down", filter=Condition(lambda: _in_shells() and _input_empty()))
+        def _sh_down(event):
+            n = len(self.shells.list())
+            self.shells_selected = min(max(0, n - 1), self.shells_selected + 1)
+            self._invalidate()
+
+        @kb.add("k", filter=Condition(lambda: _in_shells() and _input_empty()))
+        def _sh_kill(event):
+            shells = self.shells.list()
+            if shells:
+                sel = max(0, min(self.shells_selected, len(shells) - 1))
+                self.shells.kill(shells[sel].id)
+                self.last_status_line = f"killed {shells[sel].id}"
+                self._invalidate()
+
+        @kb.add("escape", eager=True, filter=Condition(lambda: _in_shells() and _input_empty()))
+        def _sh_esc(event):
+            self.mode = self.previous_mode or "landing"
+            self.previous_mode = None
+            self._invalidate()
+
         return kb
 
     def _cycle_tab(self, direction: int) -> None:
@@ -1728,6 +1811,8 @@ class OpenHackApp:
             "trace.agent.bar": f"bold {OH_PRIMARY}",
             "trace.stream": OH_TEXT,
             "trace.tool.name": OH_CYAN,
+            "trace.shell": OH_TEXT,
+            "trace.shell.cmd": f"bold {OH_CYAN}",
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
             "msg.meta.glyph": OH_PRIMARY,
@@ -1777,17 +1862,20 @@ class OpenHackApp:
         is_landing = Condition(lambda: self.mode == "landing")
         is_sessions = Condition(lambda: self.mode == "sessions")
         is_models = Condition(lambda: self.mode == "models")
+        is_shells = Condition(lambda: self.mode == "shells")
         is_scanning = Condition(lambda: self.mode in ("scanning", "viewing"))
 
         landing = self._build_landing_container()
         scan = self._build_scan_container()
         sessions = self._build_sessions_container()
         models = self._build_model_container()
+        shells = self._build_shells_container()
 
         body = HSplit([
             ConditionalContainer(content=landing, filter=is_landing),
             ConditionalContainer(content=sessions, filter=is_sessions),
             ConditionalContainer(content=models, filter=is_models),
+            ConditionalContainer(content=shells, filter=is_shells),
             ConditionalContainer(content=scan, filter=is_scanning),
         ])
 
@@ -1853,7 +1941,7 @@ class OpenHackApp:
         return [[("class:wordmark", _WORDMARK)]]
 
     def _placeholder_text(self) -> str:
-        return "Ask anything, or type /scan . to begin a security scan"
+        return "Ask anything · /scan to scan · !cmd to run a shell command"
 
     def _model_line(self) -> list[tuple[str, str]]:
         """The '<agent> · <model> <provider>' line under the input."""
@@ -2880,6 +2968,78 @@ class OpenHackApp:
             Window(height=1),
         ])
 
+    def _build_shells_container(self) -> HSplit:
+        """Background-shell watcher — the shell list plus the selected one's tail."""
+        def header_text():
+            shells = self.shells.list()
+            running = sum(1 for s in shells if s.is_running())
+            return [
+                ("class:header.brand", "openhack"),
+                ("class:header.sep", "  ·  "),
+                ("class:header.target", "shells"),
+                ("class:header.sep", "    "),
+                ("class:header.meta", f"{running} running · {len(shells)} total"),
+            ]
+
+        def _status_style(s):
+            if s.status == "running":
+                return "class:sev.low"
+            if s.status == "killed":
+                return "class:status.fail"
+            return "class:trace.dim" if s.returncode == 0 else "class:sev.medium"
+
+        def shells_text():
+            out: list[tuple[str, str]] = [("", "\n")]
+            shells = self.shells.list()
+            if not shells:
+                out.append(("class:pane.empty",
+                            "  no background shells — start one with  !<command> &\n"))
+                return out
+            sel = max(0, min(self.shells_selected, len(shells) - 1))
+            for i, s in enumerate(shells):
+                selected = i == sel
+                cls = "class:session.row.selected" if selected else "class:session.row"
+                pointer = "❯ " if selected else "  "
+                badge = {
+                    "running": "● running",
+                    "exited": f"exited {s.returncode}",
+                    "killed": "killed",
+                }.get(s.status, s.status)
+                out.append((cls, f"  {pointer}{s.id}  "))
+                out.append((_status_style(s), badge))
+                out.append(("class:session.meta", f"   {s.command[:80]}"))
+                out.append(("", "\n"))
+            sel_shell = shells[sel]
+            out.append(("", "\n"))
+            out.append(("class:trace.step", f"  ── output · {sel_shell.id} ──\n"))
+            tail = sel_shell.tail(40)
+            if not tail:
+                out.append(("class:trace.dim", "  (no output yet)\n"))
+            else:
+                for line in tail:
+                    out.append(("class:trace.shell", f"  {line}\n"))
+            return out
+
+        def hint_text():
+            return [
+                ("class:hint", "  ↑/↓ "), ("class:hint.key", "navigate"),
+                ("class:hint", "   k "), ("class:hint.key", "kill"),
+                ("class:hint", "   esc "), ("class:hint.key", "back"),
+            ]
+
+        header = Window(FormattedTextControl(header_text), height=1)
+        rule = Window(FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1)
+        body = Window(
+            FormattedTextControl(shells_text, focusable=False),
+            wrap_lines=False, always_hide_cursor=True,
+        )
+        hint = Window(FormattedTextControl(hint_text), height=1)
+        return HSplit([
+            Window(height=1), header, rule, body, rule, hint,
+            VSplit([Window(width=2), self._input_window]),
+            Window(height=1),
+        ])
+
     _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
     def _current_findings(self) -> list[Finding]:
@@ -2980,6 +3140,13 @@ class OpenHackApp:
         if self._verify_arm_subject is not None and not text.startswith("/verify"):
             self._verify_arm_subject = None
 
+        # Bang mode: `!<cmd>` runs a shell command directly (no LLM). Handled
+        # first, before the running-instruction queue below, so it works in any
+        # mode. A trailing ` &` backgrounds it (see _start_shell).
+        if text.startswith("!"):
+            self._start_shell(text[1:].strip())
+            return
+
         # Non-slash input.
         if not text.startswith("/"):
             low = text.lstrip("-").strip().lower()
@@ -3067,6 +3234,8 @@ class OpenHackApp:
             self._cmd_config(arg)
         elif cmd == "/sessions":
             self._open_sessions_overlay()
+        elif cmd == "/bashes":
+            self._open_shells_view()
         elif cmd == "/copy":
             self._cmd_copy_fix()
         elif cmd == "/verify":
@@ -3301,7 +3470,8 @@ class OpenHackApp:
     def _open_sessions_overlay(self) -> None:
         """Open the sessions picker as a full-screen overlay."""
         self._refresh_sessions_index()
-        self.previous_mode = self.mode  # remember where to go back on Esc
+        if self.mode not in ("sessions", "models", "shells"):
+            self.previous_mode = self.mode  # remember where to go back on Esc
         self.mode = "sessions"
         if not self.sessions_index:
             self.last_status_line = "no saved scans yet — completed scans are saved to ~/.openhack/scans/"
@@ -3316,6 +3486,20 @@ class OpenHackApp:
         self.mode = target_mode
         self.previous_mode = None
         self.last_status_line = ""
+
+    def _open_shells_view(self) -> None:
+        """Open the background-shell watcher (/bashes)."""
+        # Don't clobber the origin if we're opening from within another overlay
+        # (the single previous_mode slot is shared by sessions/models/shells).
+        if self.mode not in ("sessions", "models", "shells"):
+            self.previous_mode = self.mode
+        self.mode = "shells"
+        self.shells_selected = 0
+        n = len(self.shells.list())
+        if not n:
+            self.last_status_line = "no background shells — start one with  !<command> &"
+        else:
+            self.last_status_line = f"{n} shell(s) · ↑/↓ navigate · k kill · esc back"
 
     # ── Model picker overlay ──────────────────────────────────────
     def _open_model_picker(self) -> None:
@@ -3333,7 +3517,8 @@ class OpenHackApp:
         self.model_selected = next(
             (i for i, m in enumerate(self.model_index) if m["id"] == self.model), 0
         )
-        self.previous_mode = self.mode
+        if self.mode not in ("sessions", "models", "shells"):
+            self.previous_mode = self.mode
         self.mode = "models"
         self.last_status_line = ""
         self._invalidate()
@@ -4015,7 +4200,8 @@ class OpenHackApp:
             # conversation are visible.
             session.add_trace(agent="you", event_type="user", content=task)
 
-            tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True, session=session)
+            tools = ToolRegistry(target_dir=Path(target_dir), include_agent_tools=True,
+                                 session=session, shells=self.shells)
             llm = LLMClient(
                 model=self.model, temperature=0.0, max_tokens=8192,
                 provider=self.provider, prompt_cache_key=session.id,
@@ -4050,6 +4236,138 @@ class OpenHackApp:
             self.scan_task = None
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._interrupting = False
+            self._invalidate()
+
+    # ── Shell (bang) mode ─────────────────────────────────────────
+
+    def _start_shell(self, command: str) -> None:
+        """Bang mode: run a shell command directly. `<cmd> &` backgrounds it."""
+        command = command.strip()
+        if not command:
+            self.last_status_line = "usage: !<command>   (append & to run in background)"
+            self._invalidate()
+            return
+        if command.endswith("&"):
+            self._start_background_shell(command[:-1].strip())
+            return
+        if self.scan_task is not None and not self.scan_task.done():
+            self.last_status_line = "a run is in progress — press Esc to interrupt it first"
+            self._invalidate()
+            return
+        # Reuse an open agent transcript so the command + output land in the same
+        # conversation (and feed back to the agent); otherwise start a fresh
+        # transcript view for the shell output.
+        if self.is_agent_session and self.session is not None and self.scan is not None:
+            self.scan.end_time = None  # re-arm the elapsed clock
+        else:
+            self.scan = ScanState(target=os.getcwd() + " (shell)")
+            self.session = Session(target_dir=os.getcwd(), on_trace=self._on_trace)
+            self.agent = None
+            self.is_agent_session = True
+        self.mode = "scanning"
+        self.active_tab = "trace"
+        self.viewing_target = ""
+        self._cancel_armed = False
+        self._interrupting = False
+        self._shell_active = True
+        self.scan_task = asyncio.create_task(self._run_shell(command))
+
+    def _start_background_shell(self, command: str) -> None:
+        """Launch `!cmd &` in the background (non-blocking); watch via /bashes."""
+        command = command.strip()
+        if not command:
+            self.last_status_line = "usage: !<command> &"
+            self._invalidate()
+            return
+        try:
+            sid = self.shells.spawn(command, cwd=os.getcwd())
+        except Exception as exc:
+            self.last_status_line = f"could not start background shell: {exc}"
+            self._invalidate()
+            return
+        self.last_status_line = f"started {sid} in background · /bashes to watch · !{command} &"
+        # Note it in the transcript when one is on screen.
+        if self.session is not None and self.scan is not None:
+            self.session.add_trace(
+                agent="shell", event_type="shell_bg",
+                content={"id": sid, "command": command},
+            )
+        self._invalidate()
+
+    async def _run_shell(self, command: str) -> None:
+        """Stream a shell command's output into the transcript. Esc-interruptible."""
+        import codecs
+
+        from openhack.tools.process import kill_process_group
+
+        session = self.session
+        proc = None
+        output_tail: list[str] = []
+
+        def _emit(text: str) -> None:
+            output_tail.append(text)
+            if len(output_tail) > 200:
+                output_tail.pop(0)
+            session.add_trace(agent="shell", event_type="shell_output", content=text)
+
+        try:
+            session.add_trace(agent="you", event_type="user", content="! " + command)
+            session.add_trace(agent="shell", event_type="shell_start", content=command)
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=os.getcwd(),
+                start_new_session=True,  # own process group → killable as a tree
+            )
+            self._shell_proc = proc
+            # Chunked reads (not readline): asyncio's readline caps a single line
+            # at 64KB and raises on overflow — minified JS/JSON/base64 blow past
+            # that. Read raw chunks and split into lines ourselves, flushing a
+            # monster line rather than buffering unboundedly.
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            buf = ""
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buf += decoder.decode(chunk)
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    _emit(line)
+                if len(buf) > 65536:
+                    _emit(buf)
+                    buf = ""
+            buf += decoder.decode(b"", final=True)
+            if buf:
+                _emit(buf)
+            rc = await proc.wait()
+            session.add_trace(agent="shell", event_type="shell_end", content={"exit_code": rc})
+            self.last_status_line = f"! {command} · exit {rc}"
+            # Feed the result back to an open agent so it has the output as context.
+            if self.agent is not None:
+                tail = "\n".join(output_tail[-80:])
+                session.add_user_instruction(
+                    f"[ran shell command] $ {command}\n(exit {rc})\n{tail}"
+                )
+        except asyncio.CancelledError:
+            session.add_trace(agent="shell", event_type="shell_end", content={"interrupted": True})
+            self.last_status_line = "shell interrupted"
+            raise
+        except Exception as exc:
+            session.add_trace(agent="shell", event_type="shell_end", content={"error": str(exc)})
+            self.last_status_line = f"shell error: {exc}"
+        finally:
+            # Kill the child on ANY early exit (cancel, read error, etc.) so it
+            # can't outlive the transcript as an untracked orphan.
+            if proc is not None and proc.returncode is None:
+                kill_process_group(proc)
+            self._shell_proc = None
+            self._shell_active = False
+            if self.scan is not None:
+                self.scan.finish()
+            self.scan_task = None
             self._interrupting = False
             self._invalidate()
 
@@ -4160,6 +4478,8 @@ class OpenHackApp:
         """A short word for what the agent is doing right now."""
         if self._interrupting:
             return "interrupting"
+        if self._shell_active:
+            return "running"
         if self._stream_buf:
             return "responding"
         if self._stream_reasoning:
@@ -4522,6 +4842,16 @@ class OpenHackApp:
                     frame += 1
                     if frame % 12 == 0:
                         self._invalidate()
+                elif self.mode == "shells":
+                    # Keep the /bashes tail live while a background shell runs,
+                    # and fire one repaint on the running→stopped edge so the
+                    # final output + exit badge render without a keypress.
+                    running = any(s.is_running() for s in self.shells.list())
+                    if running or self._shells_were_running:
+                        frame += 1
+                        if frame % 3 == 0 or (self._shells_were_running and not running):
+                            self._invalidate()
+                    self._shells_were_running = running
 
         async def _check_updates():
             info = await fetch_updates()
@@ -4543,6 +4873,10 @@ class OpenHackApp:
             await self.app.run_async()
         finally:
             tick_task.cancel()
+            # Kill any background shells so quitting doesn't orphan them.
+            # shutdown() escalates to SIGKILL synchronously (kill_all()'s daemon
+            # Timer would be abandoned when the interpreter exits right after).
+            self.shells.shutdown()
             if self.scan_task and not self.scan_task.done():
                 # Kill any subprocess a tool is blocked on before tearing down.
                 # asyncio.run() waits on the executor's worker thread after this

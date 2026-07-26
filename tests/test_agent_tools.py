@@ -1,5 +1,6 @@
 """Tests for the interactive hacking toolkit: shell, security, mailbox, registry."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,55 @@ def test_shell_timeout(tmp_path):
     sh = ShellTools(workdir=tmp_path)
     result = sh.run_command("sleep 5", timeout=1)
     assert result.get("timed_out") is True
+
+
+def _wait(pred, timeout=4.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.03)
+    return pred()
+
+
+def test_shell_background_returns_id_and_bash_output(tmp_path):
+    from openhack.shells import ShellManager
+    mgr = ShellManager()
+    sh = ShellTools(workdir=tmp_path, shells=mgr)
+    started = sh.run_command("printf 'x\\ny\\n'", run_in_background=True)
+    assert started["status"] == "running"
+    sid = started["shell_id"]
+    assert _wait(lambda: mgr.get(sid).status == "exited")
+    out = sh.bash_output(sid)
+    assert out["status"] == "exited" and out["exit_code"] == 0
+    assert "x" in out["output"] and "y" in out["output"]
+    # Second poll returns nothing new.
+    assert sh.bash_output(sid)["output"] == ""
+
+
+def test_shell_kill_shell_stops_background(tmp_path):
+    from openhack.shells import ShellManager
+    mgr = ShellManager()
+    sh = ShellTools(workdir=tmp_path, shells=mgr)
+    sid = sh.run_command("sleep 30", run_in_background=True)["shell_id"]
+    assert _wait(lambda: mgr.get(sid).is_running(), timeout=1.0)
+    assert sh.kill_shell(sid)["killed"] is True
+    assert _wait(lambda: mgr.get(sid).proc.poll() is not None)
+
+
+def test_shell_background_bad_workdir_returns_error(tmp_path):
+    from openhack.shells import ShellManager
+    sh = ShellTools(workdir=tmp_path, shells=ShellManager())
+    r = sh.run_command("echo hi", run_in_background=True, workdir="does-not-exist")
+    assert "error" in r and "does not exist" in r["error"]
+
+
+def test_shell_background_tools_registered(tmp_path):
+    names = {t["name"] for t in ShellTools(workdir=tmp_path).get_tool_definitions()}
+    assert {"run_command", "which", "bash_output", "kill_shell"} <= names
+    bg = next(t for t in ShellTools(workdir=tmp_path).get_tool_definitions()
+              if t["name"] == "run_command")
+    assert "run_in_background" in bg["parameters"]["properties"]
 
 
 def test_shell_output_truncation(tmp_path):

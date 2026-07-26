@@ -88,6 +88,15 @@ everything you've found. The specialist has the right playbook and tools, shares
 your session, and will finish the exploit and capture the flag; use its returned \
 flag/summary. Don't dispatch trivial cases you can finish yourself in a step or two.
 
+## Long-running / background processes
+
+For anything that shouldn't block — a listener, an HTTP server you'll curl, a \
+long scan you want to watch — call `run_command` with `run_in_background=true`. \
+It returns a `shell_id` immediately instead of waiting. Read its accumulated \
+output with `bash_output(shell_id=...)` (returns only what's new since your last \
+call) and stop it with `kill_shell(shell_id=...)`. Use this instead of blocking \
+`run_command` for servers/listeners so you can keep working while they run.
+
 ## Working style
 
 - The operator may reference a file or directory with `@path` (relative to the \

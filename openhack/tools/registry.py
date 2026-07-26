@@ -27,7 +27,8 @@ class ToolRegistry:
     """
 
     def __init__(self, target_dir: Path, include_agent_tools: bool = False, session=None,
-                 include_stateful_browser: bool = False, browser_base_url: str = ""):
+                 include_stateful_browser: bool = False, browser_base_url: str = "",
+                 shells=None):
         self.target_dir = target_dir
         self.fs_tools = FileSystemTools(target_dir)
         self.nextjs_tools = NextJSTools(self.fs_tools)
@@ -37,7 +38,7 @@ class ToolRegistry:
         self._tool_sources = [self.fs_tools, self.nextjs_tools, self.ast_tools]
 
         if include_agent_tools:
-            self.shell_tools = ShellTools(workdir=target_dir, session=session)
+            self.shell_tools = ShellTools(workdir=target_dir, session=session, shells=shells)
             self.security_tools = SecurityTools(workdir=target_dir, session=session)
             self.mailbox_tools = MailboxTools(session=session)
             self.recon_tools = ReconTools(session=session)
