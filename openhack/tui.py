@@ -550,6 +550,9 @@ class ScanState:
         self.trace_lines: list[tuple[str, list[tuple[str, str]]]] = []
         # Unique agents in order of first appearance — drives the trace sidebar.
         self.trace_agents: list[str] = []
+        # Index of the interactive agent's last tool-call line, so its result can
+        # be folded into that same line (one row per tool call, not two).
+        self._pending_tool_idx: Optional[int] = None
 
     def _append_trace(self, agent: str, fragments: list[tuple[str, str]]) -> None:
         """Internal: record a rendered trace line with its agent attribution."""
@@ -660,11 +663,14 @@ class ScanState:
             if str(agent).startswith("openhack"):
                 # Interactive agent: a tool call is a quiet sub-action beneath the
                 # conversation — no agent name, no arrow, just an indented tool tag.
+                # Its result is folded onto this same row when it lands.
                 self._append_trace(agent, [
                     ("class:trace.time", ts),
-                    ("class:trace.tool.name", "   " + tool),
+                    ("class:trace.tool.dot", "  ⏺ "),
+                    ("class:trace.tool.name", tool),
                     ("class:trace.dim", f"  {detail}" if detail and detail != tool else ""),
                 ])
+                self._pending_tool_idx = len(self.trace_lines) - 1
             else:
                 # Scan pipeline: many named agents, so keep the attribution.
                 self._append_trace(agent, [
@@ -686,10 +692,21 @@ class ScanState:
             if str(agent).startswith("openhack"):
                 summary = _summarize_tool_output(entry.tool_output)
                 if summary:
-                    self._append_trace(agent, [
-                        ("class:trace.time", ts),
-                        ("class:trace.dim", "     " + summary),
-                    ])
+                    summary = " ".join(str(summary).split())
+                    if len(summary) > 90:
+                        summary = summary[:89] + "…"
+                    idx = self._pending_tool_idx
+                    # Fold the outcome onto the tool-call row it belongs to.
+                    if idx is not None and 0 <= idx < len(self.trace_lines):
+                        style = ("class:trace.fail" if summary.startswith("error")
+                                 else "class:trace.dim")
+                        self.trace_lines[idx][1].append((style, f"  · {summary}"))
+                    else:
+                        self._append_trace(agent, [
+                            ("class:trace.time", ts),
+                            ("class:trace.dim", "     " + summary),
+                        ])
+                self._pending_tool_idx = None
             return
 
         if etype == "thinking":
@@ -1089,8 +1106,10 @@ def _short_tool_label(tool: str, args: dict) -> str:
 
     # ── Interactive agent tools: surface the actual command/target so the
     #    operator sees exactly what ran. ──────────────────────────────────
-    def _clip(s: str, n: int = 200) -> str:
-        s = str(s)
+    def _clip(s: str, n: int = 110) -> str:
+        # Collapse to ONE line: a heredoc/multi-line command would otherwise
+        # spill raw source into the transcript.
+        s = " ".join(str(s).split())
         return s if len(s) <= n else s[: n - 1] + "…"
 
     if tool == "run_command":
@@ -1817,15 +1836,17 @@ class OpenHackApp:
             "trace.tool": f"bold {OH_TEXT}",
             "trace.dim": OH_MUTED,
             "trace.step": f"bold {OH_PRIMARY}",
-            # User messages get a grey band so they're instantly distinguishable
-            # from the agent's output in a long transcript.
+            # User messages get a full-width grey band + a neutral white bar, so
+            # they're instantly distinct from the agent's green-barred output.
             "trace.user": f"bg:{OH_USER_BG} {OH_TEXT}",
-            "trace.user.bar": f"bg:{OH_USER_BG} bold {OH_PRIMARY}",
+            "trace.user.bar": f"bg:{OH_USER_BG} bold {OH_TEXT}",
             "trace.agent.bar": f"bold {OH_PRIMARY}",
             "trace.stream": OH_TEXT,
             "trace.tool.name": OH_CYAN,
             "trace.shell": OH_TEXT,
             "trace.shell.cmd": f"bold {OH_CYAN}",
+            "trace.tool.dot": OH_PRIMARY,   # the ⏺ marking a tool call
+            "trace.fail": OH_RED,           # folded-in error outcome
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
             "msg.meta.glyph": OH_PRIMARY,
@@ -2136,6 +2157,54 @@ class OpenHackApp:
             Window(height=1, style="class:body"),
         ], style="class:body")
 
+    @staticmethod
+    def _clip_tool_row(fragments: list, width: int) -> list:
+        """Keep a tool row on ONE line at any terminal width: truncate the
+        command in the middle, but always preserve the trailing result (the
+        `· exit 0` / `· error: …` the operator actually needs)."""
+        total = sum(len(text) for _, text in fragments)
+        if total <= width:
+            return fragments
+        head, tail = list(fragments), []
+        # The folded-in outcome is the final fragment when present.
+        if head and head[-1][1].lstrip().startswith("·"):
+            tail = [head.pop()]
+        budget = max(10, width - sum(len(t) for _, t in tail) - 1)
+        out, used = [], 0
+        for style, text in head:
+            if used >= budget:
+                break
+            if len(text) <= budget - used:
+                out.append((style, text))
+                used += len(text)
+            else:
+                out.append((style, text[: budget - used]))
+                used = budget
+                break
+        out.append(("class:trace.dim", "…"))
+        out.extend(tail)
+        return out
+
+    @staticmethod
+    def _user_band_pad(fragments: list, width: int) -> int:
+        """Spaces needed to extend a user message's grey band to the end of the
+        row (and to fill the last row when it wraps). 0 for non-user lines."""
+        if not any(str(style).startswith("class:trace.user") for style, _ in fragments):
+            return 0
+        used = sum(len(text) for _, text in fragments)
+        return (-used) % max(1, width)
+
+    def _trace_pane_width(self, default: int = 80) -> int:
+        """Current width of the transcript pane — used to pad user messages into
+        a full-width band. Falls back sanely before the first render."""
+        try:
+            info = self._trace_window.render_info if hasattr(self, "_trace_window") else None
+            if info is not None and info.window_width:
+                return max(20, int(info.window_width))
+        except Exception:
+            pass
+        return default
+
     def _build_scan_container(self) -> HSplit:
         # No header bar: the TUI deliberately has no top chrome. Target/cwd,
         # model, run state, findings + cost and shortcuts all live at the bottom
@@ -2244,11 +2313,22 @@ class OpenHackApp:
             wanted = _selected_trace_agents()
             out: list[tuple[str, str]] = []
             matched = 0
+            width = self._trace_pane_width()
             for agent, fragments in self.scan.trace_lines:
                 if wanted is not None and agent not in wanted:
                     continue
+                # Tool rows stay on one line at any width (command clipped,
+                # outcome preserved); prose and user messages wrap normally.
+                if any(style == "class:trace.tool.dot" for style, _ in fragments):
+                    fragments = self._clip_tool_row(fragments, width)
                 for fragment in fragments:
                     out.append(fragment)
+                # User messages render as a full-width band: pad with styled
+                # spaces up to the next multiple of the pane width so the
+                # background covers the whole row (and every wrapped row).
+                pad = self._user_band_pad(fragments, width)
+                if pad:
+                    out.append(("class:trace.user", " " * pad))
                 out.append(("", "\n"))
                 matched += 1
             if matched == 0 and wanted is not None:
