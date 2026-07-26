@@ -417,6 +417,19 @@ class LLMClient:
                 wait_time = 10 * (2 ** attempt)
                 await asyncio.sleep(wait_time)
                 continue
+            except openai.APIError as e:
+                # Base APIError not matched by the specific handlers above — most
+                # commonly a transient upstream error delivered *mid-stream* as an
+                # SSE error event (e.g. a provider/gateway 'server_error' like
+                # AtlasCloud's "服务发生异常，请重试") rather than a 5xx HTTP status.
+                # Treat it as transient and retry with backoff instead of failing
+                # the whole turn. (Auth/permission/4xx are raised above already.)
+                last_exception = e
+                if stream:
+                    try: await stream.close()
+                    except Exception: pass
+                if attempt == max_retries:
+                    raise
             except Exception as e:
                 logger.debug(f"OpenHack API error: {e}", exc_info=True)
                 if stream:
