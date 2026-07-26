@@ -666,7 +666,7 @@ class ScanState:
                 # Its result is folded onto this same row when it lands.
                 self._append_trace(agent, [
                     ("class:trace.time", ts),
-                    ("class:trace.tool.dot", "  ⏺ "),
+                    ("class:trace.tool.dot", "  → "),
                     ("class:trace.tool.name", tool),
                     ("class:trace.dim", f"  {detail}" if detail and detail != tool else ""),
                 ])
@@ -1842,10 +1842,14 @@ class OpenHackApp:
             "trace.user.bar": f"bg:{OH_USER_BG} bold {OH_TEXT}",
             "trace.agent.bar": f"bold {OH_PRIMARY}",
             "trace.stream": OH_TEXT,
-            "trace.tool.name": OH_CYAN,
+            # Tool rows are secondary to the conversation: keep them neutral so
+            # green stays reserved for the agent's own voice (the ▌ bar). Bold
+            # gives the tool name hierarchy over its args without adding colour.
+            "trace.tool.name": f"bold {OH_MUTED}",
             "trace.shell": OH_TEXT,
-            "trace.shell.cmd": f"bold {OH_CYAN}",
-            "trace.tool.dot": OH_PRIMARY,   # the ⏺ marking a tool call
+            # A `!cmd` is the user's own command — neutral, like their messages.
+            "trace.shell.cmd": f"bg:{OH_USER_BG} bold {OH_TEXT}",
+            "trace.tool.dot": OH_BORDER_A,  # the → marking a tool call (recedes)
             "trace.fail": OH_RED,           # folded-in error outcome
             "msg.bar": OH_SECONDARY,
             "msg.bar.error": OH_RED,
