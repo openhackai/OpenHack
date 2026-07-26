@@ -15,6 +15,7 @@ from .mailbox import MailboxTools
 from .recon import ReconTools
 from .oob import OOBTools
 from .browser import BrowserTools
+from .web import WebTools
 
 
 class ToolRegistry:
@@ -44,9 +45,11 @@ class ToolRegistry:
             self.recon_tools = ReconTools(session=session)
             self.oob_tools = OOBTools()
             self.browser_tools = BrowserTools(evidence_dir=target_dir / ".openhack-evidence")
+            self.web_tools = WebTools()
             self._tool_sources += [
                 self.shell_tools, self.security_tools, self.mailbox_tools,
                 self.recon_tools, self.oob_tools, self.browser_tools,
+                self.web_tools,
             ]
             # Stateful (persistent-session) browser — opt-in, for specialist
             # exploiters (e.g. XSS victim-bot flows). Off by default so the

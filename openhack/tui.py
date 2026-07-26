@@ -93,6 +93,7 @@ OH_ORANGE    = "#E99B2A"  # warning
 OH_GREEN     = "#00B97E"  # success == the signal green
 OH_CYAN      = "#5BB39E"  # soft teal (info, kept in the green family)
 OH_YELLOW    = "#DEBA50"
+OH_USER_BG   = "#1A1D1F"  # subtle grey band behind the user's own messages
 
 
 # ── Brand ─────────────────────────────────────────────────────────
@@ -592,7 +593,8 @@ class ScanState:
                 line: list[tuple[str, str]] = [
                     ("class:trace.time", ts),
                     ("class:trace.user.bar", " ▌ "),
-                    ("class:trace.user", content_str),
+                    # Trailing pad so the grey band reads as a band, not tight text.
+                    ("class:trace.user", content_str + "  "),
                 ]
                 self._append_trace(agent, line)
             return
@@ -1815,8 +1817,10 @@ class OpenHackApp:
             "trace.tool": f"bold {OH_TEXT}",
             "trace.dim": OH_MUTED,
             "trace.step": f"bold {OH_PRIMARY}",
-            "trace.user": OH_MUTED,
-            "trace.user.bar": f"bold {OH_MUTED}",
+            # User messages get a grey band so they're instantly distinguishable
+            # from the agent's output in a long transcript.
+            "trace.user": f"bg:{OH_USER_BG} {OH_TEXT}",
+            "trace.user.bar": f"bg:{OH_USER_BG} bold {OH_PRIMARY}",
             "trace.agent.bar": f"bold {OH_PRIMARY}",
             "trace.stream": OH_TEXT,
             "trace.tool.name": OH_CYAN,
@@ -1953,10 +1957,19 @@ class OpenHackApp:
         return "Ask anything · /scan to scan · !cmd to run a shell command"
 
     def _model_line(self) -> list[tuple[str, str]]:
-        """The '<agent> · <model> <provider>' line under the input."""
+        """The '<cwd> · <model> <provider>' line under the input.
+
+        The cwd is read live (not the scan's frozen target) so /cd is reflected
+        immediately — and it lives here, at the bottom, because the TUI has no
+        top chrome.
+        """
+        cwd = _abbrev_home(os.getcwd())
+        if len(cwd) > 44:  # keep the line readable — show the tail that matters
+            parts = cwd.split(os.sep)
+            cwd = "…" + os.sep + os.sep.join(parts[-2:]) if len(parts) > 2 else cwd[-44:]
         return [
             ("class:input.box", "  "),
-            ("class:input.model.agent", "Scan"),
+            ("class:input.model.agent", cwd),
             ("class:input.model.sep", " · "),
             ("class:input.model.name", self.model or "grok-4.5"),
             ("class:input.model.provider", f"  {self.provider}"),
@@ -2124,72 +2137,9 @@ class OpenHackApp:
         ], style="class:body")
 
     def _build_scan_container(self) -> HSplit:
-        # ── Header bar ────────────────────────────────────────────
-        def header_text():
-            target = ""
-            elapsed = ""
-            cost = 0.0
-            label = ""
-            if self.scan is not None:
-                target = self.scan.target or ""
-                elapsed = self.scan.elapsed_str()
-                cost = self.scan.cost
-                if self.scan.end_time is not None and self.mode != "viewing":
-                    label = "complete"
-                elif self.session is not None and self.session.paused:
-                    label = "⏸ paused"
-            if self.mode == "viewing":
-                target = self.viewing_target or target
-                label = "viewing"
-            short = self._short_target(target) if target else ""
-            # Clean top bar — the elapsed/cost/account now live in the sidebar.
-            out: list[tuple[str, str]] = [
-                ("class:header.brand", "⏚ "),
-                ("class:header.brandname", "OpenHack"),
-            ]
-            if short:
-                out.extend([
-                    ("class:header.sep", "  ·  "),
-                    ("class:header.target", short),
-                ])
-            if label:
-                out.extend([
-                    ("class:header.sep", "  ·  "),
-                    ("class:header.meta", label),
-                ])
-            return out
-
-        def account_text():
-            # Mirror the landing-page footer: show "Name · Org" on the right
-            # edge of the scan header so users always see who they're scanning
-            # as. Falls back through full name → first name → email → blank.
-            cfg = load_user_config()
-            first = cfg.get("openhack_user_first_name") or ""
-            last = cfg.get("openhack_user_last_name") or ""
-            email = cfg.get("openhack_user_email") or self.user_email or ""
-            org = cfg.get("openhack_org_name") or self.org_name or ""
-            display_name = " ".join(p for p in (first, last) if p).strip() or email
-            parts: list[tuple[str, str]] = []
-            if display_name:
-                parts.append(("class:header.meta", display_name))
-            if org:
-                if parts:
-                    parts.append(("class:header.sep", "  ·  "))
-                parts.append(("class:header.meta", org))
-            if parts:
-                # Trailing pad keeps the text off the right edge.
-                parts.append(("", "  "))
-            return parts
-
-        header = VSplit([
-            Window(FormattedTextControl(header_text), height=1),
-            Window(
-                FormattedTextControl(account_text),
-                height=1,
-                align=WindowAlign.RIGHT,
-            ),
-        ], height=1)
-        rule = Window(FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1)
+        # No header bar: the TUI deliberately has no top chrome. Target/cwd,
+        # model, run state, findings + cost and shortcuts all live at the bottom
+        # (see _model_line, spinner_frags, usage_frags, keybar).
 
         # ── Tab bar ───────────────────────────────────────────────
         def tab_bar():
@@ -2787,6 +2737,16 @@ class OpenHackApp:
 
         def usage_frags():
             parts: list[tuple[str, str]] = []
+            # Run state used to sit in the (now removed) top bar.
+            label = ""
+            if self.mode == "viewing":
+                label = "viewing"
+            elif self.session is not None and self.session.paused:
+                label = "⏸ paused"
+            elif self.scan is not None and self.scan.end_time is not None:
+                label = "complete"
+            if label:
+                parts.append(("class:header.meta", f"{label}  ·  "))
             if self.scan is not None:
                 n = len(self._current_findings())
                 parts.append(("class:status.usage", f"{n} findings  ·  ${self.scan.cost:.2f}"))
@@ -2829,8 +2789,8 @@ class OpenHackApp:
         tabs_visible = Condition(lambda: not self.is_agent_session)
         return HSplit([
             Window(height=1, style="class:body"),  # top padding
-            header,
-            Window(height=1, style="class:body"),
+            # No top chrome: brand/target/state all live at the bottom now, so
+            # the transcript starts at the top of the screen (Claude-Code style).
             ConditionalContainer(tab_bar_window, filter=tabs_visible),
             main,
             Window(height=1, style="class:body"),

@@ -88,6 +88,16 @@ everything you've found. The specialist has the right playbook and tools, shares
 your session, and will finish the exploit and capture the flag; use its returned \
 flag/summary. Don't dispatch trivial cases you can finish yourself in a step or two.
 
+## Researching what you don't know
+
+When a task turns on public knowledge you don't have — a named CVE or exploit \
+(e.g. "wp2shell"), a vendor advisory, a public PoC, a library's known bugs, \
+default credentials, an unfamiliar product — **use `web_search` first**, then \
+`web_fetch` the promising URLs to read them in full. Don't guess at URLs, and \
+don't scrape with `curl | sed/grep/python -c` — `web_fetch` already returns \
+clean text. Only if a page comes back empty (JS-rendered) fall back to \
+`browser_fetch`. Cite what you learned by URL when it drives your exploit.
+
 ## Long-running / background processes
 
 For anything that shouldn't block — a listener, an HTTP server you'll curl, a \
@@ -159,6 +169,8 @@ _PLAN_ALLOWED_TOOLS = {
     "sca_scan", "secret_scan", "which",
     # Passive network recon is fine while planning; active scans/attacks are not.
     "subdomains", "dns_lookup",
+    # Research is read-only — planning benefits most from looking things up.
+    "web_search", "web_fetch",
     # Reading (not writing) findings is safe in plan mode.
     "list_findings",
 }
