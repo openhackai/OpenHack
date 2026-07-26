@@ -4923,6 +4923,21 @@ def _configure_logging() -> None:
         root.setLevel(logging.INFO)
 
 
+def _resume_hint(app, scans_dir: Optional[Path] = None) -> Optional[str]:
+    """Claude-style 'resume this session' line for the current session, or None
+    if there's nothing resumable (no session, or its report was never saved)."""
+    if app is None:
+        return None
+    sess = getattr(app, "session", None) or getattr(app, "last_session", None)
+    sid = getattr(sess, "id", None)
+    if not sid:
+        return None
+    scans_dir = scans_dir or (Path.home() / ".openhack" / "scans")
+    if not (scans_dir / f"{sid}.json").exists():
+        return None
+    return f"  Resume this session:  openhack --resume {sid}"
+
+
 def main():
     app = None
 
@@ -4957,6 +4972,12 @@ def main():
         pass
     finally:
         _restore_terminal()
+
+    # Printed after the TUI has torn down (erase_when_done + terminal restored),
+    # so it lands in normal scrollback like Claude Code's resume hint.
+    hint = _resume_hint(app)
+    if hint:
+        print("\n" + hint + "\n")
 
 
 # ── Back-compat aliases for existing imports ──────────────────────
