@@ -174,10 +174,8 @@ def _cmd_sessions():
 
 
 def _cmd_resume():
-    """Resume a previous scan session."""
-    import json
+    """Reopen a saved session in the TUI — transcript restored, ready to continue."""
     from pathlib import Path
-    from openhack.agents.checkpoint import CheckpointManager
 
     session_id = sys.argv[2] if len(sys.argv) > 2 else None
     if not session_id:
@@ -187,52 +185,18 @@ def _cmd_resume():
     scans_dir = Path.home() / ".openhack" / "scans"
     report_path = scans_dir / f"{session_id}.json"
     if not report_path.exists():
-        matches = list(scans_dir.glob(f"{session_id}*.json"))
+        matches = sorted(scans_dir.glob(f"{session_id}*.json"))
         if matches:
             report_path = matches[0]
 
     if not report_path.exists():
         print(f"Session {session_id} not found in ~/.openhack/scans/")
+        print("List saved sessions with: openhack --sessions")
         return
 
-    try:
-        report = json.loads(report_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        print(f"Could not read session report: {report_path}")
-        return
-
-    target_dir = report.get("target_dir")
-    if not target_dir or not Path(target_dir).is_dir():
-        print(f"Target directory no longer exists: {target_dir}")
-        return
-
-    status = report.get("status", "")
-    if status == "completed":
-        findings = report.get("findings", [])
-        print(f"Session {session_id} already completed ({len(findings)} findings).")
-        return
-
-    mgr = CheckpointManager(session_id)
-    latest = mgr.get_latest_step()
-    if latest:
-        print(f"Resuming session {session_id} from checkpoint: {latest}")
-    else:
-        print(f"Resuming session {session_id} (no checkpoint — starting fresh)")
-
-    from openhack.config import settings
-    if not settings.openhack_api_key:
-        print("Error: not logged in.")
-        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
-        return
-
-    import asyncio
-    from openhack.headless_scan import run_headless_scan
-    try:
-        asyncio.run(run_headless_scan(target_dir, resume_from_checkpoint=session_id))
-    except KeyboardInterrupt:
-        print()
-    except Exception:
-        pass
+    # Launch the TUI resumed on this session (the app hydrates the transcript
+    # and, for agent sessions, rebuilds a continuable agent).
+    _launch_tui(resume_session_id=report_path.stem)
 
 
 def _cmd_classify():
@@ -370,8 +334,9 @@ COMMANDS = {
 }
 
 
-def _launch_tui(target=None):
-    """Launch the interactive TUI, optionally targeting a directory.
+def _launch_tui(target=None, resume_session_id=None):
+    """Launch the interactive TUI, optionally targeting a directory or resuming
+    a saved session (its transcript restored, ready for a follow-up).
 
     Everything in the TUI reads os.getcwd(), so pointing it at a path is just a
     chdir before startup (the same thing the in-app /cd command does).
@@ -396,7 +361,7 @@ def _launch_tui(target=None):
                 return
 
         from openhack.tui import main as tui_main
-        tui_main()
+        tui_main(resume_session_id=resume_session_id)
     except KeyboardInterrupt:
         print()
 

@@ -1191,7 +1191,8 @@ def _summarize_tool_output(out) -> str:
 class OpenHackApp:
     """Full-screen prompt_toolkit application driving the OpenHack TUI."""
 
-    def __init__(self) -> None:
+    def __init__(self, resume_session_id: Optional[str] = None) -> None:
+        self._resume_session_id = resume_session_id
         cfg = load_user_config()
         self.provider = resolve_provider(cfg.get("provider", settings.llm_provider))
         self.model = cfg.get("model") or PROVIDER_DEFAULTS.get(self.provider, settings.openhack_model_id)
@@ -1321,6 +1322,14 @@ class OpenHackApp:
             # renders faithfully instead of being quantized to 256.
             color_depth=ColorDepth.DEPTH_24_BIT,
         )
+
+        # Resume a saved session on startup (openhack --resume <id>): hydrate the
+        # transcript and, for agent sessions, rebuild a continuable agent.
+        if self._resume_session_id:
+            try:
+                self._resume_session(self._resume_session_id)
+            except Exception as exc:
+                self.last_status_line = f"could not resume session: {exc}"
 
     # ── Keybindings ───────────────────────────────────────────────
 
@@ -3596,16 +3605,12 @@ class OpenHackApp:
         if self.sessions_selected >= len(self.sessions_index):
             self.sessions_selected = max(0, len(self.sessions_index) - 1)
 
-    def _load_selected_session(self) -> None:
-        if not self.sessions_index:
-            return
-        row = self.sessions_index[self.sessions_selected]
-        data = row.get("data") or {}
-        findings_raw = data.get("findings", []) or []
+    @staticmethod
+    def _findings_from_report(data: dict) -> list[Finding]:
+        """Parse the findings array from a saved report (camelCase or snake_case)."""
         loaded: list[Finding] = []
-        for fd in findings_raw:
+        for fd in (data.get("findings") or []):
             try:
-                # JSON uses camelCase keys (via Finding.to_dict). Accept either.
                 loaded.append(Finding(
                     category=fd.get("category", "") or "",
                     severity=(fd.get("severity") or "info"),
@@ -3622,6 +3627,14 @@ class OpenHackApp:
                 ))
             except Exception:
                 continue
+        return loaded
+
+    def _load_selected_session(self) -> None:
+        if not self.sessions_index:
+            return
+        row = self.sessions_index[self.sessions_selected]
+        data = row.get("data") or {}
+        loaded = self._findings_from_report(data)
         self.last_findings = loaded
         # Build a placeholder scan with a frozen clock. start_time / end_time
         # must share the same time base — we anchor on the first trace
@@ -3672,6 +3685,157 @@ class OpenHackApp:
             f"loaded {row.get('scan_id', '')[:8]} · "
             f"{len(loaded)} findings · {row.get('meta', '')}"
         )
+
+    # ── Resume a saved session (openhack --resume <id>) ───────────
+
+    def _resume_session(self, sid: str) -> None:
+        """Load a saved session on startup: hydrate the transcript, and for an
+        agent session rebuild a continuable agent so a follow-up picks up where
+        it left off. Scan sessions open in the findings view."""
+        report = Path.home() / ".openhack" / "scans" / f"{sid}.json"
+        if not report.exists():
+            matches = sorted(report.parent.glob(f"{sid}*.json"))
+            if not matches:
+                self.last_status_line = f"session {sid[:8]} not found"
+                return
+            report = matches[0]
+        data = json.loads(report.read_text())
+        sid = report.stem
+
+        target = data.get("target_dir") or os.getcwd()
+        if os.path.isdir(target):
+            try:
+                os.chdir(target)  # so continued tools run in the session's dir
+            except OSError:
+                pass
+
+        # Hydrate the transcript (ScanState) from the saved trace.
+        findings = self._findings_from_report(data)
+        scan = ScanState(target=target)
+        scan.cost = float((data.get("cost") or {}).get("total_cost") or 0.0)
+        duration = float(data.get("duration_seconds") or 0)
+        first_ts: Optional[float] = None
+        for ed in (data.get("trace") or []):
+            try:
+                entry = TraceEntry(
+                    timestamp=float(ed.get("timestamp") or 0),
+                    agent=ed.get("agent", "") or "",
+                    event_type=ed.get("event_type", "") or "",
+                    content=ed.get("content"),
+                    tool_name=ed.get("tool_name"),
+                    tool_input=ed.get("tool_input"),
+                    tool_output=ed.get("tool_output"),
+                )
+                if first_ts is None and entry.timestamp > 0:
+                    first_ts = entry.timestamp
+                    scan.start_time = first_ts
+                scan.update_from_trace(entry)
+            except Exception:
+                continue
+        scan.findings = list(findings)
+        scan.end_time = (first_ts + duration) if first_ts is not None else duration
+        if first_ts is None:
+            scan.start_time = 0
+        self.scan = scan
+        self.last_findings = findings
+
+        if data.get("kind") == "agent":
+            self._resume_agent(data, target, scan)
+        else:
+            self.viewing_target = target
+            self.mode = "viewing"
+            self.active_tab = "findings"
+            self.last_status_line = f"resumed {sid[:8]} · {len(findings)} findings (viewing)"
+
+    def _resume_agent(self, data: dict, target: str, scan: "ScanState") -> None:
+        """Rebuild a continuable InteractiveAgent from a saved agent session."""
+        reload_settings()
+        from openhack.agents.interactive import InteractiveAgent
+
+        session = Session(target_dir=target, on_trace=self._on_trace)
+        session.findings = list(scan.findings)
+        self.session = session
+        # Bubble any new report_finding calls into the ScanState (as _run_agent does).
+        _orig_add = session.add_finding
+        def _bubble(f, _orig=_orig_add):
+            _orig(f)
+            if self.scan is not None and f not in self.scan.findings:
+                self.scan.findings.append(f)
+        session.add_finding = _bubble  # type: ignore[method-assign]
+
+        tools = ToolRegistry(target_dir=Path(target), include_agent_tools=True,
+                             session=session, shells=self.shells)
+        llm = LLMClient(
+            model=self.model, temperature=0.0, max_tokens=8192,
+            provider=self.provider, prompt_cache_key=session.id,
+        )
+        agent = InteractiveAgent(llm, tools, session)
+        agent.stream_callback = self._on_agent_stream
+        # Seed the agent's message history from the saved trace so a follow-up
+        # continues with full context (not a cold start). Setting _system_prompt
+        # is what makes continue_run resume rather than fall back to run().
+        agent._system_prompt = agent.get_system_prompt({"target_dir": target})
+        agent.messages = self._messages_from_trace(data.get("trace") or [])
+        self.agent = agent
+        self.is_agent_session = True
+        self.mode = "scanning"
+        self.active_tab = "trace"
+        self.last_status_line = f"resumed {session.id[:8]} · type a follow-up to continue"
+
+    @staticmethod
+    def _messages_from_trace(trace: list) -> list[Message]:
+        """Reconstruct a valid, continuable message history from saved trace
+        events. User turns and the agent's own text become user/assistant
+        messages; tool activity is folded into the assistant text as a compact
+        note (no synthetic tool_call/result pairs, so the sequence stays valid)."""
+        msgs: list[Message] = []
+        pending: list[str] = []
+
+        def flush() -> None:
+            if pending:
+                text = "\n".join(pending).strip()
+                if text:
+                    msgs.append(Message(role="assistant", content=text))
+                pending.clear()
+
+        for ed in trace:
+            et = ed.get("event_type")
+            content = ed.get("content")
+            if et == "user" and isinstance(content, str) and content.strip():
+                flush()
+                msgs.append(Message(role="user", content=content.strip()))
+            elif et == "thinking" and isinstance(content, str) and content.strip():
+                pending.append(content.strip())
+            elif et == "tool_call":
+                name = ed.get("tool_name") or "tool"
+                inp = ed.get("tool_input") or {}
+                hint = ""
+                if isinstance(inp, dict):
+                    for k in ("command", "url", "path", "payload", "pattern", "target", "name"):
+                        v = inp.get(k)
+                        if isinstance(v, str) and v:
+                            hint = v if len(v) <= 120 else v[:117] + "…"
+                            break
+                pending.append(f"[ran {name} {hint}]".rstrip())
+            elif et == "tool_result":
+                out = ed.get("tool_output")
+                summ = ""
+                if isinstance(out, dict):
+                    if "error" in out:
+                        summ = f"error: {str(out['error'])[:120]}"
+                    elif "exit_code" in out:
+                        summ = f"exit {out['exit_code']}"
+                    else:
+                        summ = str(out)[:160]
+                elif out:
+                    summ = str(out)[:160]
+                if summ:
+                    pending.append(f"  → {summ}")
+        flush()
+        # Start on a user turn so the history is well-formed.
+        while msgs and msgs[0].role != "user":
+            msgs.pop(0)
+        return msgs
 
     def _cmd_cost(self) -> None:
         sess = self.last_session or self.session
@@ -4938,7 +5102,7 @@ def _resume_hint(app, scans_dir: Optional[Path] = None) -> Optional[str]:
     return f"  Resume this session:  openhack --resume {sid}"
 
 
-def main():
+def main(resume_session_id: Optional[str] = None):
     app = None
 
     def _restore_terminal() -> None:
@@ -4961,7 +5125,7 @@ def main():
     signal.signal(signal.SIGTERM, _on_fatal_signal)
     _configure_logging()
 
-    app = OpenHackApp()
+    app = OpenHackApp(resume_session_id=resume_session_id)
     if getattr(app, "kitty_active", False):
         from openhack import kitty_keys
 
