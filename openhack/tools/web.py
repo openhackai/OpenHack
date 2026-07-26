@@ -149,6 +149,8 @@ class WebTools:
             return forced
         if os.environ.get("TAVILY_API_KEY"):
             return "tavily"
+        if os.environ.get("PERPLEXITY_API_KEY"):
+            return "perplexity"
         if os.environ.get("EXA_API_KEY"):
             return "exa"
         if os.environ.get("BRAVE_API_KEY"):
@@ -164,6 +166,8 @@ class WebTools:
         try:
             if provider == "tavily":
                 results = self._search_tavily(query, n)
+            elif provider == "perplexity":
+                results = self._search_perplexity(query, n)
             elif provider == "exa":
                 results = self._search_exa(query, n)
             elif provider == "brave":
@@ -204,6 +208,27 @@ class WebTools:
                 "title": (it.get("title") or "").strip(),
                 "url": it.get("url") or "",
                 "snippet": (it.get("content") or "").strip()[:500],
+            }
+            for it in (r.json().get("results") or [])[:n]
+        ]
+
+    def _search_perplexity(self, query: str, n: int) -> list[dict]:
+        """Perplexity's raw Search API (POST /search) — ranked results with
+        extracted page content. Note this is NOT the answer/chat endpoint: no
+        model sits in front of the results, so nothing summarizes or filters
+        them. `search_context_size: high` maximizes the extracted snippet."""
+        r = self._post(
+            "https://api.perplexity.ai/search",
+            {"query": query, "max_results": n, "search_context_size": "high"},
+            headers={"Authorization": f"Bearer {os.environ['PERPLEXITY_API_KEY']}"},
+        )
+        r.raise_for_status()
+        return [
+            {
+                "title": (it.get("title") or "").strip(),
+                "url": it.get("url") or "",
+                "snippet": (it.get("snippet") or "").strip()[:500],
+                **({"date": it["date"]} if it.get("date") else {}),
             }
             for it in (r.json().get("results") or [])[:n]
         ]
