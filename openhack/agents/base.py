@@ -322,16 +322,35 @@ class BaseAgent(ABC):
                     }
                 else:
                     made_new_call = True
-                    if self.tools.is_async_tool(tool_call.name):
-                        result = await self.tools.execute_tool_async(tool_call.name, tool_call.arguments)
-                    else:
-                        # Run sync tools in a worker thread so a long-running tool
-                        # (nmap, nuclei, a slow shell command) doesn't block the
-                        # event loop — keeps the TUI responsive and spinner animating.
-                        import asyncio as _asyncio
-                        result = await _asyncio.to_thread(
-                            self.tools.execute_tool, tool_call.name, tool_call.arguments
-                        )
+                    # A tool raising must NOT kill the whole turn — turn it into an
+                    # error result the model sees and can recover from (the most
+                    # common trigger is malformed/truncated tool-call arguments,
+                    # e.g. a huge `command` that overran the token limit, so a
+                    # required arg arrives missing). CancelledError is a
+                    # BaseException, so `except Exception` lets ESC-interrupt through.
+                    try:
+                        if self.tools.is_async_tool(tool_call.name):
+                            result = await self.tools.execute_tool_async(tool_call.name, tool_call.arguments)
+                        else:
+                            # Run sync tools in a worker thread so a long-running tool
+                            # (nmap, nuclei, a slow shell command) doesn't block the
+                            # event loop — keeps the TUI responsive and spinner animating.
+                            import asyncio as _asyncio
+                            result = await _asyncio.to_thread(
+                                self.tools.execute_tool, tool_call.name, tool_call.arguments
+                            )
+                    except Exception as exc:
+                        logger.warning(f"[{self.name}] Tool {tool_call.name} raised: {exc}", exc_info=True)
+                        result = {
+                            "error": f"{tool_call.name} failed: {exc}",
+                            "note": (
+                                "The tool call errored — often malformed or truncated "
+                                "arguments (e.g. a value so large it exceeded the token "
+                                "limit and cut off a required field). Retry with valid, "
+                                "smaller arguments, or a different approach (e.g. write a "
+                                "large file in several append steps)."
+                            ),
+                        }
                     # Record this genuine attempt into the durable ledger + cache
                     # (survives compaction, so the agent never forgets it tried it).
                     summary = self._result_summary(result)
