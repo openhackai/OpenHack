@@ -121,6 +121,51 @@ def test_web_search_duckduckgo_parses_and_unwraps_redirect(monkeypatch):
     assert out["results"][0]["title"] == "wp2shell writeup"
 
 
+def test_ddg_throttle_is_reported_not_silently_empty(monkeypatch):
+    # A throttled DDG answers 200 with an empty page — indistinguishable from
+    # "no such thing exists" unless we look. The agent must never read a rate
+    # limit as an absence of coverage.
+    for k in _KEYS:
+        monkeypatch.delenv(k, raising=False)
+    w = WebTools()
+    monkeypatch.setattr(w, "_get", lambda *a, **k: _Resp("<html><body>unusual traffic</body></html>"))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    out = w.web_search("anything")
+    assert out["error"] == "search_throttled"
+    assert "not an empty result set" in out["note"]
+
+
+def test_looks_throttled_discriminates():
+    assert WebTools._looks_throttled("") is True
+    assert WebTools._looks_throttled("<html>captcha challenge</html>") is True
+    # A page that actually carries results is not a throttle.
+    assert WebTools._looks_throttled('<a class="result__a" href="x">t</a>') is False
+
+
+def test_search_results_carry_page_content_when_backend_provides_it(monkeypatch):
+    # The whole point of a paid backend: it returns the page body, which lets
+    # the agent read sources that block direct fetching.
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    w = WebTools()
+    body = "Full advisory text. " * 500   # ~10k chars: exceeds the content cap
+    captured = {}
+
+    def _post(url, payload, headers=None, **kw):
+        captured.update(payload)
+        return _Resp(payload={"results": [{
+            "title": "adv", "url": "https://x/", "content": "teaser", "raw_content": body,
+        }]})
+
+    monkeypatch.setattr(w, "_post", _post)
+    out = w.web_search("q")
+    assert captured["include_raw_content"] is True   # we ask for the body
+    hit = out["results"][0]
+    assert hit["snippet"] == "teaser"
+    assert "Full advisory text." in hit["content"]   # and keep it
+    assert len(hit["content"]) > 500                 # not clipped to a teaser
+    assert hit["content_truncated"] is True
+
+
 def test_web_search_missing_query():
     assert WebTools().web_search("")["error"] == "missing_query"
 

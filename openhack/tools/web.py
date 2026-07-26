@@ -27,12 +27,36 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 __all__ = ["WebTools", "extract_text"]
 
+
+class _Throttled(RuntimeError):
+    """Keyless search backend rate-limited us — distinct from 'no results'."""
+
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 
-_MAX_TEXT = 20_000  # chars of extracted page text handed back to the model
+_MAX_TEXT = 20_000    # chars of extracted page text handed back to the model
+_MAX_SNIPPET = 400    # short teaser, for scanning the result list
+_MAX_CONTENT = 6_000  # extracted page body per result, when the backend gives one
+
+
+def _result(title, url, snippet="", content="", **extra) -> dict:
+    """Normalize one search hit. `content` (the extracted page body, when the
+    backend provides it) is the valuable part — it often carries pages that
+    can't be fetched directly because of bot protection."""
+    out = {
+        "title": (title or "").strip(),
+        "url": url or "",
+        "snippet": " ".join(str(snippet or "").split())[:_MAX_SNIPPET],
+    }
+    body = (content or "").strip()
+    if len(body) > len(out["snippet"]):
+        out["content"] = body[:_MAX_CONTENT]
+        if len(body) > _MAX_CONTENT:
+            out["content_truncated"] = True
+    out.update({k: v for k, v in extra.items() if v})
+    return out
 
 # Tags whose contents are never readable page text. (Not <head> — <title> lives
 # there and we want it.)
@@ -175,14 +199,28 @@ class WebTools:
             else:
                 provider = "duckduckgo"
                 results = self._search_duckduckgo(query, n)
+        except _Throttled as e:
+            # Explicit: the agent must NOT read this as "nothing exists".
+            return {
+                "error": "search_throttled",
+                "engine": provider,
+                "reason": str(e),
+                "note": (
+                    "This is a rate limit, not an empty result set — do not conclude "
+                    "the topic has no coverage. Retry once, or use web_fetch on a known "
+                    "URL. For reliable search set one of TAVILY_API_KEY / "
+                    "PERPLEXITY_API_KEY / EXA_API_KEY / BRAVE_API_KEY."
+                ),
+            }
         except Exception as e:
             return {
                 "error": "search_failed",
                 "engine": provider,
                 "reason": str(e)[:300],
                 "note": (
-                    "Search failed. Set TAVILY_API_KEY (or EXA_API_KEY / BRAVE_API_KEY) "
-                    "for a reliable backend, or fetch a known URL with web_fetch."
+                    "Search failed. Set TAVILY_API_KEY (or PERPLEXITY_API_KEY / "
+                    "EXA_API_KEY / BRAVE_API_KEY) for a reliable backend, or fetch a "
+                    "known URL with web_fetch."
                 ),
             }
         if not results:
@@ -200,17 +238,21 @@ class WebTools:
                 "query": query,
                 "max_results": n,
                 "search_depth": "advanced",
+                # Ask for the extracted page body, not just a teaser: this is
+                # what lets the agent read a Cloudflare-gated page it could
+                # never fetch directly.
+                "include_raw_content": True,
             },
         )
         r.raise_for_status()
-        return [
-            {
-                "title": (it.get("title") or "").strip(),
-                "url": it.get("url") or "",
-                "snippet": (it.get("content") or "").strip()[:500],
-            }
-            for it in (r.json().get("results") or [])[:n]
-        ]
+        out = []
+        for it in (r.json().get("results") or [])[:n]:
+            body = (it.get("raw_content") or it.get("content") or "").strip()
+            out.append(_result(
+                title=it.get("title"), url=it.get("url"),
+                snippet=(it.get("content") or body), content=body,
+            ))
+        return out
 
     def _search_perplexity(self, query: str, n: int) -> list[dict]:
         """Perplexity's raw Search API (POST /search) — ranked results with
@@ -219,33 +261,36 @@ class WebTools:
         them. `search_context_size: high` maximizes the extracted snippet."""
         r = self._post(
             "https://api.perplexity.ai/search",
-            {"query": query, "max_results": n, "search_context_size": "high"},
+            {
+                "query": query,
+                "max_results": n,
+                # Pull a real chunk of each page, not just a teaser.
+                "max_tokens_per_page": 2048,
+            },
             headers={"Authorization": f"Bearer {os.environ['PERPLEXITY_API_KEY']}"},
         )
         r.raise_for_status()
         return [
-            {
-                "title": (it.get("title") or "").strip(),
-                "url": it.get("url") or "",
-                "snippet": (it.get("snippet") or "").strip()[:500],
-                **({"date": it["date"]} if it.get("date") else {}),
-            }
+            _result(title=it.get("title"), url=it.get("url"),
+                    snippet=it.get("snippet"), content=it.get("snippet"),
+                    date=it.get("date"))
             for it in (r.json().get("results") or [])[:n]
         ]
 
     def _search_exa(self, query: str, n: int) -> list[dict]:
         r = self._post(
             "https://api.exa.ai/search",
-            {"query": query, "numResults": n, "contents": {"text": {"maxCharacters": 500}}},
+            {
+                "query": query, "numResults": n,
+                "contents": {"text": {"maxCharacters": _MAX_CONTENT}},
+            },
             headers={"x-api-key": os.environ["EXA_API_KEY"]},
         )
         r.raise_for_status()
         return [
-            {
-                "title": (it.get("title") or "").strip(),
-                "url": it.get("url") or "",
-                "snippet": (it.get("text") or it.get("snippet") or "").strip()[:500],
-            }
+            _result(title=it.get("title"), url=it.get("url"),
+                    snippet=it.get("text") or it.get("snippet"),
+                    content=it.get("text") or "")
             for it in (r.json().get("results") or [])[:n]
         ]
 
@@ -261,22 +306,57 @@ class WebTools:
         r.raise_for_status()
         web = (r.json().get("web") or {}).get("results") or []
         return [
-            {
-                "title": (it.get("title") or "").strip(),
-                "url": it.get("url") or "",
-                "snippet": re.sub(r"<[^>]+>", "", it.get("description") or "").strip()[:500],
-            }
+            _result(title=it.get("title"), url=it.get("url"),
+                    snippet=re.sub(r"<[^>]+>", "", it.get("description") or ""))
             for it in web[:n]
         ]
 
     def _search_duckduckgo(self, query: str, n: int) -> list[dict]:
-        """Keyless fallback — scrape DuckDuckGo's no-JS endpoint."""
-        r = self._get(
-            f"https://html.duckduckgo.com/html/?q={quote_plus(query)}",
-            timeout=self.SEARCH_TIMEOUT,
+        """Keyless fallback — scrape DuckDuckGo's no-JS endpoints.
+
+        DDG rate-limits scraping aggressively and answers a throttled request
+        with a 200 + an empty result page, which is indistinguishable from "no
+        such thing exists" unless we look. So: try both no-JS endpoints with a
+        short backoff, and raise _Throttled rather than silently returning
+        nothing — a wrong "no results" is worse than an explicit failure.
+        """
+        import time as _time
+
+        endpoints = (
+            "https://html.duckduckgo.com/html/?q={q}",
+            "https://lite.duckduckgo.com/lite/?q={q}",
         )
-        r.raise_for_status()
-        return self._parse_ddg(r.text, n)
+        last_markup = ""
+        for attempt in range(3):
+            url = endpoints[attempt % len(endpoints)].format(q=quote_plus(query))
+            try:
+                r = self._get(url, timeout=self.SEARCH_TIMEOUT)
+                r.raise_for_status()
+            except Exception:
+                _time.sleep(0.6 * (attempt + 1))
+                continue
+            results = self._parse_ddg(r.text, n)
+            if results:
+                return results
+            last_markup = r.text
+            _time.sleep(0.6 * (attempt + 1))
+        # Nothing parsed from any endpoint. A real empty result set is a short,
+        # well-formed page; a throttle/challenge is not.
+        if self._looks_throttled(last_markup):
+            raise _Throttled(
+                "DuckDuckGo throttled the request (keyless scraping is rate-limited)."
+            )
+        return []
+
+    @staticmethod
+    def _looks_throttled(markup: str) -> bool:
+        low = (markup or "").lower()
+        if not low:
+            return True
+        return any(s in low for s in (
+            "anomaly", "unusual traffic", "captcha", "challenge",
+            "blocked", "too many requests", "rate limit",
+        )) or "result__a" not in low
 
     @staticmethod
     def _parse_ddg(markup: str, n: int) -> list[dict]:
