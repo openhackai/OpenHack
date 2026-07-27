@@ -2853,11 +2853,22 @@ class OpenHackApp:
                 label = "⏸ paused"
             elif self.scan is not None and self.scan.end_time is not None:
                 label = "complete"
-            if label:
-                parts.append(("class:header.meta", f"{label}  ·  "))
-            if self.scan is not None:
+            # Findings + cost only for a scan. ScanState.cost is fed by
+            # step_complete / swarm_complete, which only the scan pipeline
+            # emits — in an agent conversation it can never be anything but
+            # $0.00 with 0 findings, so showing it there is just a lie. The
+            # real per-turn cost lands in the status line when a turn ends,
+            # and /cost reports the session total.
+            usage = ""
+            if self.scan is not None and not self.is_agent_session:
                 n = len(self._current_findings())
-                parts.append(("class:status.usage", f"{n} findings  ·  ${self.scan.cost:.2f}"))
+                usage = f"{n} findings  ·  ${self.scan.cost:.2f}"
+            if label:
+                parts.append(("class:header.meta", label))
+            if label and usage:
+                parts.append(("class:header.meta", "  ·  "))
+            if usage:
+                parts.append(("class:status.usage", usage))
             parts.append(("", "  "))
             return parts
 
