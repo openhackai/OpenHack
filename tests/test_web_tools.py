@@ -326,3 +326,33 @@ def test_registry_dispatches_web_fetch(tmp_path, monkeypatch):
 def test_plan_mode_allows_research_tools():
     from openhack.agents.interactive import _PLAN_ALLOWED_TOOLS
     assert {"web_search", "web_fetch"} <= _PLAN_ALLOWED_TOOLS
+
+
+# ------------------------------------------------------- prompt awareness
+# Having the tool isn't enough — the model has to know it exists and when to
+# reach for it. These pin the invariant: any agent that CAN search must be told
+# so in its system prompt.
+
+def test_interactive_prompt_tells_the_agent_it_can_search():
+    from openhack.agents.interactive import SYSTEM_PROMPT
+    assert "web_search" in SYSTEM_PROMPT and "web_fetch" in SYSTEM_PROMPT
+
+
+def test_plan_prompt_tells_the_agent_it_can_search():
+    # Plan mode is allow-listed for the research tools, so its prompt must
+    # mention them too — otherwise the capability is invisible in planning.
+    from openhack.agents.interactive import PLAN_SYSTEM_PROMPT
+    assert "web_search" in PLAN_SYSTEM_PROMPT and "web_fetch" in PLAN_SYSTEM_PROMPT
+
+
+def test_specialists_inherit_the_research_guidance(tmp_path):
+    # Specialists set no ALLOWED_TOOLS, so they get the web tools; they also
+    # build on the InteractiveAgent prompt, so the guidance comes along.
+    from openhack.agents.specialists import build_specialist
+    from openhack.agents.session import Session
+
+    session = Session(target_dir=str(tmp_path))
+    agent = build_specialist("xss", tmp_path, session)
+    prompt = agent.get_system_prompt({"target_dir": str(tmp_path)})
+    assert "web_search" in prompt
+    assert "web_search" in {t["name"] for t in agent.get_tools()}
