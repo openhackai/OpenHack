@@ -68,6 +68,51 @@ def test_scan_pipeline_rows_are_unchanged():
     assert "hunter:auth" in _text(s)[0]
 
 
+def _stream_app():
+    app = OpenHackApp.__new__(OpenHackApp)
+    app._spin_idx = 0
+    app._stream_buf = ""
+    app._stream_reasoning = ""
+    app._interrupting = False
+    app._shell_active = False
+    app.is_agent_session = True
+    return app
+
+
+def test_live_spinner_shows_in_every_streaming_state():
+    # The transcript tail must stay visibly alive throughout a turn. It used to
+    # drop the spinner the moment content began streaming (verb → "responding"),
+    # so the chat log looked stalled while only the bottom bar kept moving.
+    app = _stream_app()
+    states = {
+        "waiting": lambda: None,
+        "thinking": lambda: setattr(app, "_stream_reasoning", "considering the route"),
+        "responding": lambda: (setattr(app, "_stream_reasoning", ""),
+                               setattr(app, "_stream_buf", "here is the chain")),
+    }
+    for label, setup in states.items():
+        setup()
+        styles = [s for s, _ in app._stream_line()]
+        assert "class:spinner" in styles, f"no live spinner while {label}"
+
+
+def test_streaming_tail_still_shows_the_answer_and_caret():
+    app = _stream_app()
+    app._stream_buf = "here is the exploit chain"
+    frags = app._stream_line()
+    rendered = "".join(t for _, t in frags)
+    assert "here is the exploit chain" in rendered
+    assert rendered.endswith("▌")           # live cursor preserved
+
+
+def test_spinner_frame_advances_with_spin_idx():
+    app = _stream_app()
+    app._stream_buf = "streaming"
+    first = "".join(t for _, t in app._stream_line())
+    app._spin_idx += 1
+    assert "".join(t for _, t in app._stream_line()) != first
+
+
 def test_web_search_row_shows_the_query_and_result_count():
     # A tool row that doesn't say WHAT it searched for is useless to the
     # operator watching the run.

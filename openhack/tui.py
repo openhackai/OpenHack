@@ -4791,8 +4791,13 @@ class OpenHackApp:
             text = self._stream_buf
             if len(text) > 4000:
                 text = "…" + text[-4000:]
+            # Lead with the spinner, not a static bar: this branch is exactly
+            # when the verb flips to "responding", and a still ▌ here made the
+            # transcript look stalled while only the bottom bar kept moving.
+            # The solid ▌ arrives when the message is committed, so a moving
+            # spinner reads as "in progress", a bar as "done".
             return [
-                ("class:trace.agent.bar", " ▌ "),
+                ("class:spinner", f" {frame} "),
                 ("class:trace.stream", text),
                 ("class:trace.agent.bar", "▌"),  # caret marking the live cursor
             ]
