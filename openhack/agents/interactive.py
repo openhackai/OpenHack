@@ -110,6 +110,16 @@ exists — never conclude a topic has no public coverage from it.
 
 Cite what you learned by URL when it drives your exploit.
 
+## Writing files
+
+To create a script, exploit PoC, payload or config, use **`write_file`** — \
+never a shell heredoc (`cat > f << 'EOF' … EOF`). A heredoc has to carry the \
+entire file body inside the command string, so anything sizeable overruns the \
+token limit, arrives truncated, and fails. If a file is long, write the first \
+chunk then call `write_file` again with `append=true` for each following chunk. \
+Use `mode="755"` when it needs to be executable, then run it with \
+`run_command`.
+
 ## Long-running / background processes
 
 For anything that shouldn't block — a listener, an HTTP server you'll curl, a \

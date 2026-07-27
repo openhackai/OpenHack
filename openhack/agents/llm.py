@@ -136,8 +136,23 @@ class LLMClient:
         self.total_tokens: int = 0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        # Optional UI hook: status_callback(text) reports transient client state
+        # (retry/backoff) to whatever is driving this client. Empty string means
+        # "recovered — clear the notice". The TUI wires this to its status line;
+        # headless callers leave it unset. Never print() from here — that
+        # corrupts a full-screen app's display.
+        self.status_callback = None
 
         self._init_client()
+
+    def _status(self, text: str) -> None:
+        cb = self.status_callback
+        if cb is None:
+            return
+        try:
+            cb(text)
+        except Exception:
+            pass
 
     def _init_client(self):
         # Non-OpenHack provider (bring-your-own-key): resolve from the registry.
@@ -237,8 +252,15 @@ class LLMClient:
                 and ("prompt_cache_key" in detail or "prompt cache key" in detail)
             ):
                 LLMClient._cache_key_unsupported = True
-                print("    Endpoint doesn't support prompt caching — retrying without it.")
-                print("    To disable permanently: /config prompt_caching false")
+                # NEVER print here: in the TUI this writes straight into the
+                # full-screen buffer, tearing the layout and leaving text the
+                # renderer doesn't know about (it survives until that region
+                # happens to be redrawn). Log it, and tell the UI via the hook.
+                logger.warning(
+                    "Endpoint doesn't support prompt caching — retrying without it. "
+                    "To disable permanently: /config prompt_caching false"
+                )
+                self._status("endpoint rejected prompt caching — retrying without it")
                 return await self._chat(messages, tools, system, tool_choice=tool_choice, on_chunk=on_chunk)
             raise
 
@@ -284,10 +306,24 @@ class LLMClient:
             try:
                 if attempt > 0:
                     wait_time = 5 * (2 ** (attempt - 1))
-                    print(f"    Retrying API call (attempt {attempt + 1}/{max_retries + 1}) after {wait_time}s...")
+                    reason = type(last_exception).__name__ if last_exception else "error"
+                    logger.warning(
+                        f"Retrying API call (attempt {attempt + 1}/{max_retries + 1}) "
+                        f"after {wait_time}s — {reason}"
+                    )
+                    # Surface the wait in the UI instead of printing over it, so a
+                    # long backoff reads as "retrying", not as a frozen app.
+                    self._status(
+                        f"upstream {reason} — retrying in {wait_time}s "
+                        f"({attempt + 1}/{max_retries + 1})"
+                    )
                     await asyncio.sleep(wait_time)
 
                 stream = await self.client.chat.completions.create(**kwargs)
+                # Recovered: clear the retry notice so it can't linger after the
+                # call succeeds.
+                if attempt > 0:
+                    self._status("")
 
                 content_parts: list[str] = []
                 reasoning_parts: list[str] = []

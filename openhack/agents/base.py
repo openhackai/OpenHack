@@ -342,16 +342,29 @@ class BaseAgent(ABC):
                             )
                     except Exception as exc:
                         logger.warning(f"[{self.name}] Tool {tool_call.name} raised: {exc}", exc_info=True)
-                        result = {
-                            "error": f"{tool_call.name} failed: {exc}",
-                            "note": (
-                                "The tool call errored — often malformed or truncated "
-                                "arguments (e.g. a value so large it exceeded the token "
-                                "limit and cut off a required field). Retry with valid, "
-                                "smaller arguments, or a different approach (e.g. write a "
-                                "large file in several append steps)."
-                            ),
-                        }
+                        note = (
+                            "The tool call errored — often malformed or truncated "
+                            "arguments (e.g. a value so large it exceeded the token "
+                            "limit and cut off a required field). Retry with valid, "
+                            "smaller arguments, or a different approach."
+                        )
+                        # The classic version of this: writing a file with a
+                        # `cat > f << 'EOF'` heredoc. The whole file body has to
+                        # fit inside the tool-call JSON, so anything sizeable
+                        # truncates and lands here — and the model tends to
+                        # retry the identical doomed command. Name the fix.
+                        cmd = str((tool_call.arguments or {}).get("command", ""))
+                        if tool_call.name == "run_command" and (
+                            not tool_call.arguments or "<<" in cmd or ">" in cmd
+                        ):
+                            note = (
+                                "This looks like an attempt to write a file through the "
+                                "shell. Do NOT retry the heredoc — the file body has to "
+                                "fit inside the tool-call arguments, so it will truncate "
+                                "again. Use the `write_file` tool instead, and for a long "
+                                "file write it in chunks with append=true."
+                            )
+                        result = {"error": f"{tool_call.name} failed: {exc}", "note": note}
                     # Record this genuine attempt into the durable ledger + cache
                     # (survives compaction, so the agent never forgets it tried it).
                     summary = self._result_summary(result)

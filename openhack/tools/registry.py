@@ -16,6 +16,7 @@ from .recon import ReconTools
 from .oob import OOBTools
 from .browser import BrowserTools
 from .web import WebTools
+from .filewrite import FileWriteTools
 
 
 class ToolRegistry:
@@ -46,10 +47,12 @@ class ToolRegistry:
             self.oob_tools = OOBTools()
             self.browser_tools = BrowserTools(evidence_dir=target_dir / ".openhack-evidence")
             self.web_tools = WebTools()
+            # Writing is agent-only: the scan pipeline stays strictly read-only.
+            self.filewrite_tools = FileWriteTools(jail_dir=target_dir)
             self._tool_sources += [
                 self.shell_tools, self.security_tools, self.mailbox_tools,
                 self.recon_tools, self.oob_tools, self.browser_tools,
-                self.web_tools,
+                self.web_tools, self.filewrite_tools,
             ]
             # Stateful (persistent-session) browser — opt-in, for specialist
             # exploiters (e.g. XSS victim-bot flows). Off by default so the

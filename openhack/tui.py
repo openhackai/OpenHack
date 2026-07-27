@@ -1271,6 +1271,8 @@ class OpenHackApp:
         # the agent's run_in_background tool).
         self._shell_proc = None
         self._shell_active = False
+        # Transient upstream-retry notice from LLMClient (see _on_llm_status).
+        self._llm_status = ""
         self.shells = ShellManager()
         self.shells_selected: int = 0
         self._shells_were_running = False  # ticker edge-detect for /bashes repaint
@@ -2836,6 +2838,11 @@ class OpenHackApp:
                 ]
                 if elapsed:
                     out.append(("class:spinner.dim", f"  {elapsed}"))
+                # An upstream retry/backoff, so a long wait reads as "retrying"
+                # rather than a frozen app. Cleared as soon as the call recovers.
+                if self._llm_status:
+                    out.append(("class:spinner.dim", "   ·   "))
+                    out.append(("class:sev.medium", self._llm_status))
                 out.append(("class:spinner.dim", "   ·   "))
                 out.append(("class:status.esc", "esc"))
                 out.append(("class:status.esc.label", " interrupt"))
@@ -3867,6 +3874,7 @@ class OpenHackApp:
         )
         agent = InteractiveAgent(llm, tools, session)
         agent.stream_callback = self._on_agent_stream
+        llm.status_callback = self._on_llm_status
         # Seed the agent's message history from the saved trace so a follow-up
         # continues with full context (not a cold start). Setting _system_prompt
         # is what makes continue_run resume rather than fall back to run().
@@ -4469,6 +4477,7 @@ class OpenHackApp:
             agent_cls = PlanAgent if plan else InteractiveAgent
             agent = agent_cls(llm, tools, session)
             agent.stream_callback = self._on_agent_stream
+            llm.status_callback = self._on_llm_status
             self.agent = agent
             self.is_agent_session = True
 
@@ -4497,6 +4506,7 @@ class OpenHackApp:
             self._stream_buf = ""
             self._stream_reasoning = ""
             self._interrupting = False
+            self._llm_status = ""
             self._invalidate()
 
     # ── Shell (bang) mode ─────────────────────────────────────────
@@ -4670,6 +4680,7 @@ class OpenHackApp:
             self._stream_buf = ""
             self._stream_reasoning = ""
             self._interrupting = False
+            self._llm_status = ""
             self._invalidate()
 
     def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
@@ -4732,6 +4743,13 @@ class OpenHackApp:
             return
         self.session.resume()
         self.last_status_line = "scan resumed"
+        self._invalidate()
+
+    def _on_llm_status(self, text: str) -> None:
+        """Transient LLM-client state (upstream retry/backoff) for the spinner
+        line. An empty string means the call recovered — clear it so a retry
+        notice can't outlive the problem it described."""
+        self._llm_status = text or ""
         self._invalidate()
 
     def _processing_verb(self) -> str:
