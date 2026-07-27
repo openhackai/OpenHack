@@ -1138,6 +1138,18 @@ def _short_tool_label(tool: str, args: dict) -> str:
         return _clip(args.get("marker", ""))
     if tool == "browser_fetch":
         return _clip(args.get("url", ""))
+    if tool == "web_search":
+        return _clip(args.get("query", ""))
+    if tool == "web_fetch":
+        return _clip(args.get("url", ""))
+    if tool == "bash_output":
+        return _clip(args.get("shell_id", ""))
+    if tool == "kill_shell":
+        return _clip(args.get("shell_id", ""))
+    if tool == "dispatch_specialist":
+        return _clip(
+            f"{args.get('vuln_class', '')} {args.get('target', '')}".strip()
+        )
     if tool == "list_findings":
         return "list findings"
     # Paths are already relative to the project root (tools are rooted at
@@ -1193,6 +1205,12 @@ def _summarize_tool_output(out) -> str:
         if out.get("timed_out"):
             note = "timed out"
         return note
+    # web_fetch: report what actually came back, not nothing.
+    if "status" in out and "text" in out:
+        if out.get("blocked"):
+            return f"blocked ({out['status']})"
+        chars = len(out.get("text") or "")
+        return f"{out['status']} · {chars:,} chars" if chars else f"{out['status']} · empty"
     for key, label in (
         ("count", "results"), ("interactions", "callbacks"),
         ("vulnerable_packages", "vulnerable packages"),
@@ -1204,6 +1222,12 @@ def _summarize_tool_output(out) -> str:
         return "installed" if out["installed"] else "not installed"
     if "subdomains" in out:
         return f"{out.get('count', len(out['subdomains']))} subdomains"
+    # Generic textual status — dispatch_specialist ("exploited"), a backgrounded
+    # run_command ("running"), etc. Checked last so it can't shadow the richer
+    # summaries above (notably web_fetch, whose `status` is an HTTP code).
+    if isinstance(out.get("status"), str):
+        extra = out.get("shell_id") or ""
+        return f"{out['status']}{(' ' + extra) if extra else ''}"
     return ""
 
 

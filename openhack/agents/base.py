@@ -149,7 +149,8 @@ class BaseAgent(ABC):
     def _arg_hint(args: dict) -> str:
         if not isinstance(args, dict):
             return ""
-        for k in ("command", "url", "payload", "target", "path", "to", "marker", "pattern", "domain", "name"):
+        for k in ("command", "query", "url", "payload", "target", "path", "to",
+                  "marker", "pattern", "domain", "name", "shell_id"):
             v = args.get(k)
             if isinstance(v, str) and v:
                 return v if len(v) <= 90 else v[:87] + "…"

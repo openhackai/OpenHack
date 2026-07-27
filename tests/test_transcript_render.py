@@ -68,6 +68,58 @@ def test_scan_pipeline_rows_are_unchanged():
     assert "hunter:auth" in _text(s)[0]
 
 
+def test_web_search_row_shows_the_query_and_result_count():
+    # A tool row that doesn't say WHAT it searched for is useless to the
+    # operator watching the run.
+    s = _state()
+    _add(s, "openhack", "tool_call", "", tool_name="web_search",
+         tool_input={"query": "CVE-2026-63030 wordpress batch"})
+    _add(s, "openhack", "tool_result", "", tool_name="web_search",
+         tool_output={"engine": "openhack", "count": 4})
+    line = _text(s)[0]
+    assert "CVE-2026-63030 wordpress batch" in line
+    assert "4 results" in line
+
+
+def test_web_fetch_row_shows_url_and_outcome():
+    s = _state()
+    _add(s, "openhack", "tool_call", "", tool_name="web_fetch",
+         tool_input={"url": "https://hadrian.io/blog/wp2shell"})
+    _add(s, "openhack", "tool_result", "", tool_name="web_fetch",
+         tool_output={"status": 200, "text": "x" * 5998})
+    line = _text(s)[0]
+    assert "https://hadrian.io/blog/wp2shell" in line
+    assert "200" in line and "5,998 chars" in line
+
+
+def test_blocked_fetch_row_says_blocked():
+    s = _state()
+    _add(s, "openhack", "tool_call", "", tool_name="web_fetch",
+         tool_input={"url": "https://slcyber.io/x"})
+    _add(s, "openhack", "tool_result", "", tool_name="web_fetch",
+         tool_output={"status": 403, "text": "", "blocked": True})
+    assert "blocked (403)" in _text(s)[0]
+
+
+def test_textual_status_results_render(monkeypatch):
+    # dispatch_specialist / backgrounded run_command report a word, not a count.
+    s = _state()
+    _add(s, "openhack", "tool_call", "", tool_name="dispatch_specialist",
+         tool_input={"vuln_class": "xss", "target": "https://x/"})
+    _add(s, "openhack", "tool_result", "", tool_name="dispatch_specialist",
+         tool_output={"status": "exploited"})
+    line = _text(s)[0]
+    assert "xss" in line and "exploited" in line
+
+
+def test_agent_ledger_records_the_search_query():
+    # The agent's own anti-repetition ledger must remember WHAT it searched,
+    # otherwise it can't tell two searches apart.
+    from openhack.agents.base import BaseAgent
+    hint = BaseAgent._arg_hint({"query": "wp2shell batch api"})
+    assert hint == "wp2shell batch api"
+
+
 def _tool_row(cmd_len=200):
     return [
         ("class:trace.time", ""),
