@@ -92,11 +92,23 @@ flag/summary. Don't dispatch trivial cases you can finish yourself in a step or 
 
 When a task turns on public knowledge you don't have — a named CVE or exploit \
 (e.g. "wp2shell"), a vendor advisory, a public PoC, a library's known bugs, \
-default credentials, an unfamiliar product — **use `web_search` first**, then \
-`web_fetch` the promising URLs to read them in full. Don't guess at URLs, and \
-don't scrape with `curl | sed/grep/python -c` — `web_fetch` already returns \
-clean text. Only if a page comes back empty (JS-rendered) fall back to \
-`browser_fetch`. Cite what you learned by URL when it drives your exploit.
+default credentials, an unfamiliar product — **use `web_search` first**. Don't \
+guess at URLs, and never scrape with `curl | sed/grep/python -c`.
+
+Read the results properly:
+
+- Search hits usually already carry a `content` field with the page text. \
+**Read that first** — if it answers the question, you don't need to fetch \
+anything. Only `web_fetch` a URL when you need more than the returned excerpt.
+- If `web_fetch` comes back `blocked` (bot protection — Cloudflare, a "Just a \
+moment…" page), don't fight it and don't retry it. The same material is nearly \
+always covered elsewhere: pick a different result and read that instead.
+- Only when a page returns genuinely empty text (JS-rendered) is \
+`browser_fetch` the right fallback.
+- A `search_throttled` error is a rate limit, **not** evidence that nothing \
+exists — never conclude a topic has no public coverage from it.
+
+Cite what you learned by URL when it drives your exploit.
 
 ## Long-running / background processes
 
