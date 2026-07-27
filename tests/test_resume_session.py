@@ -89,6 +89,61 @@ def test_resume_agent_session_is_continuable(tmp_path, monkeypatch):
     assert app.scan is not None and app.scan.trace_lines
 
 
+def test_resumed_session_keeps_its_identity(tmp_path, monkeypatch):
+    # A fresh uuid would show a stranger's hash in the status line and, worse,
+    # send the next _write_report to a NEW file — forking the session instead
+    # of continuing it.
+    scans = tmp_path / ".openhack" / "scans"
+    scans.mkdir(parents=True)
+    sid = "9a2622b4-759b-4cc7-be2b-05c9be087b74"
+    (scans / f"{sid}.json").write_text(json.dumps({
+        "version": 2, "kind": "agent", "scan_id": sid, "target_dir": str(tmp_path),
+        "status": "completed", "duration_seconds": 1.0,
+        "cost": {"total_cost": 0.0567, "total_tokens": 27846,
+                 "total_input_tokens": 20000, "total_output_tokens": 7846},
+        "findings": [],
+        "trace": [{"timestamp": 1.0, "agent": "you", "event_type": "user",
+                   "content": "first question"}],
+    }))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    app = _bare_app()
+    app._resume_session(sid)
+
+    assert app.session.id == sid
+    assert sid[:8] in app.last_status_line
+    # Prior transcript is carried into the session, not just the display —
+    # _write_report serializes session.trace wholesale.
+    assert [e.content for e in app.session.trace] == ["first question"]
+    # Running totals continue rather than restarting at zero.
+    assert app.session.total_cost == 0.0567
+    assert app.session.total_tokens == 27846
+
+
+def test_continuing_a_resumed_session_preserves_history(tmp_path, monkeypatch):
+    scans = tmp_path / ".openhack" / "scans"
+    scans.mkdir(parents=True)
+    sid = "abc00000-0000-0000-0000-000000000000"
+    (scans / f"{sid}.json").write_text(json.dumps({
+        "version": 2, "kind": "agent", "scan_id": sid, "target_dir": str(tmp_path),
+        "status": "completed", "duration_seconds": 1.0, "cost": {}, "findings": [],
+        "trace": [{"timestamp": 1.0, "agent": "you", "event_type": "user",
+                   "content": "original turn"}],
+    }))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    app = _bare_app()
+    app._resume_session(sid)
+    app.scan.start_time = 0
+    app.session.add_trace(agent="you", event_type="user", content="follow-up")
+    app._write_report(app.session, str(tmp_path), status="completed")
+
+    saved = json.loads((scans / f"{sid}.json").read_text())
+    contents = [e["content"] for e in saved["trace"]]
+    assert contents == ["original turn", "follow-up"]      # history not clobbered
+    assert list(scans.glob("*.json")) == [scans / f"{sid}.json"]  # no forked file
+
+
 def test_resume_scan_session_opens_findings_view(tmp_path, monkeypatch):
     scans = tmp_path / ".openhack" / "scans"
     scans.mkdir(parents=True)

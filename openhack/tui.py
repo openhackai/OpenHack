@@ -3794,6 +3794,7 @@ class OpenHackApp:
         scan.cost = float((data.get("cost") or {}).get("total_cost") or 0.0)
         duration = float(data.get("duration_seconds") or 0)
         first_ts: Optional[float] = None
+        entries: list[TraceEntry] = []
         for ed in (data.get("trace") or []):
             try:
                 entry = TraceEntry(
@@ -3808,6 +3809,7 @@ class OpenHackApp:
                 if first_ts is None and entry.timestamp > 0:
                     first_ts = entry.timestamp
                     scan.start_time = first_ts
+                entries.append(entry)
                 scan.update_from_trace(entry)
             except Exception:
                 continue
@@ -3819,20 +3821,35 @@ class OpenHackApp:
         self.last_findings = findings
 
         if data.get("kind") == "agent":
-            self._resume_agent(data, target, scan)
+            self._resume_agent(data, target, scan, sid, entries)
         else:
             self.viewing_target = target
             self.mode = "viewing"
             self.active_tab = "findings"
             self.last_status_line = f"resumed {sid[:8]} · {len(findings)} findings (viewing)"
 
-    def _resume_agent(self, data: dict, target: str, scan: "ScanState") -> None:
+    def _resume_agent(self, data: dict, target: str, scan: "ScanState",
+                      sid: str, entries: list) -> None:
         """Rebuild a continuable InteractiveAgent from a saved agent session."""
         reload_settings()
         from openhack.agents.interactive import InteractiveAgent
 
-        session = Session(target_dir=target, on_trace=self._on_trace)
+        # Keep the session's identity. A fresh id would (a) show a stranger's
+        # hash in the status line and the exit hint, and (b) make the next
+        # _write_report land in a NEW file — forking the session instead of
+        # continuing it, leaving the original frozen.
+        session = Session(target_dir=target, scan_id=sid, on_trace=self._on_trace)
         session.findings = list(scan.findings)
+        # Carry the saved history forward: _write_report serializes
+        # session.trace wholesale, so without this the first continued turn
+        # would overwrite the file with only that turn's events, destroying the
+        # transcript we just restored.
+        session.trace = list(entries)
+        cost = data.get("cost") or {}
+        session.total_cost = float(cost.get("total_cost") or 0.0)
+        session.total_tokens = int(cost.get("total_tokens") or 0)
+        session.total_input_tokens = int(cost.get("total_input_tokens") or 0)
+        session.total_output_tokens = int(cost.get("total_output_tokens") or 0)
         self.session = session
         # Bubble any new report_finding calls into the ScanState (as _run_agent does).
         _orig_add = session.add_finding
