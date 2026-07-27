@@ -48,10 +48,20 @@ _KEYS = ("OPENHACK_SEARCH_PROVIDER", "TAVILY_API_KEY", "PERPLEXITY_API_KEY",
          "EXA_API_KEY", "BRAVE_API_KEY")
 
 
-def test_provider_prefers_keys_then_falls_back(monkeypatch):
+def _clear_keys(monkeypatch, openhack=True):
+    """Drop every search key. `openhack=False` also drops the OpenHack key, so
+    the keyless DuckDuckGo path can be exercised (conftest gives every test an
+    OpenHack key, which would otherwise select the gateway)."""
     for k in _KEYS:
         monkeypatch.delenv(k, raising=False)
-    assert WebTools._provider() == "duckduckgo"      # keyless default
+    if not openhack:
+        from openhack import config
+        monkeypatch.setattr(config.settings, "openhack_api_key", None, raising=False)
+
+
+def test_provider_prefers_keys_then_falls_back(monkeypatch):
+    _clear_keys(monkeypatch, openhack=False)
+    assert WebTools._provider() == "duckduckgo"      # nothing at all
     monkeypatch.setenv("BRAVE_API_KEY", "b")
     assert WebTools._provider() == "brave"
     monkeypatch.setenv("EXA_API_KEY", "e")
@@ -62,6 +72,59 @@ def test_provider_prefers_keys_then_falls_back(monkeypatch):
     assert WebTools._provider() == "tavily"          # highest priority
     monkeypatch.setenv("OPENHACK_SEARCH_PROVIDER", "exa")
     assert WebTools._provider() == "exa"             # explicit override wins
+
+
+def test_openhack_gateway_is_the_default_when_logged_in(monkeypatch):
+    # Login is mandatory, so this is the normal path: search works with no
+    # user-supplied search key at all.
+    _clear_keys(monkeypatch)
+    assert WebTools._provider() == "openhack"
+
+
+def test_user_supplied_key_beats_the_gateway(monkeypatch):
+    # Bring-your-own-index wins over the managed default (same rule as
+    # providers.py) — otherwise a deliberately-set key would be dead.
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("TAVILY_API_KEY", "t")
+    assert WebTools._provider() == "tavily"
+
+
+def test_search_via_openhack_gateway(monkeypatch):
+    _clear_keys(monkeypatch)
+    from openhack import config
+    monkeypatch.setattr(config.settings, "openhack_api_key", "sk_live_x", raising=False)
+    monkeypatch.setattr(config.settings, "openhack_base_url",
+                        "https://api.openhack.com/v1", raising=False)
+    w = WebTools()
+    captured = {}
+
+    def _post(url, payload, headers=None, **kw):
+        captured.update(url=url, payload=payload, headers=headers or {})
+        return _Resp(payload={"results": [{
+            "title": "wp2shell", "url": "https://slcyber.io/x",
+            "snippet": "pre-auth RCE", "content": "full advisory body " * 60,
+        }]})
+
+    monkeypatch.setattr(w, "_post", _post)
+    out = w.web_search("wp2shell", max_results=5)
+    # /search is a sibling of the OpenAI-compatible /v1 root, not under it.
+    assert captured["url"] == "https://api.openhack.com/search"
+    assert captured["headers"]["Authorization"] == "Bearer sk_live_x"
+    assert captured["payload"] == {"query": "wp2shell", "max_results": 5}
+    assert out["engine"] == "openhack"
+    assert out["results"][0]["url"] == "https://slcyber.io/x"
+    assert "full advisory body" in out["results"][0]["content"]
+
+
+def test_gateway_without_search_configured_is_reported(monkeypatch):
+    _clear_keys(monkeypatch)
+    from openhack import config
+    monkeypatch.setattr(config.settings, "openhack_api_key", "sk_live_x", raising=False)
+    w = WebTools()
+    monkeypatch.setattr(w, "_post", lambda *a, **k: _Resp(status=501))
+    out = w.web_search("q")
+    assert out["error"] == "search_failed"
+    assert "not configured" in out["reason"]
 
 
 def test_web_search_perplexity(monkeypatch):
@@ -106,8 +169,7 @@ def test_web_search_tavily(monkeypatch):
 
 
 def test_web_search_duckduckgo_parses_and_unwraps_redirect(monkeypatch):
-    for k in _KEYS:
-        monkeypatch.delenv(k, raising=False)
+    _clear_keys(monkeypatch, openhack=False)
     markup = (
         '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fslcyber.io%2Fpost">'
         "wp2shell writeup</a>"
@@ -125,8 +187,7 @@ def test_ddg_throttle_is_reported_not_silently_empty(monkeypatch):
     # A throttled DDG answers 200 with an empty page — indistinguishable from
     # "no such thing exists" unless we look. The agent must never read a rate
     # limit as an absence of coverage.
-    for k in _KEYS:
-        monkeypatch.delenv(k, raising=False)
+    _clear_keys(monkeypatch, openhack=False)
     w = WebTools()
     monkeypatch.setattr(w, "_get", lambda *a, **k: _Resp("<html><body>unusual traffic</body></html>"))
     monkeypatch.setattr("time.sleep", lambda *_: None)

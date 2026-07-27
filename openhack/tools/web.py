@@ -171,6 +171,8 @@ class WebTools:
         forced = (os.environ.get("OPENHACK_SEARCH_PROVIDER") or "").strip().lower()
         if forced:
             return forced
+        # A key the user deliberately set wins — bring-your-own-index beats the
+        # managed default, same principle as providers.py.
         if os.environ.get("TAVILY_API_KEY"):
             return "tavily"
         if os.environ.get("PERPLEXITY_API_KEY"):
@@ -179,6 +181,14 @@ class WebTools:
             return "exa"
         if os.environ.get("BRAVE_API_KEY"):
             return "brave"
+        # Otherwise OpenHack's own gateway, which holds a provider key
+        # server-side — so search works with zero setup, exactly like inference.
+        # (Login is mandatory, so this is the normal path for everyone.)
+        from openhack.config import settings as _s
+
+        if getattr(_s, "openhack_api_key", None):
+            return "openhack"
+        # Last resort for an unauthenticated/offline-ish run.
         return "duckduckgo"
 
     def web_search(self, query: str, max_results: int = 8) -> dict:
@@ -188,7 +198,9 @@ class WebTools:
         n = max(1, min(int(max_results or 8), 20))
         provider = self._provider()
         try:
-            if provider == "tavily":
+            if provider == "openhack":
+                results = self._search_openhack(query, n)
+            elif provider == "tavily":
                 results = self._search_tavily(query, n)
             elif provider == "perplexity":
                 results = self._search_perplexity(query, n)
@@ -229,6 +241,34 @@ class WebTools:
                 "note": "No results. Try different keywords, or web_fetch a known URL.",
             }
         return {"engine": provider, "query": query, "count": len(results), "results": results}
+
+    def _search_openhack(self, query: str, n: int) -> list[dict]:
+        """OpenHack's gateway (`POST /search`), which holds the provider key
+        server-side and returns the already-normalized shape — so the CLI needs
+        no search key of its own. Metered against the same credits as inference.
+        """
+        from openhack.config import settings as _s
+
+        base = (getattr(_s, "openhack_base_url", "") or "").rstrip("/")
+        # openhack_base_url points at the OpenAI-compatible root (…/v1); /search
+        # is a sibling of it on the same gateway.
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        r = self._post(
+            f"{base}/search",
+            {"query": query, "max_results": n},
+            headers={"Authorization": f"Bearer {_s.openhack_api_key}"},
+        )
+        if r.status_code == 501:
+            raise RuntimeError("search is not configured on the OpenHack gateway")
+        r.raise_for_status()
+        data = r.json()
+        return [
+            _result(title=it.get("title"), url=it.get("url"),
+                    snippet=it.get("snippet"), content=it.get("content"),
+                    date=it.get("date"))
+            for it in (data.get("results") or [])[:n]
+        ]
 
     def _search_tavily(self, query: str, n: int) -> list[dict]:
         r = self._post(
