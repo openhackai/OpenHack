@@ -74,9 +74,58 @@ class ContextWindowManager:
         if tool_name == "glob":
             return self._truncate_glob_result(data)
 
-        if len(content) > 10_000:
-            return content[:8_000] + f"\n\n[... truncated, {len(content)} total chars ...]"
-        return content
+        return self._truncate_generic(data, content)
+
+    def _truncate_generic(self, data: dict, content: str) -> str:
+        """Shrink an oversized tool result by trimming its longest text fields.
+
+        The previous approach sliced the serialized JSON at 8k, which handed the
+        model a syntactically broken object with its tail lopped off mid-value.
+        Trimming the fields instead keeps the result valid and readable, so the
+        model still sees every key — just with long bodies shortened. Big web
+        results (page text, per-result content) are the main customers.
+        """
+        if len(content) <= 10_000:
+            return content
+        budget = 8_000
+        overflow = len(content) - budget
+
+        def _fields(node, path=()):
+            """Yield (container, key, text) for every long string, recursively."""
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if isinstance(v, str):
+                        yield node, k, v
+                    else:
+                        yield from _fields(v, path + (k,))
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    if isinstance(v, str):
+                        yield node, i, v
+                    else:
+                        yield from _fields(v, path + (i,))
+
+        # Trim longest-first so one huge body is cut before many short ones.
+        targets = sorted(_fields(data), key=lambda t: -len(t[2]))
+        for container, key, text in targets:
+            if overflow <= 0:
+                break
+            if len(text) <= 200:
+                continue
+            keep = max(200, len(text) - overflow)
+            if keep >= len(text):
+                continue
+            container[key] = text[:keep] + f"… [truncated {len(text) - keep} chars]"
+            overflow -= (len(text) - keep)
+        try:
+            out = json.dumps(data)
+        except (TypeError, ValueError):
+            return content[:budget] + f"\n\n[... truncated, {len(content)} total chars ...]"
+        # Still oversized (e.g. thousands of short fields) — fall back to a hard
+        # cut, which at least bounds the context.
+        if len(out) > 10_000:
+            return out[:budget] + f"\n\n[... truncated, {len(out)} total chars ...]"
+        return out
 
     def _truncate_read_file(self, data: dict) -> str:
         """Truncate read_file by trimming the content field's lines."""

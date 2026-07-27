@@ -15,6 +15,9 @@ from openhack.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Ceiling on a single retry wait — see the backoff site for why.
+MAX_RETRY_BACKOFF = 20
+
 
 def fetch_available_models(
     api_key: Optional[str] = None,
@@ -305,7 +308,10 @@ class LLMClient:
             stream = None
             try:
                 if attempt > 0:
-                    wait_time = 5 * (2 ** (attempt - 1))
+                    # Capped exponential backoff. Uncapped this went
+                    # 5→10→20→40→80 = 155s of dead air across the retry chain,
+                    # which is most of what "it got stuck" actually was.
+                    wait_time = min(5 * (2 ** (attempt - 1)), MAX_RETRY_BACKOFF)
                     reason = type(last_exception).__name__ if last_exception else "error"
                     logger.warning(
                         f"Retrying API call (attempt {attempt + 1}/{max_retries + 1}) "

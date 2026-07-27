@@ -36,9 +36,19 @@ _UA = (
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 
-_MAX_TEXT = 20_000    # chars of extracted page text handed back to the model
+# Sizing here is a context-budget decision, not a display one: every byte a
+# tool returns is re-sent with the message history on EVERY later turn. Session
+# 265af3d8 showed the cost of getting it wrong — a single web_search came back
+# with 50,000+ chars (8 results × 6k of page body), and 14 tool results totalled
+# ~263k chars, which is what made each subsequent turn slow.
+#
+# So: a search returns enough to judge and usually to answer, and web_fetch is
+# the deliberate "give me the whole page" step.
+_MAX_TEXT = 12_000    # chars of extracted page text handed back by web_fetch
 _MAX_SNIPPET = 400    # short teaser, for scanning the result list
-_MAX_CONTENT = 6_000  # extracted page body per result, when the backend gives one
+_MAX_CONTENT = 1_800  # page body per search result, when the backend gives one
+_CONTENT_RESULTS = 4  # only the top few results carry a body; the rest snippet-only
+_DEFAULT_RESULTS = 5
 
 
 def _result(title, url, snippet="", content="", **extra) -> dict:
@@ -195,7 +205,7 @@ class WebTools:
         """Search the web and return ranked results (title, url, snippet)."""
         if not query or not query.strip():
             return {"error": "missing_query"}
-        n = max(1, min(int(max_results or 8), 20))
+        n = max(1, min(int(max_results or _DEFAULT_RESULTS), 20))
         provider = self._provider()
         try:
             if provider == "openhack":
@@ -235,6 +245,12 @@ class WebTools:
                     "known URL with web_fetch."
                 ),
             }
+        # Only the top results keep their page body; deeper hits stay
+        # snippet-only so a single search can't dominate the context.
+        for i, r in enumerate(results):
+            if i >= _CONTENT_RESULTS:
+                r.pop("content", None)
+                r.pop("content_truncated", None)
         if not results:
             return {
                 "engine": provider, "query": query, "count": 0, "results": [],

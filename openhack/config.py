@@ -95,7 +95,14 @@ class Settings(BaseSettings):
     openhack_user_email: Optional[str] = None
     openhack_user_first_name: Optional[str] = None
     openhack_user_last_name: Optional[str] = None
-    openhack_read_timeout: int = 600
+    # Read timeout is per socket read, and every call streams — so this is
+    # "how long we tolerate SILENCE between chunks", not how long a generation
+    # may take. A long answer keeps the timer resetting. At the old 600s a hung
+    # upstream froze the TUI for ten minutes with no output before it even
+    # errored (session 265af3d8: a 160s stall ending in an APIError), and with
+    # retries the worst case was over an hour. 120s still allows a very slow
+    # time-to-first-token while catching a dead connection quickly.
+    openhack_read_timeout: int = 120
     openhack_connect_timeout: int = 30
     openhack_max_retries: int = 5
 
