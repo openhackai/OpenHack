@@ -5,6 +5,7 @@ LLM client for OpenHack.
 import asyncio
 import json
 import logging
+import time
 import urllib.request
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
@@ -17,6 +18,26 @@ logger = logging.getLogger(__name__)
 
 # Ceiling on a single retry wait — see the backoff site for why.
 MAX_RETRY_BACKOFF = 20
+
+# Floor on the stall watchdog. The clock starts once response headers land, so
+# it has to cover prefill on a large context (time-to-first-token was 11s+ on a
+# ~100k-token turn in session cfeb868f). Anything shorter would kill healthy
+# calls, so a misconfigured setting gets clamped up to this.
+MIN_STALL_TIMEOUT = 10
+
+
+class StreamStalled(Exception):
+    """A stream returned 200 and then stopped making progress.
+
+    The socket read timeout cannot catch this. An upstream that wedges but keeps
+    the connection warm — SSE comment keepalives (`: keep-alive`), or a proxy
+    that forwards them — resets httpx's read clock on every byte while
+    delivering zero decodable events, so the client waits forever. Session
+    cfeb868f sat like this for 274s, over half the run, until the user hit Esc.
+
+    So we time *semantic* progress instead: content, reasoning, tool-call
+    arguments or usage. Bytes that carry none of those don't count as alive.
+    """
 
 
 def fetch_available_models(
@@ -337,24 +358,56 @@ class LLMClient:
                 input_tokens = 0
                 output_tokens = 0
 
-                async for chunk in stream:
+                # Stall watchdog. Iterate by hand rather than `async for` so each
+                # step carries a deadline measured from the last *meaningful*
+                # delta — see StreamStalled for why byte-level timeouts miss this.
+                stall_limit = max(
+                    MIN_STALL_TIMEOUT, _config.settings.openhack_stream_stall_timeout
+                )
+                stream_iter = stream.__aiter__()
+                last_progress = time.monotonic()
+
+                while True:
+                    remaining = stall_limit - (time.monotonic() - last_progress)
+                    if remaining <= 0:
+                        raise StreamStalled(
+                            f"no output for {stall_limit}s (stream open but idle)"
+                        )
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream_iter.__anext__(), timeout=remaining
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except (asyncio.TimeoutError, TimeoutError) as e:
+                        raise StreamStalled(
+                            f"no output for {stall_limit}s (stream open but idle)"
+                        ) from e
+
+                    progressed = False
+
                     if chunk.usage:
                         input_tokens = chunk.usage.prompt_tokens or 0
                         output_tokens = chunk.usage.completion_tokens or 0
+                        progressed = True
 
                     if not chunk.choices:
+                        if progressed:
+                            last_progress = time.monotonic()
                         continue
 
                     delta = chunk.choices[0].delta
 
                     if delta.content:
                         content_parts.append(delta.content)
+                        progressed = True
                         if on_chunk:
                             on_chunk("content", delta.content)
 
                     rc = getattr(delta, "reasoning_content", None)
                     if rc:
                         reasoning_parts.append(rc)
+                        progressed = True
                         if on_chunk:
                             on_chunk("reasoning", rc)
 
@@ -373,8 +426,18 @@ class LLMClient:
                             if tc_delta.function:
                                 if tc_delta.function.name:
                                     acc["name"] = tc_delta.function.name
+                                    progressed = True
                                 if tc_delta.function.arguments:
                                     acc["arguments_parts"].append(tc_delta.function.arguments)
+                                    progressed = True
+                                    # Writing a large file means minutes of pure
+                                    # tool-argument stream. Without this the UI
+                                    # gets no signal at all and looks hung.
+                                    if on_chunk:
+                                        on_chunk("tool_args", tc_delta.function.arguments)
+
+                    if progressed:
+                        last_progress = time.monotonic()
 
                 content = "".join(content_parts) or None
                 reasoning_content = "".join(reasoning_parts) or None
@@ -467,6 +530,18 @@ class LLMClient:
                 # Treat it as transient and retry with backoff instead of failing
                 # the whole turn. (Auth/permission/4xx are raised above already.)
                 last_exception = e
+                if stream:
+                    try: await stream.close()
+                    except Exception: pass
+                if attempt == max_retries:
+                    raise
+            except StreamStalled as e:
+                # A wedged-but-warm upstream. Closing the stream drops the
+                # connection, so the retry gets a fresh one — and, at the
+                # gateway, another shot at provider failover.
+                last_exception = e
+                logger.warning(f"Stream stalled — abandoning and retrying: {e}")
+                self._status(f"upstream went quiet — reconnecting ({e})")
                 if stream:
                     try: await stream.close()
                     except Exception: pass

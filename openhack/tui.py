@@ -1259,6 +1259,11 @@ class OpenHackApp:
         # of the transcript and cleared once the turn commits its trace line.
         self._stream_buf: str = ""
         self._stream_reasoning: str = ""
+        # Bytes of tool-call arguments streamed so far this turn. Writing a
+        # 20KB file is minutes of pure argument stream with no content and no
+        # trace event, so without this the transcript sits silent and the run
+        # looks hung (session cfeb868f).
+        self._stream_tool_bytes: int = 0
         self._stream_last_invalidate: float = 0.0
         self.last_status_line: str = ""
         self.last_findings: list[Finding] = []  # findings from most recent scan
@@ -4505,6 +4510,7 @@ class OpenHackApp:
             self.scan_task = None
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._stream_tool_bytes = 0
             self._interrupting = False
             self._llm_status = ""
             self._invalidate()
@@ -4679,6 +4685,7 @@ class OpenHackApp:
             self.scan_task = None
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._stream_tool_bytes = 0
             self._interrupting = False
             self._llm_status = ""
             self._invalidate()
@@ -4758,6 +4765,8 @@ class OpenHackApp:
             return "interrupting"
         if self._shell_active:
             return "running"
+        if self._stream_tool_bytes:
+            return "writing"
         if self._stream_buf:
             return "responding"
         if self._stream_reasoning:
@@ -4774,6 +4783,8 @@ class OpenHackApp:
             self._stream_buf += delta
         elif kind == "reasoning":
             self._stream_reasoning += delta
+        elif kind == "tool_args":
+            self._stream_tool_bytes += len(delta)
         else:
             return
         # Throttle repaints so a fast stream doesn't thrash the renderer.
@@ -4801,6 +4812,16 @@ class OpenHackApp:
                 ("class:trace.stream", text),
                 ("class:trace.agent.bar", "▌"),  # caret marking the live cursor
             ]
+        # Checked before reasoning: once arguments start flowing the thinking
+        # tail is finished and frozen, so showing it would read as stalled while
+        # the real work — a file being written out token by token — is invisible.
+        if self._stream_tool_bytes:
+            kb = self._stream_tool_bytes / 1024
+            size = f"{kb:.1f} KB" if kb >= 1 else f"{self._stream_tool_bytes} B"
+            return [
+                ("class:spinner", f" {frame} "),
+                ("class:trace.dim", f"writing tool input · {size}"),
+            ]
         if self._stream_reasoning:
             reasoning = self._stream_reasoning.strip().replace("\n", " ")
             if len(reasoning) > 160:
@@ -4824,6 +4845,7 @@ class OpenHackApp:
         if entry.event_type in ("thinking", "tool_call"):
             self._stream_buf = ""
             self._stream_reasoning = ""
+            self._stream_tool_bytes = 0
         self.scan.update_from_trace(entry)
         # Live-tick the elapsed clock by invalidating.
         self._invalidate()

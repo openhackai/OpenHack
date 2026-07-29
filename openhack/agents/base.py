@@ -270,6 +270,10 @@ class BaseAgent(ABC):
             self.session.total_cost += response.cost
             if response.usage:
                 self.session.total_tokens += response.usage.get("total_tokens", 0)
+                # These two were never accumulated, which is why saved reports
+                # showed "total_tokens: 692110" beside "total_input_tokens: 0".
+                self.session.total_input_tokens += response.usage.get("input_tokens", 0)
+                self.session.total_output_tokens += response.usage.get("output_tokens", 0)
                 self.context_manager.update_usage(response.usage.get("input_tokens", 0))
 
             if response.content:

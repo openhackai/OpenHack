@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     openhack_connect_timeout: int = 30
     openhack_max_retries: int = 5
 
+    # ...and because that timeout only sees BYTES, it misses an upstream that
+    # wedges while still sending SSE keepalives — proven: a server emitting
+    # `: keep-alive` every second never trips a 5s read timeout. So this second
+    # limit measures decodable PROGRESS (content / reasoning / tool arguments /
+    # usage) and abandons the stream when there's been none. max_tokens is 8192
+    # and glm-5.2 streams ~160 tok/s, so a legitimate call tops out near 60s of
+    # generation; 90s clears that with room to spare. Session cfeb868f hung 274s.
+    openhack_stream_stall_timeout: int = 90
+
     # Send prompt_cache_key with API calls. Supported by OpenHack and OpenAI;
     # some OpenAI-compatible endpoints (e.g. Groq) reject unknown params.
     prompt_caching: bool = True

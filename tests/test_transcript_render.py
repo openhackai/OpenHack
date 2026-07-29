@@ -73,6 +73,7 @@ def _stream_app():
     app._spin_idx = 0
     app._stream_buf = ""
     app._stream_reasoning = ""
+    app._stream_tool_bytes = 0
     app._interrupting = False
     app._shell_active = False
     app.is_agent_session = True
@@ -89,6 +90,10 @@ def test_live_spinner_shows_in_every_streaming_state():
         "thinking": lambda: setattr(app, "_stream_reasoning", "considering the route"),
         "responding": lambda: (setattr(app, "_stream_reasoning", ""),
                                setattr(app, "_stream_buf", "here is the chain")),
+        # Streaming a large tool argument (writing a file) is the longest
+        # silent stretch of a turn — it needs a spinner most of all.
+        "writing tool args": lambda: (setattr(app, "_stream_buf", ""),
+                                      setattr(app, "_stream_tool_bytes", 4096)),
     }
     for label, setup in states.items():
         setup()
