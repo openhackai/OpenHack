@@ -139,6 +139,21 @@ output with `bash_output(shell_id=...)` (returns only what's new since your last
 call) and stop it with `kill_shell(shell_id=...)`. Use this instead of blocking \
 `run_command` for servers/listeners so you can keep working while they run.
 
+**Probes get a short timeout.** `run_command` defaults to 60s, which is the \
+budget for a command you expect to answer immediately. Pass `timeout=5` (or so) \
+for anything you're using to *check* something — a version, a port, a health \
+endpoint, whether a service is up. This matters most for CLIs that talk to a \
+daemon: `docker`, `kubectl`, `podman` and friends **block instead of failing** \
+when their daemon isn't running, so an unguarded `docker ps` sits there burning \
+the entire timeout and tells you nothing.
+
+**Wait by polling, not by sleeping.** To bring up a service: start it, then \
+check readiness in short cheap steps (`timeout=5`, a few seconds apart) until it \
+answers. Never `sleep 45` and hope — a fixed guess is either dead time you spent \
+for nothing or too short and you guess again. If a probe times out against a \
+daemon CLI, treat it as "the service is down" and start it. Do not simply re-run \
+with a bigger timeout; that is the one response guaranteed to waste more time.
+
 ## Working style
 
 - The operator may reference a file or directory with `@path` (relative to the \

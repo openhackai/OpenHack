@@ -32,8 +32,28 @@ class ShellTools:
     # inflates cost super-linearly. The agent is told when output was truncated
     # and can re-run with its own filtering (grep/head/-v0) for more.
     MAX_OUTPUT_CHARS = 20_000
-    DEFAULT_TIMEOUT = 300  # seconds
+
+    # The DEFAULT is what an agent gets when it wasn't thinking about timeouts,
+    # so it should be sized for a probe, not for the longest thing a command
+    # could legitimately do. It used to be 300s, and session 9d80e4af paid for
+    # it: `docker ps` and `docker info` each blocked the full five minutes
+    # against a daemon that wasn't running (the docker CLI hangs on an
+    # unreachable socket instead of failing), turning two throwaway probes into
+    # 10 minutes — over a third of a 28.7-minute run.
+    #
+    # 60s still covers builds, installs and most scans. Anything genuinely
+    # long-running just passes `timeout` explicitly and can go to MAX_TIMEOUT,
+    # or belongs in a background shell (run_in_background) where it doesn't
+    # block the agent at all.
+    DEFAULT_TIMEOUT = 60  # seconds
     MAX_TIMEOUT = 3600
+
+    # Commands whose CLIs block on an unreachable daemon rather than failing
+    # fast. Hitting the timeout with one of these almost always means the
+    # service is down, not that the command needed longer — so the hint has to
+    # say that. The old note said "re-run with a larger timeout", which is the
+    # exact wrong advice and invites the agent to burn even more time.
+    _DAEMON_CLIS = ("docker", "podman", "kubectl", "colima", "minikube", "nerdctl")
 
     def __init__(self, workdir: Optional[Path] = None, session=None, shells=None):
         self.workdir = Path(workdir).resolve() if workdir else Path.cwd()
@@ -45,6 +65,33 @@ class ShellTools:
         # manager backs the TUI's /bashes view. Lazily created if not supplied.
         self._shells = shells
         self._bash_cursors: dict[str, int] = {}
+
+    @classmethod
+    def _timeout_note(cls, command: str, effective_timeout: int) -> str:
+        """Explain a timeout in terms of the likely cause.
+
+        Which CLI hung matters. A blocked `docker` call means the daemon is
+        unreachable and waiting longer will not help; a blocked build may
+        genuinely need more time. Steering those to the same advice is what
+        made session 9d80e4af retry its way through 10 minutes of dead wait.
+        """
+        base = f"Command exceeded the {effective_timeout}s timeout and was killed."
+        lowered = command.lower()
+        hit = next((c for c in cls._DAEMON_CLIS if c in lowered), None)
+        if hit:
+            return (
+                f"{base} `{hit}` blocks instead of failing when its daemon is "
+                f"unreachable, so this most likely means {hit} is not running — "
+                f"a longer timeout will not help. Check it is up first (for "
+                f"docker: `docker info --format '{{{{.ServerVersion}}}}'` with an "
+                f"explicit short timeout), start it if not, then poll readiness "
+                f"in short steps rather than sleeping for a fixed guess."
+            )
+        return (
+            f"{base} If it was still making progress, re-run with a larger "
+            f"`timeout` (up to {cls.MAX_TIMEOUT}s) or use run_in_background=True "
+            f"so it doesn't block. If it was stuck, narrow the command instead."
+        )
 
     def _ensure_shells(self):
         if self._shells is None:
@@ -124,10 +171,7 @@ class ShellTools:
                 "timed_out": True,
                 "timeout": effective_timeout,
                 "output": self._cap(partial),
-                "note": (
-                    f"Command exceeded the {effective_timeout}s timeout and was killed. "
-                    "Re-run with a larger `timeout`, or narrow the command."
-                ),
+                "note": self._timeout_note(command, effective_timeout),
             }
         except Exception as e:  # pragma: no cover - defensive
             return {"error": f"Failed to run command: {e}"}
@@ -231,7 +275,15 @@ class ShellTools:
                         },
                         "timeout": {
                             "type": "integer",
-                            "description": "Max seconds to wait before killing the command (default 300, max 3600).",
+                            "description": (
+                                "Max seconds to wait before killing the command "
+                                "(default 60, max 3600). Pass a SMALL value for probes "
+                                "and health checks — a CLI that talks to a daemon "
+                                "(docker, kubectl) hangs rather than failing when that "
+                                "daemon is down, and burns the whole timeout. Pass a "
+                                "large value only for work that genuinely runs long "
+                                "(builds, installs, scans), or use run_in_background."
+                            ),
                         },
                         "run_in_background": {
                             "type": "boolean",
