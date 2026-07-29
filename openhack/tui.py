@@ -1291,6 +1291,9 @@ class OpenHackApp:
         self.model_index: list[dict] = []
         self.model_selected: int = 0
         self.viewing_target: str = ""  # header label when in "viewing" mode
+        # Id of the report open in "viewing" mode — there is no live Session
+        # then, so this is what keeps the bottom-right id honest.
+        self.viewing_scan_id: str = ""
         # Findings tab selection (split pane: list left, details right)
         self.findings_selected: int = 0
         self.findings_list_hidden: bool = False  # toggle the left list via Ctrl+B / /sidebar
@@ -2015,6 +2018,21 @@ class OpenHackApp:
 
     def _placeholder_text(self) -> str:
         return "Ask anything · /scan to scan · !cmd to run a shell command"
+
+    def _current_session_id(self) -> str:
+        """Short id of the session on screen, or "" when there isn't one.
+
+        Prefers the live session, falling back to a report being viewed, so the
+        id shown always belongs to what the transcript is actually displaying.
+        It is the same id `_write_report` keys the file by, which is what makes
+        it valid for `openhack --resume`.
+        """
+        sid = ""
+        if self.session is not None:
+            sid = self.session.id or ""
+        if not sid:
+            sid = self.viewing_scan_id or ""
+        return sid[:8]
 
     def _model_line(self) -> list[tuple[str, str]]:
         """The '<cwd> · <model> <provider>' line under the input.
@@ -2885,6 +2903,17 @@ class OpenHackApp:
                 parts.append(("class:header.meta", "  ·  "))
             if usage:
                 parts.append(("class:status.usage", usage))
+            # The session id, always visible while a session exists — so the
+            # scan you're watching is identifiable without digging through
+            # ~/.openhack/scans. Short form on purpose: it matches what
+            # /sessions lists, and `--resume` globs on a prefix, so this is
+            # enough to reopen the run.
+            sid = self._current_session_id()
+            if sid:
+                if parts:
+                    parts.append(("class:header.meta", "  ·  "))
+                parts.append(("class:keybar.sep", "scan "))
+                parts.append(("class:header.meta", sid))
             parts.append(("", "  "))
             return parts
 
@@ -3305,6 +3334,7 @@ class OpenHackApp:
             self.is_agent_session = False
             self.active_tab = "trace"
             self.viewing_target = ""
+            self.viewing_scan_id = ""
             self.last_status_line = ""
         elif cmd == "/login":
             await self._cmd_login()
@@ -3773,6 +3803,7 @@ class OpenHackApp:
 
         self.scan = scan
         self.viewing_target = row.get("target") or ""
+        self.viewing_scan_id = row.get("scan_id") or ""
         self.mode = "viewing"
         self.previous_mode = None
         self.active_tab = "findings"
@@ -4423,6 +4454,7 @@ class OpenHackApp:
         self.is_agent_session = False
         self.active_tab = "trace"
         self.viewing_target = ""
+        self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_scan(target_dir))
@@ -4435,6 +4467,7 @@ class OpenHackApp:
         self.mode = "scanning"
         self.active_tab = "trace"
         self.viewing_target = ""
+        self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_test_scan())
@@ -4453,6 +4486,7 @@ class OpenHackApp:
         self.mode = "scanning"
         self.active_tab = "trace"
         self.viewing_target = ""
+        self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
         self.scan_task = asyncio.create_task(self._run_agent(task, target_dir, plan))
@@ -4548,6 +4582,7 @@ class OpenHackApp:
         self.mode = "scanning"
         self.active_tab = "trace"
         self.viewing_target = ""
+        self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
         self._shell_active = True
