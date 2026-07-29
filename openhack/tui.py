@@ -188,7 +188,11 @@ PROVIDER_DEFAULTS = {"openhack": "grok-4.5"}
 
 # Models the OpenHack hosted provider serves (must match the inference backend's
 # MODEL_MAP). Shown by `/model` so users can discover what they can switch to.
-OPENHACK_MODELS = ["grok-4.5", "glm-5.2", "kimi-k2.5", "gemma-4-31b", "mistral-large-2512"]
+# mistral-large-2512 was dropped: the inference backend now permits only
+# US-headquartered providers, and Mistral (FR) is its sole OpenRouter provider,
+# so every request would 400 as an unknown model. Offering it in the picker
+# would just be a guaranteed failure.
+OPENHACK_MODELS = ["grok-4.5", "glm-5.2", "kimi-k2.5", "gemma-4-31b"]
 
 # Display label + one-line description per served model, for the /model picker.
 OPENHACK_MODEL_INFO = {
