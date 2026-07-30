@@ -246,3 +246,26 @@ def test_non_user_lines_get_no_padding():
     s = _state()
     _add(s, "openhack", "thinking", "just prose")
     assert OpenHackApp._user_band_pad(s.trace_lines[-1][1], 100) == 0
+
+
+def test_long_interactive_answer_is_rendered_in_full():
+    s = _state()
+    answer = "start\n" + ("full operator answer " * 300) + "\nfinal marker"
+
+    _add(s, "openhack", "thinking", answer)
+
+    rendered = _text(s)[0]
+    assert answer in rendered
+    assert "final marker" in rendered
+    assert not rendered.endswith("…")
+
+
+def test_long_pipeline_progress_remains_bounded():
+    s = _state()
+    progress = "internal progress " * 300
+
+    _add(s, "hunter:auth", "thinking", progress)
+
+    rendered = _text(s)[0]
+    assert len(rendered) < len(progress)
+    assert rendered.endswith("…")

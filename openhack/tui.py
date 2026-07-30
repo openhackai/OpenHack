@@ -819,12 +819,15 @@ class ScanState:
             self.upsert_agent(agent, _STATUS_RUNNING, "thinking…")
             content_str = str(entry.content or "").strip()
             if content_str:
-                # Truncate hard at the source level so a 5-page chain-of-thought
-                # doesn't blow up the pane. Render the (possibly truncated)
-                # content as markdown — headers, bold, bullets, inline code.
-                if len(content_str) > 2000:
+                is_interactive = str(agent).startswith("openhack")
+                # Pipeline-agent progress can be extremely verbose and is only
+                # an activity trace, so keep that bounded. Interactive agent
+                # text is the operator-facing answer: never truncate it here.
+                # The transcript viewport already scrolls and the durable report
+                # contains the same complete text.
+                if not is_interactive and len(content_str) > 2000:
                     content_str = content_str[:1997] + "…"
-                if str(agent).startswith("openhack"):
+                if is_interactive:
                     # Interactive agent: render as a clean chat message with a
                     # green speaker bar (mirrors the grey user bar), no name.
                     if self.trace_lines:
