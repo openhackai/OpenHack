@@ -79,3 +79,46 @@ def test_starting_a_run_clears_a_previously_viewed_id():
     src = inspect.getsource(OpenHackApp)
     # Every site that resets viewing_target must reset the id alongside it.
     assert src.count("self.viewing_target = \"\"") == src.count("self.viewing_scan_id = \"\"")
+
+
+def test_scan_id_exists_as_soon_as_scan_view_opens(tmp_path, monkeypatch):
+    import asyncio
+    import openhack.tui as tui_mod
+
+    class _ImmediateSession:
+        def __init__(self, target_dir, on_trace):
+            self.id = "01234567-89ab-cdef"
+            self.target_dir = target_dir
+            self.paused = False
+
+    async def scenario():
+        app = OpenHackApp.__new__(OpenHackApp)
+        app.mode = "landing"
+        app.session = None
+        app.scan = None
+        app.agent = None
+        app.is_agent_session = False
+        app.active_tab = "trace"
+        app.viewing_target = ""
+        app.viewing_scan_id = ""
+        app._cancel_armed = False
+        app._interrupting = False
+        app.scan_task = None
+        app._on_trace = lambda _: None
+
+        started_with = []
+
+        async def fake_run_scan(target_dir, session):
+            started_with.append((target_dir, session.id))
+
+        app._run_scan = fake_run_scan
+        monkeypatch.setattr(tui_mod, "Session", _ImmediateSession)
+
+        app._start_scan(str(tmp_path))
+
+        assert app.mode == "scanning"
+        assert app._current_session_id() == "01234567"
+        await app.scan_task
+        assert started_with == [(str(tmp_path), "01234567-89ab-cdef")]
+
+    asyncio.run(scenario())

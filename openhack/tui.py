@@ -4629,6 +4629,11 @@ class OpenHackApp:
         if self.mode == "scanning":
             self.last_status_line = "a scan is already in progress"
             return
+        # Allocate the durable identity before entering the scan view. Project
+        # context construction can take a while on a large repo; creating the
+        # Session afterward left the footer blank throughout that first phase.
+        session = Session(target_dir=target_dir, on_trace=self._on_trace)
+        self.session = session
         self.scan = ScanState(target=target_dir)
         self.mode = "scanning"
         self.agent = None
@@ -4638,7 +4643,7 @@ class OpenHackApp:
         self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
-        self.scan_task = asyncio.create_task(self._run_scan(target_dir))
+        self.scan_task = asyncio.create_task(self._run_scan(target_dir, session))
 
     def _start_test_scan(self) -> None:
         if self.mode == "scanning":
@@ -5070,17 +5075,20 @@ class OpenHackApp:
         # Live-tick the elapsed clock by invalidating.
         self._invalidate()
 
-    async def _run_scan(self, target_dir: str) -> None:
+    async def _run_scan(
+        self,
+        target_dir: str,
+        session: Optional[Session] = None,
+    ) -> None:
         reload_settings()
-        session: Optional[Session] = None
         try:
+            # Keep the optional construction path for direct/internal callers,
+            # while /scan always supplies the preallocated visible session.
+            if session is None:
+                session = Session(target_dir=target_dir, on_trace=self._on_trace)
+                self.session = session
             project_context = build_project_context(target_dir)
-            session = Session(
-                target_dir=target_dir,
-                on_trace=self._on_trace,
-                project_context=project_context,
-            )
-            self.session = session
+            session.project_context = project_context
 
             # Wrap on_trace to also persist on key milestones (step_complete,
             # finding_added) so a crashed scan still leaves a readable report.
