@@ -39,8 +39,8 @@ from prompt_toolkit.layout.containers import (
     ConditionalContainer,
     Float,
     FloatContainer,
-    HSplit,
-    VSplit,
+    HSplit as _PromptToolkitHSplit,
+    VSplit as _PromptToolkitVSplit,
     Window,
     WindowAlign,
 )
@@ -75,6 +75,31 @@ from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
 from openhack.prompts.project_context import build_project_context
 from openhack.updates import Announcement, UpdateInfo, fetch_updates, save_dismissed
+
+
+def _small_window_fallback() -> Window:
+    """Blank fallback for geometry that cannot fit; never block with a warning."""
+    return Window(
+        content=FormattedTextControl(text=[]),
+        char=" ",
+        style="class:body",
+    )
+
+
+class HSplit(_PromptToolkitHSplit):
+    """HSplit without prompt_toolkit's intrusive size-warning replacement."""
+
+    def __init__(self, children, **kwargs):
+        kwargs.setdefault("window_too_small", _small_window_fallback())
+        super().__init__(children, **kwargs)
+
+
+class VSplit(_PromptToolkitVSplit):
+    """VSplit without prompt_toolkit's intrusive size-warning replacement."""
+
+    def __init__(self, children, **kwargs):
+        kwargs.setdefault("window_too_small", _small_window_fallback())
+        super().__init__(children, **kwargs)
 
 
 # ── OpenHack palette ──────────────────────────────────────────────
@@ -2054,8 +2079,8 @@ class OpenHackApp:
             body=modal_body_window,
             title="OpenHack",
             style="class:modal.frame",
-            width=D(min=50, max=80, preferred=72),
-            height=D(min=8, max=20, preferred=14),
+            width=D(min=0, max=80, preferred=72),
+            height=D(min=0, max=20, preferred=14),
         )
         # Center via weight-1 spacers on all four sides inside the full-screen Float.
         modal_centered = HSplit([
@@ -2234,7 +2259,7 @@ class OpenHackApp:
         self._input_window = self._make_input_window()
         # Cap max == preferred so leftover width flows to the side spacers and
         # the box stays centered (rather than stretching to fill the row).
-        box_width = D(min=44, preferred=80, max=80)
+        box_width = D(min=0, preferred=80, max=80)
 
         # The prompt box + right-aligned shortcut row, centered horizontally.
         box_region = VSplit([
@@ -2906,7 +2931,7 @@ class OpenHackApp:
             Window(FormattedTextControl(sidebar_footer), height=2,
                    style="class:sidebar", always_hide_cursor=True),
             Window(height=1, style="class:sidebar"),
-        ], width=D(min=26, preferred=42), style="class:sidebar")
+        ], width=D(min=0, preferred=42), style="class:sidebar")
 
         sidebar_divider = Window(width=1, char="│", style="class:sidebar.sep")
         # The scan sidebar (Session/Context/Findings/Activity) is meaningful for a
