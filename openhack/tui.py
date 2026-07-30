@@ -1071,6 +1071,18 @@ def _section_header(label: str) -> list[tuple[str, str]]:
     ]
 
 
+def _findings_list_cursor_row(findings: list[Finding], selected: int) -> int:
+    """Rendered row containing ``selected`` in the variable-height list."""
+    has_verification_badge = any(
+        "sandbox" in (finding.source or "") or "browser" in (finding.source or "")
+        for finding in findings
+    )
+    row = 2 + int(has_verification_badge)  # title, optional badge, blank
+    for finding in findings[:max(0, selected)]:
+        row += 2 + int(bool(finding.file_path))  # title, optional path, blank
+    return row
+
+
 def _highlight_code_by_lang(code: str, lang: str, fallback_file: str = "") -> list[tuple[str, str]]:
     """Tokenize code with Pygments using a language name; fall back to file-based detection."""
     try:
@@ -1661,19 +1673,7 @@ class OpenHackApp:
             self._details_scroll = 0
 
         def _move_selection(delta: int) -> None:
-            # If a mouse scroll fired in the last 400ms, this arrow key is
-            # almost certainly the paired event from a Mac trackpad gesture —
-            # not a deliberate keyboard press to switch findings. Stand down.
-            if time.monotonic() - self._last_scroll_at < 0.4:
-                return
-            n = len(self._current_findings())
-            if n == 0:
-                return
-            new_idx = max(0, min(n - 1, self.findings_selected + delta))
-            if new_idx != self.findings_selected:
-                self.findings_selected = new_idx
-                _reset_details_scroll()
-                self._invalidate()
+            self._move_finding_selection(delta)
 
         def _scroll_details(delta: int) -> None:
             self._details_scroll = max(0, self._details_scroll + delta)
@@ -2672,11 +2672,9 @@ class OpenHackApp:
 
             def _make_handler(idx: int):
                 def _handler(event: MouseEvent):
-                    # Only handle clicks for selection. Mouse wheel on the
-                    # sidebar is intentionally a no-op (consumed but ignored)
-                    # so it doesn't fight with the details pane's scrolling.
                     if event.event_type == MouseEventType.MOUSE_UP:
                         self.findings_selected = idx
+                        self._details_scroll = 0
                         self._invalidate()
                 return _handler
 
@@ -2709,6 +2707,19 @@ class OpenHackApp:
                     out.append(("class:finding.path", f"          {short_path}\n", handler))
                 out.append(("", "\n", handler))
             return out
+
+        def _findings_cursor() -> Point:
+            findings = self._current_findings()
+            if not findings:
+                return Point(x=0, y=0)
+            selected = max(0, min(len(findings) - 1, self.findings_selected))
+            return Point(
+                x=0,
+                y=_findings_list_cursor_row(findings, selected),
+            )
+
+        def _scroll_findings(delta: int) -> None:
+            self._move_finding_selection(delta, from_mouse=True)
 
         # ── Details pane: a single scrollable Window ──
         def _selected_finding():
@@ -2822,7 +2833,12 @@ class OpenHackApp:
 
         # Findings list pane (left)
         findings_list_pane = Window(
-            content=FormattedTextControl(findings_list_text, focusable=False),
+            content=_ScrollableFormattedTextControl(
+                text=findings_list_text,
+                focusable=False,
+                get_cursor_position=_findings_cursor,
+                on_scroll=_scroll_findings,
+            ),
             wrap_lines=False,
             always_hide_cursor=True,
             width=self._sidebar_dim,
@@ -3493,6 +3509,31 @@ class OpenHackApp:
         self.last_status_line = (
             "sidebar hidden" if self.findings_list_hidden else "sidebar shown"
         )
+        self._invalidate()
+
+    def _move_finding_selection(
+        self,
+        delta: int,
+        *,
+        from_mouse: bool = False,
+    ) -> None:
+        """Move the selected finding; its cursor keeps the list scrolled."""
+        if from_mouse:
+            self._last_scroll_at = time.monotonic()
+        elif time.monotonic() - self._last_scroll_at < 0.4:
+            # macOS can emit an arrow event alongside one trackpad gesture.
+            return
+        findings = self._current_findings()
+        if not findings:
+            return
+        selected = max(
+            0,
+            min(len(findings) - 1, self.findings_selected + delta),
+        )
+        if selected == self.findings_selected:
+            return
+        self.findings_selected = selected
+        self._details_scroll = 0
         self._invalidate()
 
     def _cmd_cd(self, arg: str) -> None:
