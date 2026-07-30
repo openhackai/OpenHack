@@ -4,12 +4,17 @@ Session management for vulnerability scanning.
 
 import os
 import signal
+import subprocess
 import threading
 import time
 from typing import Any, Optional
 from uuid import uuid4
 from enum import Enum
 from dataclasses import dataclass, field
+from pathlib import Path
+from contextvars import ContextVar
+
+from .eventlog import EventJournal
 
 
 class SessionStatus(str, Enum):
@@ -17,6 +22,7 @@ class SessionStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -101,6 +107,12 @@ class TraceEntry:
     tool_name: Optional[str] = None
     tool_input: Optional[dict] = None
     tool_output: Optional[Any] = None
+    event_id: Optional[str] = None
+    sequence: Optional[int] = None
+    turn_id: Optional[str] = None
+    model_call_id: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    metadata: dict = field(default_factory=dict)
 
 
 class Session:
@@ -113,14 +125,20 @@ class Session:
         project_context: Optional[dict] = None,
         trace_id: Optional[str] = None,
         on_trace: Optional[Any] = None,
+        on_event: Optional[Any] = None,
+        event_log_path: Optional[str | Path] = None,
+        persist_events: bool = True,
+        parent_session_id: Optional[str] = None,
     ):
         self.id = scan_id or str(uuid4())
         self.trace_id = trace_id or (self.id[:8] if self.id else str(uuid4())[:8])
-        self.target_dir = target_dir
+        self.parent_session_id = parent_session_id
+        self.target_dir = str(Path(target_dir).resolve())
         self.project_context = project_context
-        self.status = SessionStatus.RUNNING
         self.created_at = time.time()
         self.updated_at = time.time()
+        self._status = SessionStatus.RUNNING
+        self.status_history: list[dict[str, Any]] = []
         self.current_agent: Optional[str] = None
         self.current_step: Optional[str] = None
         self.findings: list[Finding] = []
@@ -135,6 +153,22 @@ class Session:
         self.step_input_tokens: dict[str, int] = {}
         self.step_output_tokens: dict[str, int] = {}
         self._on_trace = on_trace
+        if event_log_path is None and persist_events:
+            event_log_path = (
+                Path.home() / ".openhack" / "scans" / f"{self.id}.events.jsonl"
+            )
+        self.journal = EventJournal(
+            self.id,
+            Path(event_log_path) if event_log_path else None,
+            on_event=on_event,
+        )
+        self.event_log_path = str(self.journal.path) if self.journal.path else None
+        # A scan swarm runs multiple agents concurrently. ContextVar keeps each
+        # coroutine's correlation ID independent instead of letting agents
+        # overwrite one shared ``current_turn_id``.
+        self._turn_context: ContextVar[Optional[str]] = ContextVar(
+            f"openhack_turn_{self.id}", default=None
+        )
         self._user_instructions: list[str] = []
         self._instructions_lock = threading.Lock()
         self._instructions_version: int = 0
@@ -152,6 +186,152 @@ class Session:
         # Lazily created on first access because Session may be instantiated
         # outside an event loop (e.g. in serialization tests).
         self._pause_event: Optional[Any] = None
+        self.record_event(
+            "session_started",
+            {
+                "trace_id": self.trace_id,
+                "parent_session_id": self.parent_session_id,
+                "target_dir": self.target_dir,
+                "pid": os.getpid(),
+                "execution": self._execution_snapshot(),
+                "repository": self._repository_snapshot(),
+            },
+            agent="system",
+        )
+        self._record_status(None, self._status, "session_created")
+
+    @property
+    def status(self) -> SessionStatus:
+        return self._status
+
+    @status.setter
+    def status(self, value: SessionStatus | str) -> None:
+        new_status = value if isinstance(value, SessionStatus) else SessionStatus(value)
+        old_status = getattr(self, "_status", None)
+        if old_status == new_status:
+            return
+        self._status = new_status
+        if hasattr(self, "journal"):
+            self._record_status(old_status, new_status, "assignment")
+
+    def transition_status(self, value: SessionStatus | str, reason: str) -> None:
+        new_status = value if isinstance(value, SessionStatus) else SessionStatus(value)
+        old_status = self._status
+        if old_status == new_status:
+            return
+        self._status = new_status
+        self._record_status(old_status, new_status, reason)
+
+    def _record_status(
+        self,
+        old_status: Optional[SessionStatus],
+        new_status: SessionStatus,
+        reason: str,
+    ) -> None:
+        transition = {
+            "from": old_status.value if old_status else None,
+            "to": new_status.value,
+            "reason": reason,
+            "timestamp": time.time(),
+        }
+        self.status_history.append(transition)
+        self.record_event("session_status_changed", transition, agent="system")
+
+    def _execution_snapshot(self) -> dict[str, Any]:
+        return {
+            "cwd": os.getcwd(),
+            "filesystem_access": "unrestricted",
+            "network_access": "enabled",
+            "python": os.sys.version.split()[0],
+        }
+
+    def _repository_snapshot(self) -> dict[str, Any]:
+        def git(*args: str) -> str:
+            try:
+                return subprocess.run(
+                    ["git", "-C", self.target_dir, *args],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                ).stdout.strip()
+            except Exception:
+                return ""
+
+        worktrees: list[dict[str, str]] = []
+        current: dict[str, str] = {}
+        for line in git("worktree", "list", "--porcelain").splitlines():
+            if not line:
+                if current:
+                    worktrees.append(current)
+                    current = {}
+                continue
+            key, _, value = line.partition(" ")
+            current[key] = value
+        if current:
+            worktrees.append(current)
+        return {
+            "root": git("rev-parse", "--show-toplevel"),
+            "head": git("rev-parse", "HEAD"),
+            "branch": git("branch", "--show-current"),
+            "status": git("status", "--short"),
+            "worktrees": worktrees,
+        }
+
+    @property
+    def events(self) -> list:
+        return self.journal.records
+
+    @property
+    def current_turn_id(self) -> Optional[str]:
+        return self._turn_context.get()
+
+    @current_turn_id.setter
+    def current_turn_id(self, value: Optional[str]) -> None:
+        self._turn_context.set(value)
+
+    def record_event(
+        self,
+        event_type: str,
+        data: Any = None,
+        *,
+        agent: str = "",
+        turn_id: Optional[str] = None,
+        model_call_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        parent_event_id: Optional[str] = None,
+        durable: bool = True,
+    ):
+        self.updated_at = time.time()
+        return self.journal.append(
+            event_type,
+            data,
+            agent=agent,
+            turn_id=turn_id or self.current_turn_id,
+            model_call_id=model_call_id,
+            tool_call_id=tool_call_id,
+            parent_event_id=parent_event_id,
+            durable=durable,
+        )
+
+    def start_turn(self, task: str, agent: str) -> str:
+        self.current_turn_id = str(uuid4())
+        self.record_event(
+            "turn_started",
+            {"task": task},
+            agent=agent,
+            turn_id=self.current_turn_id,
+        )
+        return self.current_turn_id
+
+    def finish_turn(self, outcome: str, data: Any = None, *, agent: str = "") -> None:
+        self.record_event(
+            "turn_finished",
+            {"outcome": outcome, "result": data},
+            agent=agent,
+            turn_id=self.current_turn_id,
+        )
+        self.current_turn_id = None
 
     def _ensure_pause_event(self) -> Any:
         if self._pause_event is None:
@@ -167,10 +347,13 @@ class Session:
     def pause(self) -> None:
         """Block agent loops at their next safe checkpoint."""
         self._ensure_pause_event().clear()
+        self.transition_status(SessionStatus.PAUSED, "user_pause")
 
     def resume(self) -> None:
         """Unblock paused agent loops."""
         self._ensure_pause_event().set()
+        self.cancelled = False
+        self.transition_status(SessionStatus.RUNNING, "user_resume")
 
     async def wait_if_paused(self) -> None:
         """If the session is paused, await until resumed. No-op when not paused."""
@@ -224,6 +407,12 @@ class Session:
         a tool is currently blocked on so the stop is immediate.
         """
         self.cancelled = True
+        self.transition_status(SessionStatus.CANCELLED, "user_interrupt")
+        self.record_event(
+            "session_cancel_requested",
+            {"active_processes": len(self._active_procs)},
+            agent="user",
+        )
         if self._pause_event is not None:
             self._pause_event.set()
         self.kill_active_processes()
@@ -265,7 +454,25 @@ class Session:
         tool_name: Optional[str] = None,
         tool_input: Optional[dict] = None,
         tool_output: Optional[Any] = None,
+        turn_id: Optional[str] = None,
+        model_call_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> TraceEntry:
+        event = self.record_event(
+            f"trace.{event_type}",
+            {
+                "content": content,
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_output": tool_output,
+                "metadata": metadata or {},
+            },
+            agent=agent,
+            turn_id=turn_id,
+            model_call_id=model_call_id,
+            tool_call_id=tool_call_id,
+        )
         entry = TraceEntry(
             timestamp=time.time(),
             agent=agent,
@@ -274,6 +481,12 @@ class Session:
             tool_name=tool_name,
             tool_input=tool_input,
             tool_output=tool_output,
+            event_id=event.event_id,
+            sequence=event.sequence,
+            turn_id=turn_id or self.current_turn_id,
+            model_call_id=model_call_id,
+            tool_call_id=tool_call_id,
+            metadata=metadata or {},
         )
         self.trace.append(entry)
         self.updated_at = time.time()

@@ -59,6 +59,9 @@ from openhack import __version__ as OPENHACK_VERSION
 from openhack.agents.coordinator import CoordinatorAgent
 from openhack.agents.llm import LLMClient, Message, LLMResponse
 from openhack.agents.session import Session, SessionStatus, Finding, TraceEntry
+from openhack.agents.eventlog import redact
+
+logger = logging.getLogger(__name__)
 from openhack.config import (
     settings,
     save_user_config,
@@ -718,6 +721,10 @@ class ScanState:
 
         if etype == "tool_call":
             tool = entry.tool_name or "tool"
+            # finish_task is an internal lifecycle signal, not an operator
+            # action. Keep it in the durable event journal, never in chat.
+            if tool == "finish_task":
+                return
             args = entry.tool_input or {}
             detail = _short_tool_label(tool, args)
             self.upsert_agent(agent, _STATUS_WORKING, detail)
@@ -745,6 +752,8 @@ class ScanState:
             return
 
         if etype == "tool_result":
+            if entry.tool_name == "finish_task":
+                return
             row = self.agents.get(agent)
             if row and row.status[0] == "▸":
                 row.status = _STATUS_RUNNING
@@ -3910,6 +3919,12 @@ class OpenHackApp:
                     tool_name=ed.get("tool_name"),
                     tool_input=ed.get("tool_input"),
                     tool_output=ed.get("tool_output"),
+                    event_id=ed.get("event_id"),
+                    sequence=ed.get("sequence"),
+                    turn_id=ed.get("turn_id"),
+                    model_call_id=ed.get("model_call_id"),
+                    tool_call_id=ed.get("tool_call_id"),
+                    metadata=ed.get("metadata") or {},
                 )
                 if first_ts is None and entry.timestamp > 0:
                     first_ts = entry.timestamp
@@ -3955,6 +3970,7 @@ class OpenHackApp:
         session.total_tokens = int(cost.get("total_tokens") or 0)
         session.total_input_tokens = int(cost.get("total_input_tokens") or 0)
         session.total_output_tokens = int(cost.get("total_output_tokens") or 0)
+        session.status_history = list(data.get("status_history") or session.status_history)
         self.session = session
         # Bubble any new report_finding calls into the ScanState (as _run_agent does).
         _orig_add = session.add_finding
@@ -3967,8 +3983,11 @@ class OpenHackApp:
         tools = ToolRegistry(target_dir=Path(target), include_agent_tools=True,
                              session=session, shells=self.shells)
         llm = LLMClient(
-            model=self.model, temperature=0.0, max_tokens=8192,
-            provider=self.provider, prompt_cache_key=session.id,
+            model=data.get("model") or self.model,
+            temperature=0.0,
+            max_tokens=8192,
+            provider=data.get("provider") or self.provider,
+            prompt_cache_key=session.id,
         )
         agent = InteractiveAgent(llm, tools, session)
         agent.stream_callback = self._on_agent_stream
@@ -3976,8 +3995,31 @@ class OpenHackApp:
         # Seed the agent's message history from the saved trace so a follow-up
         # continues with full context (not a cold start). Setting _system_prompt
         # is what makes continue_run resume rather than fall back to run().
-        agent._system_prompt = agent.get_system_prompt({"target_dir": target})
-        agent.messages = self._messages_from_trace(data.get("trace") or [])
+        journal_messages, journal_prompt = self._messages_from_event_journal(
+            data, sid
+        )
+        agent._system_prompt = (
+            data.get("system_prompt")
+            or journal_prompt
+            or agent.get_system_prompt({"target_dir": target})
+        )
+        saved_messages = data.get("message_history") or []
+        if saved_messages:
+            agent.messages = [
+                Message(
+                    role=m.get("role", "user"),
+                    content=m.get("content"),
+                    tool_calls=m.get("tool_calls"),
+                    tool_call_id=m.get("tool_call_id"),
+                    name=m.get("name"),
+                )
+                for m in saved_messages
+                if isinstance(m, dict) and m.get("role")
+            ]
+        elif journal_messages:
+            agent.messages = journal_messages
+        else:
+            agent.messages = self._messages_from_trace(data.get("trace") or [])
         self.agent = agent
         self.is_agent_session = True
         self.mode = "scanning"
@@ -4010,6 +4052,8 @@ class OpenHackApp:
                 pending.append(content.strip())
             elif et == "tool_call":
                 name = ed.get("tool_name") or "tool"
+                if name == "finish_task":
+                    continue
                 inp = ed.get("tool_input") or {}
                 hint = ""
                 if isinstance(inp, dict):
@@ -4020,6 +4064,8 @@ class OpenHackApp:
                             break
                 pending.append(f"[ran {name} {hint}]".rstrip())
             elif et == "tool_result":
+                if ed.get("tool_name") == "finish_task":
+                    continue
                 out = ed.get("tool_output")
                 summ = ""
                 if isinstance(out, dict):
@@ -4038,6 +4084,48 @@ class OpenHackApp:
         while msgs and msgs[0].role != "user":
             msgs.pop(0)
         return msgs
+
+    @staticmethod
+    def _messages_from_event_journal(
+        report: dict, sid: str
+    ) -> tuple[list[Message], Optional[str]]:
+        """Recover exact messages/config even if the process died before report write."""
+        configured = report.get("event_log_path")
+        path = (
+            Path(configured)
+            if configured
+            else Path.home() / ".openhack" / "scans" / f"{sid}.events.jsonl"
+        )
+        if not path.exists():
+            return [], None
+        messages: list[Message] = []
+        system_prompt: Optional[str] = None
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fp:
+                for line in fp:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("event_type") == "agent_configuration":
+                        candidate = (event.get("data") or {}).get("system_prompt")
+                        if isinstance(candidate, str) and candidate:
+                            system_prompt = candidate
+                    if event.get("event_type") != "message_appended":
+                        continue
+                    message = (event.get("data") or {}).get("message") or {}
+                    if not isinstance(message, dict) or not message.get("role"):
+                        continue
+                    messages.append(Message(
+                        role=message["role"],
+                        content=message.get("content"),
+                        tool_calls=message.get("tool_calls"),
+                        tool_call_id=message.get("tool_call_id"),
+                        name=message.get("name"),
+                    ))
+        except OSError:
+            return [], system_prompt
+        return messages, system_prompt
 
     def _cmd_cost(self) -> None:
         sess = self.last_session or self.session
@@ -5046,6 +5134,13 @@ class OpenHackApp:
         (status='running') and at end (status='completed'/'cancelled'/'failed').
         """
         try:
+            if status in {"running", "completed", "cancelled", "failed", "paused"}:
+                session.transition_status(status, "report_status")
+            session.record_event(
+                "report_write_started",
+                {"status": status, "target_dir": target_dir},
+                agent="system",
+            )
             report_dir = Path.home() / ".openhack" / "scans"
             report_dir.mkdir(parents=True, exist_ok=True)
             report_path = report_dir / f"{session.id}.json"
@@ -5053,19 +5148,20 @@ class OpenHackApp:
 
             # Serialize trace entries so the Trace tab can re-render later.
             def _trace_dict(e: TraceEntry) -> dict:
-                tool_output = e.tool_output
-                # Tool outputs can be enormous; cap so reports stay sane.
-                if tool_output is not None and not isinstance(tool_output, (dict, list, int, float, bool)):
-                    s = str(tool_output)
-                    tool_output = s if len(s) <= 2000 else s[:2000] + "…"
                 return {
                     "timestamp": e.timestamp,
                     "agent": e.agent,
                     "event_type": e.event_type,
-                    "content": e.content,
+                    "content": redact(e.content),
                     "tool_name": e.tool_name,
-                    "tool_input": e.tool_input,
-                    "tool_output": tool_output,
+                    "tool_input": redact(e.tool_input),
+                    "tool_output": redact(e.tool_output),
+                    "event_id": e.event_id,
+                    "sequence": e.sequence,
+                    "turn_id": e.turn_id,
+                    "model_call_id": e.model_call_id,
+                    "tool_call_id": e.tool_call_id,
+                    "metadata": redact(e.metadata),
                 }
 
             # First user message doubles as a human-readable title for /sessions.
@@ -5073,7 +5169,8 @@ class OpenHackApp:
                 (str(e.content) for e in session.trace if e.event_type == "user"), ""
             )[:140]
             report = {
-                "version": 2,
+                "version": 3,
+                "event_schema_version": 1,
                 "kind": "agent" if self.is_agent_session else "scan",
                 "title": title,
                 "scan_id": session.id,
@@ -5081,20 +5178,63 @@ class OpenHackApp:
                 "provider": self.provider,
                 "model": self.model,
                 "status": status or session.status.value,
+                "status_history": session.status_history,
+                "parent_session_id": session.parent_session_id,
+                "trace_id": session.trace_id,
+                "event_log_path": session.event_log_path,
+                "event_count": len(session.events),
+                "event_log_error": session.journal.last_error,
                 "pid": os.getpid(),
                 "started_at": datetime.fromtimestamp(session.created_at).isoformat(),
                 "duration_seconds": round(elapsed, 2),
                 "cost": session.get_cost_breakdown(),
                 "findings": [f.to_dict() for f in session.findings],
                 "trace": [_trace_dict(e) for e in session.trace],
+                "message_history": [
+                    {
+                        k: v
+                        for k, v in redact(m.to_dict()).items()
+                        if k != "reasoning_content"
+                    }
+                    for m in (
+                        self.agent.messages
+                        if self.agent is not None
+                        and getattr(self.agent, "session", None) is session
+                        else []
+                    )
+                ],
+                "system_prompt": (
+                    getattr(self.agent, "_system_prompt", None)
+                    if self.agent is not None
+                    and getattr(self.agent, "session", None) is session
+                    else None
+                ),
             }
             # Atomic write: temp file + rename to avoid corrupting on crash.
             tmp_path = report_path.with_suffix(".json.tmp")
             with open(tmp_path, "w") as fp:
                 json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
             os.replace(tmp_path, report_path)
-        except Exception:
-            pass
+            session.record_event(
+                "report_write_completed",
+                {
+                    "path": str(report_path),
+                    "status": report["status"],
+                    "bytes": report_path.stat().st_size,
+                },
+                agent="system",
+            )
+        except Exception as exc:
+            session.record_event(
+                "report_write_failed",
+                {
+                    "status": status,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                agent="system",
+            )
+            logger.warning("Failed to write session report", exc_info=True)
 
     async def _run_test_scan(self) -> None:
         import random

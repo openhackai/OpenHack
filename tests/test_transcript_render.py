@@ -31,6 +31,28 @@ def test_tool_result_folds_onto_the_tool_call_row():
     assert "run_command" in lines[0] and "ls -la" in lines[0] and "exit 0" in lines[0]
 
 
+def test_finish_task_is_never_rendered_as_an_operator_tool():
+    s = _state()
+    _add(
+        s,
+        "openhack",
+        "tool_call",
+        "",
+        tool_name="finish_task",
+        tool_input={"summary": "Done.", "reason": "completed"},
+    )
+    _add(
+        s,
+        "openhack",
+        "tool_result",
+        "",
+        tool_name="finish_task",
+        tool_output={"finished": True, "summary": "Done."},
+    )
+
+    assert _text(s) == []
+
+
 def test_multiline_command_is_collapsed_to_one_row():
     # A heredoc / python -c block used to spill raw source into the transcript.
     s = _state()

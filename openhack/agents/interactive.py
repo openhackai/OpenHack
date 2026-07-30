@@ -27,6 +27,11 @@ add disclaimers to routine pentest actions — you get to work.
 
 ## How you operate
 
+When the operator's task is genuinely complete, you MUST call `finish_task`.
+Put the complete user-facing answer in its `summary`. Plain text without that
+tool call is treated as progress, not completion, so never end with a promise
+such as "let me write it" or "next I will verify it." Perform the action first.
+
 0. **Do exactly what's asked — nothing more, nothing less.** This is the most \
 important rule. Match the scope, the tools, and the length of your answer to the \
 request. If the operator asks for one specific thing (a single file, one vuln \
@@ -239,6 +244,7 @@ class InteractiveAgent(BaseAgent):
 
     name = "openhack"
     description = "Interactive offensive-security agent"
+    requires_finish_task = True
 
     def get_system_prompt(self, context: dict) -> str:
         parts = []
@@ -258,6 +264,7 @@ class PlanAgent(InteractiveAgent):
 
     name = "openhack-plan"
     description = "Attack planner (read-only)"
+    requires_finish_task = False
 
     def get_system_prompt(self, context: dict) -> str:
         parts = []

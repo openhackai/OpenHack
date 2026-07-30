@@ -17,6 +17,7 @@ from .agents.coordinator import CoordinatorAgent
 from .agents.checkpoint import CheckpointManager
 from .agents.llm import LLMClient
 from .agents.session import Session, Finding, TraceEntry
+from .agents.eventlog import redact
 from .tools.registry import ToolRegistry
 from .config import reload_settings, settings
 from .prompts.project_context import build_project_context
@@ -44,27 +45,64 @@ def _write_report(
     status: str,
     start_time: float,
 ) -> Path:
+    if status in {"running", "completed", "cancelled", "failed", "paused"}:
+        session.transition_status(status, "headless_report_status")
+    session.record_event(
+        "report_write_started",
+        {"status": status, "target_dir": target_dir, "mode": "headless"},
+        agent="system",
+    )
     SCANS_DIR.mkdir(parents=True, exist_ok=True)
     report_path = SCANS_DIR / f"{session.id}.json"
     elapsed = time.time() - start_time
 
     report = {
-        "version": 2,
+        "version": 3,
+        "event_schema_version": 1,
         "scan_id": session.id,
         "target_dir": target_dir,
         "provider": settings.llm_provider,
         "status": status,
+        "status_history": session.status_history,
+        "parent_session_id": session.parent_session_id,
+        "trace_id": session.trace_id,
+        "event_log_path": session.event_log_path,
+        "event_count": len(session.events),
+        "event_log_error": session.journal.last_error,
         "pid": os.getpid(),
         "started_at": datetime.fromtimestamp(start_time).isoformat(),
         "duration_seconds": round(elapsed, 2),
         "cost": session.get_cost_breakdown(),
         "findings": [f.to_dict() for f in session.findings],
+        "trace": [
+            {
+                "timestamp": e.timestamp,
+                "agent": e.agent,
+                "event_type": e.event_type,
+                "content": redact(e.content),
+                "tool_name": e.tool_name,
+                "tool_input": redact(e.tool_input),
+                "tool_output": redact(e.tool_output),
+                "event_id": e.event_id,
+                "sequence": e.sequence,
+                "turn_id": e.turn_id,
+                "model_call_id": e.model_call_id,
+                "tool_call_id": e.tool_call_id,
+                "metadata": redact(e.metadata),
+            }
+            for e in session.trace
+        ],
     }
 
     tmp_path = report_path.with_suffix(".json.tmp")
     with open(tmp_path, "w") as fp:
         json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
     tmp_path.rename(report_path)
+    session.record_event(
+        "report_write_completed",
+        {"path": str(report_path), "status": status, "bytes": report_path.stat().st_size},
+        agent="system",
+    )
 
     return report_path
 
