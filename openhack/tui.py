@@ -16,6 +16,7 @@ layout re-renders on every update.
 import asyncio
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -125,6 +126,63 @@ _WORDMARK = "OpenHack"
 # A smooth single-cell braille spinner shown while the agent/scan is working.
 # Ten frames of a rotating dot — clean, legible, and renders in any terminal.
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+# Codex-style status shimmer.  The sweep travels through the label and the
+# surrounding padding every two seconds, so it enters and leaves cleanly
+# instead of jumping from the last character back to the first.
+_SHIMMER_PADDING = 10
+_SHIMMER_PERIOD_SECONDS = 2.0
+_SHIMMER_HALF_WIDTH = 5.0
+
+
+def _rgb(hex_color: str) -> tuple[int, int, int]:
+    value = hex_color.removeprefix("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _blend_rgb(
+    highlight: tuple[int, int, int],
+    base: tuple[int, int, int],
+    intensity: float,
+) -> tuple[int, int, int]:
+    alpha = max(0.0, min(1.0, intensity))
+    return tuple(
+        int(fg * alpha + bg * (1.0 - alpha))
+        for fg, bg in zip(highlight, base)
+    )
+
+
+def _shimmer_fragments(
+    text: str,
+    *,
+    elapsed: Optional[float] = None,
+) -> list[tuple[str, str]]:
+    """Render ``text`` as a smooth, time-based per-character highlight."""
+    if not text:
+        return []
+
+    elapsed = time.monotonic() if elapsed is None else elapsed
+    period = len(text) + _SHIMMER_PADDING * 2
+    position = (
+        (elapsed % _SHIMMER_PERIOD_SECONDS)
+        / _SHIMMER_PERIOD_SECONDS
+        * period
+    )
+    base = _rgb(OH_MUTED)
+    highlight = _rgb(OH_TEXT)
+    fragments: list[tuple[str, str]] = []
+
+    for index, char in enumerate(text):
+        distance = abs(index + _SHIMMER_PADDING - position)
+        if distance <= _SHIMMER_HALF_WIDTH:
+            x = math.pi * distance / _SHIMMER_HALF_WIDTH
+            intensity = 0.5 * (1.0 + math.cos(x))
+        else:
+            intensity = 0.0
+        red, green, blue = _blend_rgb(highlight, base, intensity * 0.9)
+        fragments.append((f"bold fg:#{red:02x}{green:02x}{blue:02x}", char))
+
+    return fragments
 
 
 def _abbrev_home(path: str) -> str:
@@ -2861,8 +2919,8 @@ class OpenHackApp:
                 elapsed = self.scan.elapsed_str() if self.scan else ""
                 out: list[tuple[str, str]] = [
                     ("class:spinner", f"  {frame}  "),
-                    ("class:status.working", self._processing_verb()),
                 ]
+                out.extend(_shimmer_fragments(self._processing_verb()))
                 if elapsed:
                     out.append(("class:spinner.dim", f"  {elapsed}"))
                 # An upstream retry/backoff, so a long wait reads as "retrying"
@@ -2958,9 +3016,9 @@ class OpenHackApp:
             ConditionalContainer(tab_bar_window, filter=tabs_visible),
             main,
             Window(height=1, style="class:body"),
+            bottom_status,
             self._input_box(D(weight=1)),
             Window(height=1, style="class:body"),
-            bottom_status,
             keybar,
             Window(height=1, style="class:body"),
         ], style="class:body")
@@ -5172,19 +5230,21 @@ class OpenHackApp:
     # ── Run ───────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        # Animate the spinner (~12fps) and tick the elapsed clock while a scan
-        # is running. The 80ms cadence drives the knight-rider sweep; the clock
-        # only needs whole seconds, tracked via a frame counter.
+        # Animate the Codex-style shimmer at ~31fps and tick the elapsed clock
+        # while a scan is running. The spinner advances every other frame so it
+        # remains readable at the higher shimmer refresh rate.
         async def _ticker():
             frame = 0
             while True:
-                await asyncio.sleep(0.08)
+                await asyncio.sleep(0.032)
                 if self.mode == "scanning" and self.scan is not None and self.scan.end_time is None:
-                    self._spin_idx = (self._spin_idx + 1) % len(_SPINNER_FRAMES)
+                    frame += 1
+                    if frame % 2 == 0:
+                        self._spin_idx = (self._spin_idx + 1) % len(_SPINNER_FRAMES)
                     self._invalidate()
                 elif self.mode == "scanning":
                     frame += 1
-                    if frame % 12 == 0:
+                    if frame % 31 == 0:
                         self._invalidate()
                 elif self.mode == "shells":
                     # Keep the /bashes tail live while a background shell runs,
