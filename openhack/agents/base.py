@@ -105,6 +105,9 @@ class BaseAgent(ABC):
         reasoning = logged_message.pop("reasoning_content", None)
         if reasoning:
             logged_message["reasoning_characters"] = len(reasoning)
+        response_items = logged_message.pop("response_items", None)
+        if response_items:
+            logged_message["response_item_count"] = len(response_items)
         self.session.record_event(
             "message_appended",
             {
@@ -429,7 +432,11 @@ class BaseAgent(ABC):
                 )
 
             if not response.tool_calls:
-                assistant_msg = Message(role="assistant", content=response.content)
+                assistant_msg = Message(
+                    role="assistant",
+                    content=response.content,
+                    response_items=response.response_items,
+                )
                 self._append_message(assistant_msg, source="model_text_response")
                 if self.requires_finish_task:
                     guarded_text_completion = (response.content or "").strip() or None
@@ -493,6 +500,7 @@ class BaseAgent(ABC):
             assistant_msg = Message(
                 role="assistant",
                 content=response.content,
+                response_items=response.response_items,
                 tool_calls=[
                     {
                         "id": tc.id,

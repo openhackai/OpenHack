@@ -10,6 +10,7 @@ import urllib.request
 from uuid import uuid4
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import openai
 
@@ -78,6 +79,9 @@ class Message:
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
     reasoning_content: Optional[str] = None
+    # Opaque Responses API output items. Required to continue reasoning/tool
+    # turns when store=false; ignored by Chat Completions providers.
+    response_items: Optional[list[dict]] = None
 
     def to_dict(self) -> dict:
         d = {"role": self.role}
@@ -91,6 +95,8 @@ class Message:
             d["name"] = self.name
         if self.reasoning_content is not None:
             d["reasoning_content"] = self.reasoning_content
+        if self.response_items is not None:
+            d["response_items"] = self.response_items
         return d
 
 
@@ -119,6 +125,7 @@ class LLMResponse:
     usage: Optional[dict] = None
     cost: float = 0.0
     reasoning_content: Optional[str] = None
+    response_items: list[dict] = field(default_factory=list)
     finish_reason: Optional[str] = None
     response_id: Optional[str] = None
     returned_model: Optional[str] = None
@@ -211,11 +218,17 @@ class LLMClient:
                     f"is not set.\nExport your key, e.g.:  export {r.missing_key_env}=...\n"
                     f"Or switch back to OpenHack:  /config llm_provider openhack"
                 )
+            default_headers = None
+            if r.auth_type == "oauth":
+                default_headers = {"originator": "openhack"}
+                if r.account_id:
+                    default_headers["ChatGPT-Account-Id"] = r.account_id
             self.client = openai.AsyncOpenAI(
                 api_key=r.api_key,
                 base_url=r.base_url,
                 timeout=settings.openhack_read_timeout,
                 max_retries=0,
+                default_headers=default_headers,
             )
             return
 
@@ -280,6 +293,276 @@ class LLMClient:
                 openai_messages.append({"role": msg.role, "content": msg.content or ""})
 
         return openai_messages
+
+    def _convert_messages_to_responses(
+        self, messages: list[Message]
+    ) -> list[dict[str, Any]]:
+        """Translate Chat Completions history to Responses input items."""
+        result: list[dict[str, Any]] = []
+        for message in messages:
+            if message.role == "system":
+                # System content is folded into `instructions` by the caller.
+                continue
+            if message.role == "tool":
+                result.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": message.tool_call_id or "",
+                        "output": message.content or "",
+                    }
+                )
+                continue
+            if message.role == "assistant" and message.response_items:
+                result.extend(message.response_items)
+                continue
+            if message.role == "assistant" and message.tool_calls:
+                if message.content:
+                    result.append({"role": "assistant", "content": message.content})
+                for call in message.tool_calls:
+                    fn = call.get("function") or {}
+                    result.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call.get("id") or "",
+                            "name": fn.get("name") or "",
+                            "arguments": fn.get("arguments") or "{}",
+                        }
+                    )
+                continue
+            result.append(
+                {
+                    "role": "assistant" if message.role == "assistant" else "user",
+                    "content": message.content or "",
+                }
+            )
+        return result
+
+    def _convert_tools_to_responses_format(self, tools: list[dict]) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get(
+                    "parameters", {"type": "object", "properties": {}}
+                ),
+            }
+            for tool in tools
+        ]
+
+    async def _ensure_openai_subscription_client(self) -> None:
+        """Refresh a ChatGPT OAuth token and rebuild the SDK client if needed."""
+        if not self._resolved or self._resolved.auth_type != "oauth":
+            return
+        from openhack.provider_auth import (
+            OPENAI_CODEX_BASE_URL,
+            get_openai_oauth,
+            refresh_openai_credential,
+        )
+
+        credential = get_openai_oauth()
+        if credential is None:
+            raise ValueError("OpenAI subscription is disconnected. Run /connect openai.")
+        refreshed = await asyncio.to_thread(refresh_openai_credential, credential)
+        self._resolved.api_key = refreshed.access
+        self._resolved.account_id = refreshed.account_id
+        headers = {"originator": "openhack"}
+        if refreshed.account_id:
+            headers["ChatGPT-Account-Id"] = refreshed.account_id
+        self.client = openai.AsyncOpenAI(
+            api_key=refreshed.access,
+            base_url=OPENAI_CODEX_BASE_URL,
+            timeout=settings.openhack_read_timeout,
+            max_retries=0,
+            default_headers=headers,
+        )
+
+    async def _responses_as_chat_stream(
+        self,
+        messages: list[Message],
+        tools: Optional[list[dict]],
+        system: Optional[str],
+        tool_choice: Optional[str],
+    ):
+        """Expose a Responses API stream through the existing chat-chunk parser."""
+        await self._ensure_openai_subscription_client()
+        instructions = "\n\n".join(
+            part
+            for part in [
+                system or "",
+                *[
+                    message.content or ""
+                    for message in messages
+                    if message.role == "system"
+                ],
+            ]
+            if part
+        )
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "input": self._convert_messages_to_responses(messages),
+            "max_output_tokens": self.max_tokens,
+            "stream": True,
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+        }
+        if instructions:
+            kwargs["instructions"] = instructions
+        if tools:
+            kwargs["tools"] = self._convert_tools_to_responses_format(tools)
+            kwargs["tool_choice"] = tool_choice or "auto"
+
+        response_stream = await self.client.responses.create(**kwargs)
+        self._last_response_items: list[dict[str, Any]] = []
+        call_indexes: dict[str, int] = {}
+        call_meta: dict[int, tuple[str, str]] = {}
+        next_index = 0
+        response_id = None
+        returned_model = None
+
+        async for event in response_stream:
+            event_type = getattr(event, "type", "")
+            response = getattr(event, "response", None)
+            if response is not None:
+                response_id = getattr(response, "id", None) or response_id
+                returned_model = getattr(response, "model", None) or returned_model
+
+            if event_type == "response.output_text.delta":
+                yield SimpleNamespace(
+                    id=response_id,
+                    model=returned_model,
+                    usage=None,
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason=None,
+                            delta=SimpleNamespace(
+                                content=getattr(event, "delta", "") or "",
+                                reasoning_content=None,
+                                tool_calls=None,
+                            ),
+                        )
+                    ],
+                )
+                continue
+
+            if event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", "") == "function_call":
+                    key = getattr(item, "id", None) or getattr(item, "call_id", None) or str(next_index)
+                    index = int(getattr(event, "output_index", next_index))
+                    next_index = max(next_index, index + 1)
+                    call_indexes[str(key)] = index
+                    call_meta[index] = (
+                        getattr(item, "call_id", "") or "",
+                        getattr(item, "name", "") or "",
+                    )
+                    call_id, name = call_meta[index]
+                    yield SimpleNamespace(
+                        id=response_id,
+                        model=returned_model,
+                        usage=None,
+                        choices=[
+                            SimpleNamespace(
+                                finish_reason=None,
+                                delta=SimpleNamespace(
+                                    content=None,
+                                    reasoning_content=None,
+                                    tool_calls=[
+                                        SimpleNamespace(
+                                            index=index,
+                                            id=call_id,
+                                            function=SimpleNamespace(
+                                                name=name, arguments=None
+                                            ),
+                                        )
+                                    ],
+                                ),
+                            )
+                        ],
+                    )
+                continue
+
+            if event_type == "response.output_item.done":
+                item = getattr(event, "item", None)
+                if item is not None:
+                    if hasattr(item, "model_dump"):
+                        dumped = item.model_dump(exclude_none=True)
+                    elif isinstance(item, dict):
+                        dumped = dict(item)
+                    else:
+                        dumped = {
+                            key: value
+                            for key, value in vars(item).items()
+                            if value is not None
+                        }
+                    if isinstance(dumped, dict):
+                        self._last_response_items.append(dumped)
+                continue
+
+            if event_type == "response.function_call_arguments.delta":
+                key = str(
+                    getattr(event, "item_id", None)
+                    or getattr(event, "call_id", None)
+                    or ""
+                )
+                index = call_indexes.get(
+                    key, int(getattr(event, "output_index", next_index))
+                )
+                if index not in call_meta:
+                    call_meta[index] = (
+                        getattr(event, "call_id", "") or "",
+                        getattr(event, "name", "") or "",
+                    )
+                call_id, name = call_meta[index]
+                yield SimpleNamespace(
+                    id=response_id,
+                    model=returned_model,
+                    usage=None,
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason=None,
+                            delta=SimpleNamespace(
+                                content=None,
+                                reasoning_content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=index,
+                                        id=call_id,
+                                        function=SimpleNamespace(
+                                            name=name,
+                                            arguments=getattr(event, "delta", "") or "",
+                                        ),
+                                    )
+                                ],
+                            ),
+                        )
+                    ],
+                )
+                continue
+
+            if event_type in ("response.completed", "response.incomplete"):
+                usage = getattr(response, "usage", None)
+                input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+                output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+                finish = "length" if event_type == "response.incomplete" else "stop"
+                yield SimpleNamespace(
+                    id=response_id,
+                    model=returned_model,
+                    usage=SimpleNamespace(
+                        prompt_tokens=input_tokens,
+                        completion_tokens=output_tokens,
+                    ),
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason=finish,
+                            delta=SimpleNamespace(
+                                content=None,
+                                reasoning_content=None,
+                                tool_calls=None,
+                            ),
+                        )
+                    ],
+                )
 
     async def chat(
         self,
@@ -431,7 +714,12 @@ class LLMClient:
                     )
                     await asyncio.sleep(wait_time)
 
-                stream = await self.client.chat.completions.create(**kwargs)
+                if self._resolved and self._resolved.auth_type == "oauth":
+                    stream = self._responses_as_chat_stream(
+                        messages, tools, system, tool_choice
+                    )
+                else:
+                    stream = await self.client.chat.completions.create(**kwargs)
                 self._event(
                     "model_stream_opened",
                     {"attempt": attempt + 1},
@@ -631,6 +919,11 @@ class LLMClient:
                     latency_seconds=time.monotonic() - call_started,
                     time_to_first_token_seconds=(
                         first_token_at - call_started if first_token_at else None
+                    ),
+                    response_items=(
+                        list(getattr(self, "_last_response_items", []))
+                        if self._resolved and self._resolved.auth_type == "oauth"
+                        else []
                     ),
                 )
                 llm_response.reasoning_content = reasoning_content

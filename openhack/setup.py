@@ -486,7 +486,11 @@ def needs_first_time_setup() -> bool:
     has_provider = cfg.get("provider")
     if not has_provider:
         return True
-    # All providers now require an API key
+    if has_provider != "openhack":
+        from openhack import providers as provider_registry
+        resolved = provider_registry.resolve(str(has_provider))
+        return not resolved or bool(resolved.missing_key_env)
+    # The hosted provider keeps its token in the legacy config for compatibility.
     has_any_key = any(
         cfg.get(p["key_field"])
         for p in PROVIDERS
@@ -502,3 +506,122 @@ def run_first_time_setup() -> bool:
 async def run_setup_command() -> bool:
     """Run the /setup configuration wizard (async, for use inside TUI). Returns True if config was saved."""
     return await _run_wizard(is_first_time=False)
+
+
+async def run_provider_connect(
+    provider_id: Optional[str] = None,
+    auth_method: Optional[str] = None,
+) -> bool:
+    """Connect a BYOK/subscription provider from inside the scanner.
+
+    This is deliberately a suspended terminal flow: API keys are entered with
+    password masking and never appear in the transcript or slash-command
+    history.
+    """
+    from openhack import providers as provider_registry
+    from openhack.agents.llm import fetch_available_models
+    from openhack.model_catalog import merge_models
+    from openhack.provider_auth import (
+        ProviderAuthError,
+        get_credential,
+        openai_browser_login,
+        openai_device_login,
+        set_api_key,
+    )
+
+    if not provider_id:
+        specs = provider_registry.list_provider_specs(refresh=True)
+        items = [
+            (spec.name, spec.label, spec.hint or spec.api_key_env)
+            for spec in specs
+        ]
+        idx = await _select_menu_async("Connect a provider", items)
+        if idx < 0:
+            return False
+        provider_id = items[idx][0]
+
+    provider_id = provider_id.lower().strip()
+    if provider_id == "openhack":
+        return await run_setup_command()
+    spec = provider_registry.get_spec(provider_id)
+    if spec is None:
+        _html(f"  {YELLOW}⚠{EYELLOW} Unknown provider: {_esc(provider_id)}")
+        return False
+
+    if provider_id == "openai" and not auth_method:
+        idx = await _select_menu_async(
+            "Connect OpenAI",
+            [
+                ("browser", "ChatGPT Plus/Pro (browser)", "Use your ChatGPT subscription"),
+                ("device", "ChatGPT Plus/Pro (headless)", "Open a URL and enter a code"),
+                ("api", "OpenAI API key", "Billed through the API platform"),
+            ],
+        )
+        if idx < 0:
+            return False
+        auth_method = ("browser", "device", "api")[idx]
+    auth_method = (auth_method or "api").lower()
+
+    try:
+        if provider_id == "openai" and auth_method == "browser":
+            _html("")
+            _html(f"  {B}Opening OpenAI login in your browser…{EB}")
+            _html(f"  {DIM}Waiting for the secure localhost callback on port 1455.{EDIM}")
+            await asyncio.to_thread(openai_browser_login)
+        elif provider_id == "openai" and auth_method == "device":
+            def show_code(url: str, code: str) -> None:
+                _html("")
+                _html(f"  Open {_esc(url)}")
+                _html(f"  Enter code: {B}{_esc(code)}{EB}")
+                _html(f"  {DIM}Waiting for authorization…{EDIM}")
+
+            await asyncio.to_thread(openai_device_login, on_code=show_code)
+        else:
+            existing = get_credential(provider_id) or {}
+            current = str(existing.get("key") or "")
+            _html("")
+            _html(f"  {B}API key for {_esc(spec.label)}{EB}")
+            _html(f"  {DIM}Environment variable: {_esc(spec.api_key_env)}{EDIM}")
+            if current:
+                _html(f"  {DIM}Current: {_esc(_mask_key(current))}{EDIM}")
+            key = (await _input_async("  API Key: ", is_password=True)).strip()
+            if not key:
+                key = current or os.environ.get(spec.api_key_env, "")
+            if not key:
+                _html(f"  {YELLOW}⚠{EYELLOW} No API key entered.")
+                return False
+            set_api_key(provider_id, key)
+    except ProviderAuthError as exc:
+        _html(f"  {YELLOW}⚠{EYELLOW} Connection failed: {_esc(str(exc))}")
+        return False
+
+    resolved = provider_registry.resolve(provider_id)
+    if resolved is None:
+        return False
+    live = None
+    if resolved.auth_type != "oauth":
+        live = fetch_available_models(
+            api_key=resolved.api_key,
+            base_url=resolved.base_url,
+            timeout=5,
+        )
+    models = merge_models(provider_id, live)
+    model_id = resolved.model
+    if models:
+        items = [
+            (model["id"], model["label"], model.get("desc", ""))
+            for model in models
+        ]
+        default_idx = next(
+            (i for i, item in enumerate(items) if item[0] == model_id), 0
+        )
+        idx = await _select_menu_async("Choose a model", items, default_idx)
+        if idx >= 0:
+            model_id = items[idx][0]
+
+    save_user_config({"provider": provider_id, "model": model_id})
+    reload_settings()
+    _html("")
+    _html(f"  {GREEN}✓{EGREEN} Connected {_esc(spec.label)} · {_esc(model_id)}")
+    _html("")
+    return True

@@ -58,6 +58,47 @@ def test_ollama_is_keyless(monkeypatch):
     assert r.base_url.startswith("http://localhost:11434")
 
 
+def test_saved_api_key_is_used_without_environment(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {"type": "api", "key": "saved"} if name == "openrouter" else None,
+    )
+    resolved = providers.resolve("openrouter")
+    assert resolved.api_key == "saved"
+    assert resolved.missing_key_env is None
+
+
+def test_openai_oauth_resolves_to_codex_responses_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {
+            "type": "oauth",
+            "access": "access",
+            "refresh": "refresh",
+            "expires": 9999999999999,
+            "accountId": "account",
+        },
+    )
+    resolved = providers.resolve("openai")
+    assert resolved.auth_type == "oauth"
+    assert resolved.base_url == "https://chatgpt.com/backend-api/codex"
+    assert resolved.account_id == "account"
+    assert resolved.model == "gpt-5.6-sol"
+
+
+def test_provider_models_for_openai_oauth_match_subscription_catalog(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {"type": "oauth"},
+    )
+    ids = [model["id"] for model in providers.provider_models("openai")]
+    assert ids[:3] == ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+
+
 # --------------------------------------------------- LLMClient integration
 
 def test_llmclient_uses_provider_base_url(monkeypatch):

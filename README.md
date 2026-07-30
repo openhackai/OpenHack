@@ -90,6 +90,10 @@ For every confirmed finding you get: severity, CVSS score, file location, full d
 | `/verify browser` *(Beta)* | Launch a headless browser to verify client-side vulns (XSS, CSRF, etc.)                            |
 | `/login`                   | Re-login to your OpenHack account                                                                  |
 | `/setup`                   | Run the setup wizard again                                                                         |
+| `/provider`                | Browse and switch providers; catalog is synced from Models.dev                                     |
+| `/connect [provider]`      | Securely connect an API key or an OpenAI ChatGPT Plus/Pro subscription                             |
+| `/disconnect [provider]`   | Remove a provider's saved credentials                                                              |
+| `/model`                   | Browse the active provider's models; the established OpenHack models remain first                  |
 | `/config`                  | Show current config; `/config <key> <value>` to set                                                |
 | `/sidebar`                 | Show/hide the contextual right panel or Findings list (`Ctrl+B`)                                   |
 | `/cost`                    | Cost breakdown for the last scan                                                                   |
@@ -163,7 +167,23 @@ openhack --resume <session-id>
 
 ## Configuration
 
-Configuration is stored in `~/.openhack/config` (mode `0600` since it contains a bearer token) and persists across sessions.
+Preferences are stored in `~/.openhack/config`. Provider credentials are kept
+separately in `~/.openhack/auth.json`; both files use owner-only permissions.
+
+OpenHack follows OpenCode's provider workflow:
+
+```text
+/provider
+/connect openai          # choose ChatGPT Plus/Pro browser, headless, or API key
+/connect opencode        # OpenCode Zen
+/connect opencode-go     # OpenCode Go
+/model
+```
+
+The provider list and model metadata are synchronized from Models.dev and
+cached for one day. OpenHack, OpenCode Zen, and OpenCode Go also have bundled
+offline catalogs. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
+`gemma-4-31b` ranking stays at the top whenever those models are available.
 
 You can override at runtime via environment variables:
 
@@ -177,7 +197,12 @@ You can override at runtime via environment variables:
 
 ## Privacy
 
-OpenHack reads and processes your source code **locally** — prompts are built on your machine. Only LLM tokens (not raw source files) are forwarded to the OpenHack inference API. No source code is uploaded or retained.
+OpenHack reads and processes your source code **locally** — prompts are built
+on your machine. Model prompts are sent to the provider you select. With the
+hosted OpenHack provider they go through OpenHack Inference; with BYOK, Zen,
+Go, local, or OpenAI subscription connections they go directly to that
+provider. Review the selected provider's data policy before scanning sensitive
+code.
 
 ## Contributing
 

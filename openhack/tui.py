@@ -70,7 +70,7 @@ from openhack.config import (
     reload_settings,
     _PROVIDER_KEY_FIELDS,
 )
-from openhack.setup import run_setup_command
+from openhack.setup import run_provider_connect, run_setup_command
 from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
 from openhack.prompts.project_context import build_project_context
@@ -288,7 +288,9 @@ PROVIDER_DEFAULTS = {"openhack": "grok-4.5"}
 # US-headquartered providers, and Mistral (FR) is its sole OpenRouter provider,
 # so every request would 400 as an unknown model. Offering it in the picker
 # would just be a guaranteed failure.
-OPENHACK_MODELS = ["grok-4.5", "glm-5.2", "kimi-k2.5", "gemma-4-31b"]
+from openhack.model_catalog import OPENHACK_MODELS as _OPENHACK_MODEL_ROWS
+
+OPENHACK_MODELS = [row[0] for row in _OPENHACK_MODEL_ROWS]
 
 # Display label + one-line description per served model, for the /model picker.
 OPENHACK_MODEL_INFO = {
@@ -352,6 +354,8 @@ _SLASH_COMMANDS = [
     ("/sessions", "Browse and re-load past scan results"),
     ("/bashes", "Watch and kill background shells (started with !cmd &)"),
     ("/provider", "Switch LLM provider (openhack, openai, anthropic, …)"),
+    ("/connect", "Connect a provider or ChatGPT Plus/Pro subscription"),
+    ("/disconnect", "Remove saved credentials for a provider"),
     ("/model", "Set or show the model ID"),
     ("/config", "Show or set configuration"),
     ("/cost", "Show cost + tokens for the current session"),
@@ -1589,6 +1593,8 @@ class OpenHackApp:
         self.sessions_selected: int = 0
         self.model_index: list[dict] = []
         self.model_selected: int = 0
+        self.provider_index: list[dict] = []
+        self.provider_selected: int = 0
         self.viewing_target: str = ""  # header label when in "viewing" mode
         # Id of the report open in "viewing" mode — there is no live Session
         # then, so this is what keeps the bottom-right id honest.
@@ -1828,6 +1834,9 @@ class OpenHackApp:
         def _in_models() -> bool:
             return self.mode == "models"
 
+        def _in_providers() -> bool:
+            return self.mode == "providers"
+
         def _input_empty() -> bool:
             return not self.input_buffer.text
 
@@ -2027,6 +2036,29 @@ class OpenHackApp:
         def _m_esc(event):
             self._close_model_picker()
 
+        # Provider picker keybindings.
+        @kb.add("up", filter=Condition(lambda: _in_providers() and _input_empty()))
+        def _p_up(event):
+            if self.provider_index:
+                self.provider_selected = max(0, self.provider_selected - 1)
+                self._invalidate()
+
+        @kb.add("down", filter=Condition(lambda: _in_providers() and _input_empty()))
+        def _p_down(event):
+            if self.provider_index:
+                self.provider_selected = min(
+                    len(self.provider_index) - 1, self.provider_selected + 1
+                )
+                self._invalidate()
+
+        @kb.add("enter", filter=Condition(lambda: _in_providers() and _input_empty()))
+        def _p_enter(event):
+            self._select_provider_from_picker()
+
+        @kb.add("escape", eager=True, filter=Condition(lambda: _in_providers() and _input_empty()))
+        def _p_esc(event):
+            self._close_provider_picker()
+
         # Background-shell watcher (/bashes).
         def _in_shells() -> bool:
             return self.mode == "shells"
@@ -2225,6 +2257,7 @@ class OpenHackApp:
         is_landing = Condition(lambda: self.mode == "landing")
         is_sessions = Condition(lambda: self.mode == "sessions")
         is_models = Condition(lambda: self.mode == "models")
+        is_providers = Condition(lambda: self.mode == "providers")
         is_shells = Condition(lambda: self.mode == "shells")
         is_scanning = Condition(lambda: self.mode in ("scanning", "viewing"))
 
@@ -2232,12 +2265,14 @@ class OpenHackApp:
         scan = self._build_scan_container()
         sessions = self._build_sessions_container()
         models = self._build_model_container()
+        providers = self._build_provider_container()
         shells = self._build_shells_container()
 
         body = HSplit([
             ConditionalContainer(content=landing, filter=is_landing),
             ConditionalContainer(content=sessions, filter=is_sessions),
             ConditionalContainer(content=models, filter=is_models),
+            ConditionalContainer(content=providers, filter=is_providers),
             ConditionalContainer(content=shells, filter=is_shells),
             ConditionalContainer(content=scan, filter=is_scanning),
         ])
@@ -3401,6 +3436,86 @@ class OpenHackApp:
             Window(height=1),
         ])
 
+    def _build_provider_container(self) -> HSplit:
+        """Scrollable provider switcher backed by Models.dev."""
+        def header_text():
+            return [
+                ("class:header.brand", "openhack"),
+                ("class:header.sep", "  ·  "),
+                ("class:header.target", "provider"),
+                ("class:header.sep", "    "),
+                ("class:header.meta", f"{len(self.provider_index)} available"),
+            ]
+
+        def providers_text():
+            out: list[tuple[str, str]] = [("", "\n")]
+            if not self.provider_index:
+                return [("class:pane.empty", "  no providers available\n")]
+            for i, provider in enumerate(self.provider_index):
+                selected = i == self.provider_selected
+                active = provider["id"] == self.provider
+                cls = "class:session.row.selected" if selected else "class:session.row"
+                pointer = "❯ " if selected else "  "
+                mark = "●" if active else " "
+                connection = "connected" if provider["connected"] else "connect required"
+                out.append((cls, f"  {pointer}{provider['label']}"))
+                out.append(
+                    (
+                        "class:sev.low" if active else "class:session.meta",
+                        f"  {mark}\n",
+                    )
+                )
+                out.append(
+                    (
+                        "class:session.meta",
+                        f"      {provider['id']} · {connection}",
+                    )
+                )
+                if provider.get("hint"):
+                    out.append(("class:session.meta", f" · {provider['hint']}"))
+                out.append(("", "\n\n"))
+            return out
+
+        def hint_text():
+            return [
+                ("class:hint", "  ↑/↓ "),
+                ("class:hint.key", "navigate"),
+                ("class:hint", "   enter "),
+                ("class:hint.key", "switch"),
+                ("class:hint", "   /connect <provider> "),
+                ("class:hint.key", "authenticate"),
+                ("class:hint", "   esc "),
+                ("class:hint.key", "cancel"),
+            ]
+
+        def cursor() -> Point:
+            return Point(x=0, y=1 + self.provider_selected * 3)
+
+        header = Window(FormattedTextControl(header_text), height=1)
+        rule = Window(
+            FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1
+        )
+        body = Window(
+            FormattedTextControl(
+                providers_text, focusable=False, get_cursor_position=cursor
+            ),
+            wrap_lines=False,
+            always_hide_cursor=True,
+        )
+        hint = Window(FormattedTextControl(hint_text), height=1)
+        return HSplit(
+            [
+                Window(height=1),
+                header,
+                rule,
+                body,
+                rule,
+                hint,
+                VSplit([Window(width=2), self._input_window]),
+                Window(height=1),
+            ]
+        )
+
     def _build_shells_container(self) -> HSplit:
         """Background-shell watcher — the shell list plus the selected one's tail."""
         def header_text():
@@ -3644,6 +3759,10 @@ class OpenHackApp:
             await self._cmd_setup()
         elif cmd == "/provider":
             self._cmd_provider(arg)
+        elif cmd == "/connect":
+            await self._cmd_connect(arg)
+        elif cmd == "/disconnect":
+            self._cmd_disconnect(arg)
         elif cmd == "/model":
             self._cmd_model(arg)
         elif cmd == "/sidebar":
@@ -3755,10 +3874,7 @@ class OpenHackApp:
 
         name = name.lower().strip()
         if not name:
-            self.last_status_line = (
-                "providers: " + ", ".join(_providers.list_providers())
-                + " · usage: /provider <name>"
-            )
+            self._open_provider_picker()
             return
         if not _providers.is_known(name):
             self.last_status_line = (
@@ -3775,6 +3891,9 @@ class OpenHackApp:
             return
 
         resolved = _providers.resolve(name)
+        if resolved is None:
+            self.last_status_line = f"could not resolve provider: {name}"
+            return
         self.model = resolved.model
         save_user_config({"provider": name, "model": self.model})
         if resolved.missing_key_env:
@@ -3783,6 +3902,47 @@ class OpenHackApp:
             )
         else:
             self.last_status_line = f"switched to {name} ({self.model})"
+
+    async def _cmd_connect(self, arg: str) -> None:
+        if self.mode == "scanning":
+            self.last_status_line = "cannot connect a provider while a scan is in progress"
+            return
+        parts = arg.strip().split()
+        provider_id = parts[0] if parts else None
+        auth_method = parts[1] if len(parts) > 1 else None
+        connected = await self._run_external(
+            run_provider_connect(provider_id, auth_method)
+        )
+        if not connected:
+            self.last_status_line = "provider connection cancelled"
+            return
+        reload_settings()
+        cfg = load_user_config()
+        self.provider = resolve_provider(
+            cfg.get("provider", settings.llm_provider)
+        )
+        self.model = cfg.get("model") or settings.openhack_model_id
+        self.last_status_line = f"connected: {self.provider} · {self.model}"
+
+    def _cmd_disconnect(self, arg: str) -> None:
+        from openhack.provider_auth import get_credential, remove_credential
+
+        provider_id = arg.strip().lower() or self.provider
+        if provider_id == "openhack":
+            self.last_status_line = "use /logout to disconnect your OpenHack account"
+            return
+        if not get_credential(provider_id):
+            self.last_status_line = (
+                f"no saved credentials for {provider_id} "
+                "(an environment variable may still be active)"
+            )
+            return
+        remove_credential(provider_id)
+        if self.provider == provider_id:
+            self.provider = "openhack"
+            self.model = settings.openhack_model_id or "grok-4.5"
+            save_user_config({"provider": self.provider, "model": self.model})
+        self.last_status_line = f"disconnected {provider_id}"
 
     def _cmd_model(self, arg: str) -> None:
         arg = arg.strip()
@@ -3934,7 +4094,7 @@ class OpenHackApp:
     def _open_sessions_overlay(self) -> None:
         """Open the sessions picker as a full-screen overlay."""
         self._refresh_sessions_index()
-        if self.mode not in ("sessions", "models", "shells"):
+        if self.mode not in ("sessions", "models", "providers", "shells"):
             self.previous_mode = self.mode  # remember where to go back on Esc
         self.mode = "sessions"
         if not self.sessions_index:
@@ -3955,7 +4115,7 @@ class OpenHackApp:
         """Open the background-shell watcher (/bashes)."""
         # Don't clobber the origin if we're opening from within another overlay
         # (the single previous_mode slot is shared by sessions/models/shells).
-        if self.mode not in ("sessions", "models", "shells"):
+        if self.mode not in ("sessions", "models", "providers", "shells"):
             self.previous_mode = self.mode
         self.mode = "shells"
         self.shells_selected = 0
@@ -3966,22 +4126,76 @@ class OpenHackApp:
             self.last_status_line = f"{n} shell(s) · ↑/↓ navigate · k kill · esc back"
 
     # ── Model picker overlay ──────────────────────────────────────
+    def _open_provider_picker(self) -> None:
+        """Open the Models.dev-backed provider switcher."""
+        from openhack import providers as provider_registry
+        from openhack.provider_auth import get_credential
+
+        entries = [
+            {
+                "id": "openhack",
+                "label": "OpenHack",
+                "hint": "Recommended · hosted inference",
+                "connected": bool(settings.openhack_api_key),
+            }
+        ]
+        for spec in provider_registry.list_provider_specs():
+            resolved = provider_registry.resolve(spec.name)
+            entries.append(
+                {
+                    "id": spec.name,
+                    "label": spec.label,
+                    "hint": spec.hint,
+                    "connected": bool(
+                        (resolved and not resolved.missing_key_env)
+                        or get_credential(spec.name)
+                    ),
+                }
+            )
+        self.provider_index = entries
+        self.provider_selected = next(
+            (
+                index
+                for index, entry in enumerate(entries)
+                if entry["id"] == self.provider
+            ),
+            0,
+        )
+        if self.mode not in ("sessions", "models", "providers", "shells"):
+            self.previous_mode = self.mode
+        self.mode = "providers"
+        self.last_status_line = ""
+        self._invalidate()
+
+    def _close_provider_picker(self) -> None:
+        self.mode = self.previous_mode or "landing"
+        self.previous_mode = None
+        self._invalidate()
+
+    def _select_provider_from_picker(self) -> None:
+        if not self.provider_index:
+            return
+        selected = self.provider_index[self.provider_selected]
+        self._cmd_provider(selected["id"])
+        status = self.last_status_line
+        self._close_provider_picker()
+        self.last_status_line = status
+
     def _open_model_picker(self) -> None:
         """Open a full-screen, scrollable model picker."""
-        ids = list(OPENHACK_MODELS)
-        # If we're on a BYOK provider whose model isn't in the OpenHack list,
-        # still show the current one so the picker reflects reality.
-        if self.model and self.model not in ids:
-            ids = [self.model, *ids]
-        self.model_index = [
-            {"id": mid, **dict(zip(("label", "desc"),
-             OPENHACK_MODEL_INFO.get(mid, (mid, ""))))}
-            for mid in ids
-        ]
+        from openhack import providers as provider_registry
+
+        self.model_index = provider_registry.provider_models(self.provider)
+        if self.model and not any(
+            model["id"] == self.model for model in self.model_index
+        ):
+            self.model_index.insert(
+                0, {"id": self.model, "label": self.model, "desc": "Current model"}
+            )
         self.model_selected = next(
             (i for i, m in enumerate(self.model_index) if m["id"] == self.model), 0
         )
-        if self.mode not in ("sessions", "models", "shells"):
+        if self.mode not in ("sessions", "models", "providers", "shells"):
             self.previous_mode = self.mode
         self.mode = "models"
         self.last_status_line = ""
@@ -4435,8 +4649,13 @@ class OpenHackApp:
         save_user_config({key: value})
         if key == "provider":
             self.provider = resolve_provider(value)
-            self.model = PROVIDER_DEFAULTS.get(value, self.model)
-            save_user_config({"provider": self.provider})
+            from openhack import providers as provider_registry
+            spec = provider_registry.get_spec(value)
+            self.model = (
+                PROVIDER_DEFAULTS.get(value)
+                or (spec.default_model if spec else self.model)
+            )
+            save_user_config({"provider": self.provider, "model": self.model})
         elif key == "model":
             self.model = value
         reload_settings()

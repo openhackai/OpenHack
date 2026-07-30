@@ -154,7 +154,11 @@ class ValidatorAgent(BaseAgent):
 
             if not response.tool_calls:
                 self._append_message(
-                    Message(role="assistant", content=response.content),
+                    Message(
+                        role="assistant",
+                        content=response.content,
+                        response_items=response.response_items,
+                    ),
                     source="model_text_response",
                 )
                 result = self._build_result(response.content or "")
@@ -163,6 +167,7 @@ class ValidatorAgent(BaseAgent):
 
             assistant_msg = Message(
                 role="assistant", content=response.content,
+                response_items=response.response_items,
                 tool_calls=[
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in response.tool_calls
