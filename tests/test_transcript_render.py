@@ -269,3 +269,53 @@ def test_long_pipeline_progress_remains_bounded():
     rendered = _text(s)[0]
     assert len(rendered) < len(progress)
     assert rendered.endswith("…")
+
+
+def test_gfm_table_renders_as_bounded_terminal_table():
+    s = _state()
+    answer = """11 subdomains found:
+
+| # | Subdomain | Status | Tech / Notes |
+|---:|:----------|:------:|--------------|
+| 1 | `neatlogs.com` | 200 | Vercel / Next.js |
+| 2 | `staging-cloud.neatlogs.com` | **401** | A deliberately long API description that must wrap inside the cell without breaking the table border |
+"""
+
+    _add(s, "openhack", "thinking", answer)
+
+    rendered = _text(s)[0]
+    assert "|---:" not in rendered
+    assert "┌" in rendered and "┬" in rendered and "┐" in rendered
+    assert "└" in rendered and "┴" in rendered and "┘" in rendered
+    assert "neatlogs.com" in rendered
+    assert "staging-cloud.neatlogs.com" in rendered
+    table_lines = [
+        line for line in rendered.splitlines()
+        if line.startswith(("┌", "│", "├", "└"))
+    ]
+    assert table_lines
+    assert max(map(len, table_lines)) <= 88
+
+
+def test_completed_answer_renders_fenced_code_without_backticks():
+    s = _state()
+    answer = """Run this:
+
+```python
+print("full answer")
+```
+"""
+
+    _add(s, "openhack", "thinking", answer)
+
+    rendered = _text(s)[0]
+    styles = [style for style, _ in s.trace_lines[-1][1]]
+    assert "```" not in rendered
+    assert 'print("full answer")' in rendered
+    assert any(style.startswith("class:syntax.") for style in styles)
+
+
+def test_table_parser_preserves_pipes_inside_code_and_escaped_cells():
+    from openhack.tui import _split_md_table_row
+
+    assert _split_md_table_row(r"| `a|b` | c\|d |") == ["`a|b`", "c|d"]

@@ -843,7 +843,7 @@ class ScanState:
                         ("class:trace.agent", f"  {agent:>24}"),
                         ("class:trace.arrow", "  ⋯  "),
                     ]
-                line.extend(_render_md_prose(content_str))
+                line.extend(_render_markdown_with_code(content_str))
                 self._append_trace(agent, line)
             return
 
@@ -1153,12 +1153,191 @@ def _render_md_inline(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def _split_md_table_row(line: str) -> list[str]:
+    """Split a GFM table row without treating escaped/code-span pipes as cells."""
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|") and not text.endswith(r"\|"):
+        text = text[:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    in_code = False
+    for char in text:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "`":
+            in_code = not in_code
+            current.append(char)
+        elif char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _is_md_table_divider(line: str) -> bool:
+    import re as _re
+    cells = _split_md_table_row(line)
+    return bool(cells) and all(
+        _re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells
+    )
+
+
+def _table_cell_text(cell: str) -> tuple[str, str]:
+    """Return visible table-cell text and a useful whole-cell style."""
+    import re as _re
+    raw = cell.strip().replace("<br>", " / ").replace("<br/>", " / ")
+    fragments = _render_md_inline(raw)
+    text = "".join(part for _, part in fragments)
+    style = ""
+    if _re.fullmatch(r"`[^`\n]+`", raw):
+        style = "class:md.code"
+    elif _re.fullmatch(r"\*\*[^*\n]+\*\*", raw):
+        style = "class:md.bold"
+    elif _re.fullmatch(r"(?:\*[^*\n]+\*|_[^_\n]+_)", raw):
+        style = "class:md.italic"
+    return text, style
+
+
+def _render_md_table(rows: list[list[str]], alignments: list[str]) -> list[tuple[str, str]]:
+    """Render a GFM table as a bounded, wrapping terminal table."""
+    import textwrap
+
+    if not rows:
+        return []
+    columns = max(len(row) for row in rows)
+    normalized = [row + [""] * (columns - len(row)) for row in rows]
+    visible = [[_table_cell_text(cell) for cell in row] for row in normalized]
+
+    # Wrap long cells within the table instead of letting prompt-toolkit split
+    # a border halfway through a row.
+    max_table_width = 88
+    border_width = columns * 3 + 1
+    available = max(columns * 3, max_table_width - border_width)
+    minimums = [
+        min(18, max(3, len(visible[0][index][0])))
+        for index in range(columns)
+    ]
+    while sum(minimums) > available:
+        widest = max(range(columns), key=lambda index: minimums[index])
+        if minimums[widest] <= 3:
+            break
+        minimums[widest] -= 1
+    widths = [
+        min(
+            40,
+            max(minimums[index], *(len(row[index][0]) for row in visible)),
+        )
+        for index in range(columns)
+    ]
+    while sum(widths) > available:
+        candidates = [
+            index for index, width in enumerate(widths)
+            if width > minimums[index]
+        ]
+        if not candidates:
+            break
+        widest = max(candidates, key=lambda index: widths[index] - minimums[index])
+        widths[widest] -= 1
+
+    out: list[tuple[str, str]] = []
+
+    def border(left: str, middle: str, right: str) -> None:
+        out.append(("class:md.table.border", left))
+        for index, width in enumerate(widths):
+            out.append(("class:md.table.border", "─" * (width + 2)))
+            out.append((
+                "class:md.table.border",
+                right if index == columns - 1 else middle,
+            ))
+        out.append(("", "\n"))
+
+    def rendered_row(row_index: int) -> None:
+        wrapped: list[list[str]] = []
+        for index, (text, _style) in enumerate(visible[row_index]):
+            parts = textwrap.wrap(
+                text,
+                width=max(1, widths[index]),
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            wrapped.append(parts or [""])
+        height = max(len(parts) for parts in wrapped)
+        for line_index in range(height):
+            out.append(("class:md.table.border", "│"))
+            for index in range(columns):
+                text = (
+                    wrapped[index][line_index]
+                    if line_index < len(wrapped[index])
+                    else ""
+                )
+                alignment = alignments[index] if index < len(alignments) else "left"
+                if alignment == "right":
+                    padded = text.rjust(widths[index])
+                elif alignment == "center":
+                    padded = text.center(widths[index])
+                else:
+                    padded = text.ljust(widths[index])
+                style = (
+                    "class:md.table.header"
+                    if row_index == 0
+                    else visible[row_index][index][1]
+                )
+                out.append(("", " "))
+                out.append((style, padded))
+                out.append(("", " "))
+                out.append(("class:md.table.border", "│"))
+            out.append(("", "\n"))
+
+    border("┌", "┬", "┐")
+    rendered_row(0)
+    border("├", "┼", "┤")
+    for row_index in range(1, len(rows)):
+        rendered_row(row_index)
+    border("└", "┴", "┘")
+    return out
+
+
 def _render_md_prose(text: str) -> list[tuple[str, str]]:
     """Render a chunk of markdown prose (no code fences) into styled fragments."""
     import re as _re
     out: list[tuple[str, str]] = []
     lines = text.split("\n")
-    for idx, line in enumerate(lines):
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if (
+            idx + 1 < len(lines)
+            and "|" in line
+            and _is_md_table_divider(lines[idx + 1])
+        ):
+            raw_header = _split_md_table_row(line)
+            divider = _split_md_table_row(lines[idx + 1])
+            alignments = []
+            for cell in divider:
+                stripped = cell.strip()
+                if stripped.startswith(":") and stripped.endswith(":"):
+                    alignments.append("center")
+                elif stripped.endswith(":"):
+                    alignments.append("right")
+                else:
+                    alignments.append("left")
+            table_rows = [raw_header]
+            idx += 2
+            while idx < len(lines) and "|" in lines[idx] and lines[idx].strip():
+                table_rows.append(_split_md_table_row(lines[idx]))
+                idx += 1
+            out.extend(_render_md_table(table_rows, alignments))
+            continue
         # ATX headers: #, ##, ###, ...
         m_h = _re.match(r"^(#{1,6})\s+(.*)$", line)
         if m_h:
@@ -1193,6 +1372,7 @@ def _render_md_prose(text: str) -> list[tuple[str, str]]:
         # Preserve newlines between lines
         if idx < len(lines) - 1:
             out.append(("", "\n"))
+        idx += 1
     return out
 
 
@@ -2014,6 +2194,8 @@ class OpenHackApp:
             "md.bullet": OH_PRIMARY,
             "md.link": f"underline {OH_CYAN}",
             "md.quote": f"italic {OH_YELLOW}",
+            "md.table.border": OH_BORDER,
+            "md.table.header": f"bold {OH_TEXT}",
             # syntax
             "syntax.comment": f"italic {OH_MUTED}",
             "syntax.string": OH_GREEN,
