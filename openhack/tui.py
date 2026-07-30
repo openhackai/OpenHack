@@ -1303,6 +1303,8 @@ def _render_md_table(rows: list[list[str]], alignments: list[str]) -> list[tuple
     border("├", "┼", "┤")
     for row_index in range(1, len(rows)):
         rendered_row(row_index)
+        if row_index < len(rows) - 1:
+            border("├", "┼", "┤")
     border("└", "┴", "┘")
     return out
 

@@ -295,6 +295,29 @@ def test_gfm_table_renders_as_bounded_terminal_table():
     ]
     assert table_lines
     assert max(map(len, table_lines)) <= 88
+    # One separator below the header and one between each pair of body rows.
+    assert sum(line.startswith("├") for line in table_lines) == 2
+
+
+def test_wrapped_table_cell_stays_inside_one_logical_row():
+    s = _state()
+    answer = """| Host | Notes |
+|------|-------|
+| api.example.test | This is a long description that wraps onto several physical lines inside one logical table row |
+| app.example.test | Short |
+"""
+
+    _add(s, "openhack", "thinking", answer)
+
+    rendered = _text(s)[0]
+    lines = rendered.splitlines()
+    separators = [index for index, line in enumerate(lines) if line.startswith("├")]
+    assert len(separators) == 2
+    # The wrapped first row has multiple content lines, with no divider until
+    # the next logical row begins.
+    between_separators = lines[separators[0] + 1:separators[1]]
+    assert len(between_separators) > 1
+    assert all(line.startswith("│") for line in between_separators)
 
 
 def test_completed_answer_renders_fenced_code_without_backticks():
