@@ -91,7 +91,7 @@ For every confirmed finding you get: severity, CVSS score, file location, full d
 | `/login`                   | Re-login to your OpenHack account                                                                  |
 | `/setup`                   | Run the setup wizard again                                                                         |
 | `/config`                  | Show current config; `/config <key> <value>` to set                                                |
-| `/sidebar`                 | Show/hide the Findings list sidebar (`Ctrl+B`)                                                     |
+| `/sidebar`                 | Show/hide the contextual right panel or Findings list (`Ctrl+B`)                                   |
 | `/cost`                    | Cost breakdown for the last scan                                                                   |
 | `/clear`                   | Clear scan state and return to landing                                                             |
 | `/discord`                 | Open the OpenHack Discord                                                                          |
@@ -107,15 +107,15 @@ For every confirmed finding you get: severity, CVSS score, file location, full d
 - Mouse wheel or `PgUp` / `PgDn` — scroll the details pane
 - `y` — yank (copy) selected finding for an AI agent
 - `<` · `>` — resize the sidebar
-- `Ctrl+B` — toggle sidebar
+- `Ctrl+B` — toggle the Findings list
 
 ## Keyboard shortcuts (Trace tab)
 
-- `↑` / `↓` — switch agent in the sidebar tree
-- `[` · `]` — alternate prev / next agent
+- `↑` / `↓` — scroll the trace
 - Mouse wheel or `PgUp` / `PgDn` — scroll the trace
-- `Home` — jump to "All" (full trace)
+- `Home` — jump to the top
 - `End` — resume auto-follow-to-bottom
+- `Ctrl+B` — toggle the right session panel
 
 ## Selecting text
 

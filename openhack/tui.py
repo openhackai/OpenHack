@@ -1765,13 +1765,11 @@ class OpenHackApp:
         def _f_end(event):
             _scroll_details(+10_000)
 
-        # Ctrl+B toggles the sidebar (left findings list) — global shortcut,
-        # only meaningful on the Findings tab but harmless elsewhere.
+        # Ctrl+B toggles the contextual sidebar: the right session panel on
+        # Trace and the findings list on Findings.
         @kb.add("c-b", filter=Condition(lambda: _in_tabs() and _input_empty()))
         def _toggle_sidebar(event):
-            self.findings_list_hidden = not self.findings_list_hidden
-            self.last_status_line = "sidebar hidden" if self.findings_list_hidden else "sidebar shown"
-            self._invalidate()
+            self._toggle_sidebar_visibility()
 
         # Sessions overlay keybindings.
         @kb.add("up", filter=Condition(lambda: _in_sessions() and _input_empty()))
@@ -2613,17 +2611,14 @@ class OpenHackApp:
             FormattedTextControl(lambda: [("class:rule", "│\n") for _ in range(0, 200)]),
             width=1,
         )
-        # The left "agents" list is a scan-pipeline filter (many named agents).
-        # In an interactive agent conversation there's only the operator + agent,
-        # so it's just noise — hide the whole column there.
-        show_agents = Condition(lambda: not self.is_agent_session)
+        # Keep the trace full-width. The old permanent agent-filter column
+        # duplicated information already visible in the trace and consumed a
+        # quarter of the terminal. Agent attribution remains on each scan row.
         trace_pane = VSplit([
-            ConditionalContainer(trace_sidebar, filter=show_agents),
-            ConditionalContainer(trace_sep, filter=show_agents),
             VSplit([
                 Window(width=1),
                 trace_window,
-            ], width=D(weight=75, preferred=10_000)),
+            ], width=D(weight=1, preferred=10_000)),
         ])
 
         # ── Findings tab (split: list on left, details on right) ──
@@ -3423,6 +3418,8 @@ class OpenHackApp:
             self._cmd_provider(arg)
         elif cmd == "/model":
             self._cmd_model(arg)
+        elif cmd == "/sidebar":
+            self._toggle_sidebar_visibility()
         elif cmd == "/scan":
             target_path = _resolve_path_argument(arg, default=os.getcwd())
             if not target_path.exists():
@@ -3464,6 +3461,14 @@ class OpenHackApp:
     def _show_help(self) -> None:
         lines = ["commands: " + ", ".join(c for c, _ in _SLASH_COMMANDS)]
         self.last_status_line = lines[0]
+
+    def _toggle_sidebar_visibility(self) -> None:
+        """Toggle the contextual right panel / Findings list."""
+        self.findings_list_hidden = not self.findings_list_hidden
+        self.last_status_line = (
+            "sidebar hidden" if self.findings_list_hidden else "sidebar shown"
+        )
+        self._invalidate()
 
     def _cmd_cd(self, arg: str) -> None:
         """Change the working directory. Everything that reads os.getcwd() —
