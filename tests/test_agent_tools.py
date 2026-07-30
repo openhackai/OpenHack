@@ -100,6 +100,26 @@ def test_shell_output_truncation(tmp_path):
     assert len(result["stdout"]) <= ShellTools.MAX_OUTPUT_CHARS + 200
 
 
+def test_truncated_shell_output_is_preserved_as_owner_only_artifact(tmp_path):
+    from openhack.agents.session import Session
+
+    session = Session(
+        str(tmp_path),
+        event_log_path=tmp_path / "events.jsonl",
+    )
+    sh = ShellTools(workdir=tmp_path, session=session)
+    result = sh.run_command("python3 -c \"print('x' * 50000)\"")
+    artifact = result["full_output_artifact"]
+    path = Path(artifact["path"])
+    assert path.exists()
+    assert "x" * 30_000 in path.read_text()
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert any(
+        event.event_type == "tool_output_artifact_created"
+        for event in session.events
+    )
+
+
 def test_shell_workdir_override(tmp_path):
     sub = tmp_path / "sub"
     sub.mkdir()

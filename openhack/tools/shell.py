@@ -14,9 +14,13 @@ command runs with a timeout, output is captured and size-bounded, and the
 working directory is explicit.
 """
 
+import hashlib
+import json
 import os
 import shlex
 import subprocess
+import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Optional
 
@@ -99,6 +103,48 @@ class ShellTools:
             self._shells = ShellManager()
         return self._shells
 
+    def _persist_full_output(
+        self, command: str, cwd: Path, stdout: str, stderr: str
+    ) -> Optional[dict]:
+        """Store uncapped output as an owner-only artifact when a session exists."""
+        session = self._session
+        if session is None or not getattr(session, "event_log_path", None):
+            return None
+        try:
+            event_path = Path(session.event_log_path)
+            artifact_dir = event_path.parent / "artifacts" / session.id
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(artifact_dir, 0o700)
+            artifact_path = artifact_dir / f"command-{uuid4()}.json"
+            encoded = json.dumps(
+                {
+                    "command": command,
+                    "cwd": str(cwd),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            artifact_path.write_bytes(encoded)
+            os.chmod(artifact_path, 0o600)
+            metadata = {
+                "path": str(artifact_path),
+                "bytes": len(encoded),
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "access": "owner_read_write",
+            }
+            session.record_event(
+                "tool_output_artifact_created", metadata, agent="shell"
+            )
+            return metadata
+        except Exception as exc:
+            session.record_event(
+                "tool_output_artifact_failed",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+                agent="shell",
+            )
+            return None
+
     # ------------------------------------------------------------------ tools
 
     def run_command(
@@ -143,6 +189,7 @@ class ShellTools:
         effective_timeout = min(
             int(timeout) if timeout else self.DEFAULT_TIMEOUT, self.MAX_TIMEOUT
         )
+        started = time.monotonic()
 
         cwd = self.workdir
         if workdir:
@@ -166,18 +213,28 @@ class ShellTools:
             )
         except subprocess.TimeoutExpired as e:
             partial = self._decode(e.stdout) + self._decode(e.stderr)
-            return {
+            result = {
                 "command": command,
                 "timed_out": True,
                 "timeout": effective_timeout,
                 "output": self._cap(partial),
+                "original_output_characters": len(partial),
+                "duration_seconds": time.monotonic() - started,
+                "cwd": str(cwd),
                 "note": self._timeout_note(command, effective_timeout),
             }
+            if len(partial) > self.MAX_OUTPUT_CHARS:
+                result["full_output_artifact"] = self._persist_full_output(
+                    command, cwd, partial, ""
+                )
+            return result
         except Exception as e:  # pragma: no cover - defensive
             return {"error": f"Failed to run command: {e}"}
 
-        stdout, out_truncated = self._cap_flag(proc.stdout or "")
-        stderr, err_truncated = self._cap_flag(proc.stderr or "")
+        raw_stdout = proc.stdout or ""
+        raw_stderr = proc.stderr or ""
+        stdout, out_truncated = self._cap_flag(raw_stdout)
+        stderr, err_truncated = self._cap_flag(raw_stderr)
 
         result = {
             "command": command,
@@ -185,9 +242,15 @@ class ShellTools:
             "stdout": stdout,
             "stderr": stderr,
             "cwd": str(cwd),
+            "duration_seconds": time.monotonic() - started,
+            "stdout_characters": len(raw_stdout),
+            "stderr_characters": len(raw_stderr),
         }
         if out_truncated or err_truncated:
             result["truncated"] = True
+            result["full_output_artifact"] = self._persist_full_output(
+                command, cwd, raw_stdout, raw_stderr
+            )
             result["note"] = (
                 "Output was truncated. Re-run piping through grep/head/tail, "
                 "or write to a file and read it in slices."

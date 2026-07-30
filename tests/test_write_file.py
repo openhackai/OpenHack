@@ -85,6 +85,18 @@ def test_registry_dispatches_write_file(tmp_path):
     assert (tmp_path / "a.txt").read_text() == "hello"
 
 
+def test_interactive_registry_writes_absolute_path_outside_target(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    outside = tmp_path / "outside" / "exploit.py"
+    reg = ToolRegistry(target_dir=target, include_agent_tools=True)
+    result = reg.execute_tool(
+        "write_file", {"path": str(outside), "content": "print('ok')\n"}
+    )
+    assert result["path"] == str(outside)
+    assert outside.read_text() == "print('ok')\n"
+
+
 def test_prompt_tells_the_agent_to_use_it_over_heredocs():
     from openhack.agents.interactive import SYSTEM_PROMPT
     assert "write_file" in SYSTEM_PROMPT

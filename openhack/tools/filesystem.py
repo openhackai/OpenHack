@@ -4,6 +4,7 @@ Provides safe, jailed access to the target directory.
 """
 
 import fnmatch
+import hashlib
 import inspect
 import os
 import re
@@ -29,15 +30,37 @@ _GREP_SOURCE_INCLUDES = [
 class FileSystemTools:
     """File system tools with path safety enforcement."""
 
-    def __init__(self, jail_dir: Path):
+    def __init__(self, jail_dir: Path, unrestricted: bool = False):
         self.jail_dir = jail_dir.resolve()
+        self.unrestricted = unrestricted
 
     def _resolve_safe_path(self, path: str) -> Path:
-        """Resolve a path safely within the jail directory."""
-        requested = (self.jail_dir / path).resolve()
-        if not str(requested).startswith(str(self.jail_dir)):
+        """Resolve a path, enforcing the target jail unless explicitly disabled."""
+        raw = Path(path).expanduser()
+        requested = raw.resolve() if raw.is_absolute() else (self.jail_dir / raw).resolve()
+        if not self.unrestricted and not requested.is_relative_to(self.jail_dir):
             raise PermissionError(f"Access denied: {path} is outside the allowed directory")
         return requested
+
+    def _display_path(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.jail_dir))
+        except ValueError:
+            return str(path)
+
+    def _file_metadata(self, path: Path) -> dict:
+        stat = path.stat()
+        digest = hashlib.sha256()
+        with open(path, "rb") as fp:
+            for block in iter(lambda: fp.read(1024 * 1024), b""):
+                digest.update(block)
+        return {
+            "resolved_path": str(path),
+            "size_bytes": stat.st_size,
+            "modified_at": stat.st_mtime,
+            "sha256": digest.hexdigest(),
+            "access_scope": "unrestricted" if self.unrestricted else "target_jail",
+        }
 
     BINARY_EXTENSIONS = frozenset({
         ".zip", ".gz", ".tar", ".bz2", ".xz", ".7z", ".rar",
@@ -67,10 +90,11 @@ class FileSystemTools:
             if resolved.suffix.lower() in self.BINARY_EXTENSIONS:
                 size = resolved.stat().st_size
                 return {
-                    "path": str(resolved.relative_to(self.jail_dir)),
+                    "path": self._display_path(resolved),
                     "content": f"[Binary file: {resolved.suffix}, {size:,} bytes — cannot read]",
                     "total_lines": 0,
                     "binary": True,
+                    **self._file_metadata(resolved),
                 }
 
             file_size = resolved.stat().st_size
@@ -112,14 +136,19 @@ class FileSystemTools:
                 numbered_lines.append(f"\n[... file truncated: {total_lines:,} total lines, {file_size:,} bytes — use offset/limit to read more ...]")
 
             return {
-                "path": str(resolved.relative_to(self.jail_dir)),
+                "path": self._display_path(resolved),
                 "content": "\n".join(numbered_lines),
                 "total_lines": total_lines,
                 "offset": offset,
                 "lines_returned": len(numbered_lines),
+                **self._file_metadata(resolved),
             }
         except PermissionError as e:
-            return {"error": str(e)}
+            return {
+                "error": str(e),
+                "requested_path": path,
+                "access_scope": "unrestricted" if self.unrestricted else "target_jail",
+            }
         except Exception as e:
             return {"error": f"Error reading file: {e}"}
 
@@ -135,7 +164,7 @@ class FileSystemTools:
             ignore = ignore or []
             entries = []
             for entry in sorted(resolved.iterdir()):
-                rel_path = str(entry.relative_to(self.jail_dir))
+                rel_path = self._display_path(entry)
                 if any(fnmatch.fnmatch(rel_path, pat) or fnmatch.fnmatch(entry.name, pat) for pat in ignore):
                     continue
                 entry_type = "dir" if entry.is_dir() else "file"
@@ -143,7 +172,7 @@ class FileSystemTools:
                 entries.append({"name": entry.name, "type": entry_type, "size": size})
 
             return {
-                "path": str(resolved.relative_to(self.jail_dir)),
+                "path": self._display_path(resolved),
                 "entries": entries,
             }
         except PermissionError as e:
@@ -215,7 +244,7 @@ class FileSystemTools:
 
                         if matched:
                             full = Path(root) / f if not match_path else full
-                            rel_path = str(full.relative_to(self.jail_dir))
+                            rel_path = self._display_path(full)
                             matches.add(rel_path)
                             if len(matches) >= 500:
                                 return {"pattern": pattern, "matches": sorted(matches)}
@@ -257,7 +286,7 @@ class FileSystemTools:
             matches = []
             for fp in file_paths:
                 try:
-                    rel = str(Path(fp).relative_to(self.jail_dir))
+                    rel = self._display_path(Path(fp))
                 except ValueError:
                     rel = fp
                 if "node_modules" in rel or "test" in rel.lower():
@@ -283,7 +312,7 @@ class FileSystemTools:
                 for line_num, line in enumerate(f, 1):
                     if regex.search(line):
                         matches.append({
-                            "file": str(file_path.relative_to(self.jail_dir)),
+                            "file": self._display_path(file_path),
                             "line": line_num,
                             "content": line.strip()[:200],
                         })

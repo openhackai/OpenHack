@@ -422,6 +422,7 @@ class BrowserVerifierAgent(BaseAgent):
     async def run(self, task: str, context: Optional[dict] = None) -> dict:
         context = context or {}
         self.session.current_agent = self.name
+        self.session.start_turn(task, self.name)
         self.browser_result = None
         self.attempt_count = 0
 
@@ -429,7 +430,8 @@ class BrowserVerifierAgent(BaseAgent):
 
         try:
             system_prompt = self.get_system_prompt(context)
-            self.messages = [Message(role="user", content=task)]
+            self.messages = []
+            self._append_message(Message(role="user", content=task), source="run")
             self._seed_existing_instructions()
 
             max_iterations = self.max_attempts * 4
@@ -446,10 +448,7 @@ class BrowserVerifierAgent(BaseAgent):
                     messages=self.messages, tools=self.get_tools(), system=system_prompt,
                 )
 
-                self.session.total_cost += response.cost
-                if response.usage:
-                    self.session.total_tokens += response.usage.get("total_tokens", 0)
-                    self.context_manager.update_usage(response.usage.get("input_tokens", 0))
+                self._record_response_usage(response)
 
                 if response.content:
                     self.session.add_trace(
@@ -457,7 +456,13 @@ class BrowserVerifierAgent(BaseAgent):
                     )
 
                 if not response.tool_calls:
-                    return self._build_result(response.content or "")
+                    self._append_message(
+                        Message(role="assistant", content=response.content),
+                        source="model_text_response",
+                    )
+                    result = self._build_result(response.content or "")
+                    self.session.finish_turn("completed", result, agent=self.name)
+                    return result
 
                 assistant_msg = Message(
                     role="assistant", content=response.content,
@@ -465,9 +470,8 @@ class BrowserVerifierAgent(BaseAgent):
                         {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                         for tc in response.tool_calls
                     ],
-                    reasoning_content=getattr(response, 'reasoning_content', None),
                 )
-                self.messages.append(assistant_msg)
+                self._append_message(assistant_msg, source="model_tool_response")
 
                 should_finish = False
                 for tool_call in response.tool_calls:
@@ -475,6 +479,12 @@ class BrowserVerifierAgent(BaseAgent):
                         agent=self.name, event_type="tool_call",
                         content=f"Calling {tool_call.name}",
                         tool_name=tool_call.name, tool_input=tool_call.arguments,
+                        model_call_id=response.model_call_id,
+                        tool_call_id=tool_call.id,
+                        metadata={
+                            "raw_arguments": tool_call.raw_arguments,
+                            "parse_error": tool_call.parse_error,
+                        },
                     )
 
                     try:
@@ -508,15 +518,22 @@ class BrowserVerifierAgent(BaseAgent):
                         agent=self.name, event_type="tool_result",
                         content=f"Result from {tool_call.name}",
                         tool_name=tool_call.name, tool_output=result,
+                        model_call_id=response.model_call_id,
+                        tool_call_id=tool_call.id,
                     )
 
                     raw_content = json.dumps(result) if isinstance(result, dict) else str(result)
                     truncated_content = self.context_manager.truncate_tool_result(tool_call.name, raw_content)
                     tool_result = ToolResult(tool_call_id=tool_call.id, content=truncated_content)
-                    self.messages.append(tool_result.to_message())
+                    self._append_message(
+                        tool_result.to_message(),
+                        source=f"tool_result:{tool_call.name}",
+                    )
 
                 if should_finish:
-                    return self._build_result(response.content or "")
+                    result = self._build_result(response.content or "")
+                    self.session.finish_turn("completed", result, agent=self.name)
+                    return result
 
                 if self.context_manager.needs_compaction():
                     self.messages = self.context_manager.compact_messages(self.messages)
@@ -525,7 +542,9 @@ class BrowserVerifierAgent(BaseAgent):
             if not self.browser_result:
                 self.browser_result = self._infer_result_from_trace()
 
-            return self._build_result("Max iterations reached")
+            result = self._build_result("Max iterations reached")
+            self.session.finish_turn("max_iterations", result, agent=self.name)
+            return result
 
         finally:
             if self._browser_ctx:

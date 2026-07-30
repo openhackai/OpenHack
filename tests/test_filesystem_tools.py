@@ -3,6 +3,7 @@ from pathlib import Path
 from tests.conftest import write_file
 
 from openhack.tools.filesystem import FileSystemTools
+from openhack.tools.registry import ToolRegistry
 
 
 class TestReadFile:
@@ -49,6 +50,35 @@ class TestJailEnforcement:
         fs = FileSystemTools(jail_dir=tmp_path)
         result = fs.read_file("src/app/main.py")
         assert "error" not in result
+
+    def test_blocks_sibling_with_same_string_prefix(self, tmp_path):
+        jail = tmp_path / "root"
+        sibling = tmp_path / "root-secret"
+        jail.mkdir()
+        sibling.mkdir()
+        (sibling / "secret.txt").write_text("hidden")
+        fs = FileSystemTools(jail_dir=jail)
+        with pytest.raises(PermissionError):
+            fs._resolve_safe_path(str(sibling / "secret.txt"))
+
+    def test_interactive_registry_can_read_outside_target(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("available")
+        registry = ToolRegistry(target, include_agent_tools=True)
+        result = registry.execute_tool("read_file", {"path": str(outside)})
+        assert "available" in result["content"]
+        assert result["path"] == str(outside)
+
+    def test_scan_registry_remains_jailed(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("hidden")
+        registry = ToolRegistry(target)
+        result = registry.execute_tool("read_file", {"path": str(outside)})
+        assert "error" in result
 
 
 class TestListDir:

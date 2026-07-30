@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import urllib.request
+from uuid import uuid4
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
 
@@ -98,6 +99,8 @@ class ToolCall:
     id: str
     name: str
     arguments: dict
+    raw_arguments: str = ""
+    parse_error: Optional[str] = None
 
 
 @dataclass
@@ -116,6 +119,13 @@ class LLMResponse:
     usage: Optional[dict] = None
     cost: float = 0.0
     reasoning_content: Optional[str] = None
+    finish_reason: Optional[str] = None
+    response_id: Optional[str] = None
+    returned_model: Optional[str] = None
+    model_call_id: Optional[str] = None
+    attempts: int = 1
+    latency_seconds: float = 0.0
+    time_to_first_token_seconds: Optional[float] = None
 
 
 class LLMClient:
@@ -166,15 +176,28 @@ class LLMClient:
         # headless callers leave it unset. Never print() from here — that
         # corrupts a full-screen app's display.
         self.status_callback = None
+        # Bound by BaseAgent to Session.record_event. Kept optional so the LLM
+        # client remains independently testable.
+        self.event_callback = None
 
         self._init_client()
 
     def _status(self, text: str) -> None:
+        self._event("model_status", {"message": text})
         cb = self.status_callback
         if cb is None:
             return
         try:
             cb(text)
+        except Exception:
+            pass
+
+    def _event(self, event_type: str, data: Any, **correlation: Any) -> None:
+        cb = getattr(self, "event_callback", None)
+        if cb is None:
+            return
+        try:
+            cb(event_type, data, **correlation)
         except Exception:
             pass
 
@@ -296,6 +319,9 @@ class LLMClient:
         tool_choice: Optional[str] = None,
         on_chunk: Optional[Callable] = None,
     ) -> LLMResponse:
+        model_call_id = str(uuid4())
+        call_started = time.monotonic()
+        first_token_at: Optional[float] = None
         openai_messages = self._convert_messages_to_openai(messages, system)
 
         kwargs: dict[str, Any] = {
@@ -324,9 +350,57 @@ class LLMClient:
 
         max_retries = settings.openhack_max_retries
         last_exception = None
+        self._event(
+            "model_call_started",
+            {
+                "provider": getattr(self, "provider", None),
+                "requested_model": self.model,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "stream": True,
+                "tool_choice": tool_choice or ("auto" if tools else None),
+                "messages": openai_messages,
+                "tools": self._convert_tools_to_openai_format(tools) if tools else [],
+            },
+            model_call_id=model_call_id,
+        )
 
         for attempt in range(max_retries + 1):
             stream = None
+            content_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            tool_call_acc: dict[int, dict] = {}
+
+            def record_failure(exc: BaseException, retryable: bool) -> None:
+                self._event(
+                    "model_attempt_failed",
+                    {
+                        "attempt": attempt + 1,
+                        "max_attempts": max_retries + 1,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "retryable": retryable,
+                        "will_retry": retryable and attempt < max_retries,
+                        "partial_content": "".join(content_parts),
+                        "partial_reasoning_characters": sum(
+                            len(part) for part in reasoning_parts
+                        ),
+                        "partial_tool_calls": [
+                            {
+                                "index": idx,
+                                "id": acc.get("id"),
+                                "name": acc.get("name"),
+                                "raw_arguments": "".join(
+                                    acc.get("arguments_parts") or []
+                                ),
+                            }
+                            for idx, acc in sorted(tool_call_acc.items())
+                        ],
+                        "elapsed_seconds": time.monotonic() - call_started,
+                    },
+                    model_call_id=model_call_id,
+                )
+
             try:
                 if attempt > 0:
                     # Capped exponential backoff. Uncapped this went
@@ -344,19 +418,35 @@ class LLMClient:
                         f"upstream {reason} — retrying in {wait_time}s "
                         f"({attempt + 1}/{max_retries + 1})"
                     )
+                    self._event(
+                        "model_call_retry_scheduled",
+                        {
+                            "attempt": attempt + 1,
+                            "max_attempts": max_retries + 1,
+                            "wait_seconds": wait_time,
+                            "reason": reason,
+                            "error": str(last_exception) if last_exception else None,
+                        },
+                        model_call_id=model_call_id,
+                    )
                     await asyncio.sleep(wait_time)
 
                 stream = await self.client.chat.completions.create(**kwargs)
+                self._event(
+                    "model_stream_opened",
+                    {"attempt": attempt + 1},
+                    model_call_id=model_call_id,
+                )
                 # Recovered: clear the retry notice so it can't linger after the
                 # call succeeds.
                 if attempt > 0:
                     self._status("")
 
-                content_parts: list[str] = []
-                reasoning_parts: list[str] = []
-                tool_call_acc: dict[int, dict] = {}
                 input_tokens = 0
                 output_tokens = 0
+                finish_reason: Optional[str] = None
+                response_id: Optional[str] = None
+                returned_model: Optional[str] = None
 
                 # Stall watchdog. Iterate by hand rather than `async for` so each
                 # step carries a deadline measured from the last *meaningful*
@@ -385,6 +475,8 @@ class LLMClient:
                         ) from e
 
                     progressed = False
+                    response_id = getattr(chunk, "id", None) or response_id
+                    returned_model = getattr(chunk, "model", None) or returned_model
 
                     if chunk.usage:
                         input_tokens = chunk.usage.prompt_tokens or 0
@@ -397,17 +489,43 @@ class LLMClient:
                         continue
 
                     delta = chunk.choices[0].delta
+                    chunk_finish = getattr(chunk.choices[0], "finish_reason", None)
+                    if chunk_finish is not None:
+                        finish_reason = str(chunk_finish)
+                        self._event(
+                            "model_finish_reason_received",
+                            {"finish_reason": finish_reason, "attempt": attempt + 1},
+                            model_call_id=model_call_id,
+                        )
 
                     if delta.content:
+                        if first_token_at is None:
+                            first_token_at = time.monotonic()
                         content_parts.append(delta.content)
                         progressed = True
+                        self._event(
+                            "model_stream_delta",
+                            {"kind": "content", "delta": delta.content},
+                            model_call_id=model_call_id,
+                            durable=False,
+                        )
                         if on_chunk:
                             on_chunk("content", delta.content)
 
                     rc = getattr(delta, "reasoning_content", None)
                     if rc:
+                        if first_token_at is None:
+                            first_token_at = time.monotonic()
                         reasoning_parts.append(rc)
                         progressed = True
+                        # Do not put private chain-of-thought in an operational
+                        # log. Presence and size are enough to diagnose stalls.
+                        self._event(
+                            "model_stream_delta",
+                            {"kind": "reasoning", "characters": len(rc)},
+                            model_call_id=model_call_id,
+                            durable=False,
+                        )
                         if on_chunk:
                             on_chunk("reasoning", rc)
 
@@ -425,11 +543,28 @@ class LLMClient:
                                 acc["id"] = tc_delta.id
                             if tc_delta.function:
                                 if tc_delta.function.name:
+                                    if first_token_at is None:
+                                        first_token_at = time.monotonic()
                                     acc["name"] = tc_delta.function.name
                                     progressed = True
                                 if tc_delta.function.arguments:
                                     acc["arguments_parts"].append(tc_delta.function.arguments)
                                     progressed = True
+                                    if first_token_at is None:
+                                        first_token_at = time.monotonic()
+                                    self._event(
+                                        "model_stream_delta",
+                                        {
+                                            "kind": "tool_args",
+                                            "tool_index": idx,
+                                            "tool_call_id": acc["id"],
+                                            "tool_name": acc["name"],
+                                            "delta": tc_delta.function.arguments,
+                                        },
+                                        model_call_id=model_call_id,
+                                        tool_call_id=acc["id"] or None,
+                                        durable=False,
+                                    )
                                     # Writing a large file means minutes of pure
                                     # tool-argument stream. Without this the UI
                                     # gets no signal at all and looks hung.
@@ -448,10 +583,31 @@ class LLMClient:
                     raw_args = "".join(acc["arguments_parts"])
                     try:
                         args = json.loads(raw_args) if raw_args else {}
-                    except json.JSONDecodeError:
+                        parse_error = None
+                    except json.JSONDecodeError as exc:
                         logger.warning(f"Failed to parse tool call arguments: {raw_args[:200]}")
                         args = {}
-                    tool_calls.append(ToolCall(id=acc["id"], name=acc["name"], arguments=args))
+                        parse_error = str(exc)
+                        self._event(
+                            "tool_arguments_parse_failed",
+                            {
+                                "tool_index": idx,
+                                "tool_name": acc["name"],
+                                "raw_arguments": raw_args,
+                                "error": parse_error,
+                            },
+                            model_call_id=model_call_id,
+                            tool_call_id=acc["id"] or None,
+                        )
+                    tool_calls.append(
+                        ToolCall(
+                            id=acc["id"],
+                            name=acc["name"],
+                            arguments=args,
+                            raw_arguments=raw_args,
+                            parse_error=parse_error,
+                        )
+                    )
 
                 if input_tokens == 0 and output_tokens == 0:
                     logger.debug("No usage data in stream — cost will be zero for this call")
@@ -467,11 +623,46 @@ class LLMClient:
                     tool_calls=tool_calls,
                     usage={"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": input_tokens + output_tokens},
                     cost=cost,
+                    finish_reason=finish_reason,
+                    response_id=response_id,
+                    returned_model=returned_model,
+                    model_call_id=model_call_id,
+                    attempts=attempt + 1,
+                    latency_seconds=time.monotonic() - call_started,
+                    time_to_first_token_seconds=(
+                        first_token_at - call_started if first_token_at else None
+                    ),
                 )
                 llm_response.reasoning_content = reasoning_content
+                self._event(
+                    "model_call_completed",
+                    {
+                        "finish_reason": finish_reason,
+                        "response_id": response_id,
+                        "returned_model": returned_model,
+                        "attempts": attempt + 1,
+                        "latency_seconds": llm_response.latency_seconds,
+                        "time_to_first_token_seconds": llm_response.time_to_first_token_seconds,
+                        "usage": llm_response.usage,
+                        "cost": cost,
+                        "content": content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "name": tc.name,
+                                "arguments": tc.arguments,
+                                "raw_arguments": tc.raw_arguments,
+                                "parse_error": tc.parse_error,
+                            }
+                            for tc in tool_calls
+                        ],
+                    },
+                    model_call_id=model_call_id,
+                )
                 return llm_response
 
             except openai.RateLimitError as e:
+                record_failure(e, True)
                 last_exception = e
                 if stream:
                     try: await stream.close()
@@ -479,6 +670,7 @@ class LLMClient:
                 if attempt == max_retries:
                     raise
             except openai.AuthenticationError as e:
+                record_failure(e, False)
                 detail = getattr(e, "message", str(e))
                 raise ValueError(
                     f"Authentication failed (401): {detail}\n"
@@ -486,6 +678,7 @@ class LLMClient:
                     f"Check that your API key is valid and has not expired."
                 ) from e
             except openai.PermissionDeniedError as e:
+                record_failure(e, False)
                 detail = getattr(e, "message", str(e))
                 if "credits" in detail.lower() or "insufficient" in detail.lower():
                     raise ValueError(
@@ -496,6 +689,7 @@ class LLMClient:
                     f"Check your API key at: {settings.openhack_app_url}/settings/api-keys"
                 ) from e
             except openai.APIStatusError as e:
+                record_failure(e, e.status_code >= 500)
                 if stream:
                     try: await stream.close()
                     except Exception: pass
@@ -506,6 +700,7 @@ class LLMClient:
                 else:
                     raise
             except openai.APITimeoutError as e:
+                record_failure(e, True)
                 last_exception = e
                 if stream:
                     try: await stream.close()
@@ -513,16 +708,16 @@ class LLMClient:
                 if attempt == max_retries:
                     raise
             except openai.APIConnectionError as e:
+                record_failure(e, True)
                 last_exception = e
                 if stream:
                     try: await stream.close()
                     except Exception: pass
                 if attempt == max_retries:
                     raise
-                wait_time = 10 * (2 ** attempt)
-                await asyncio.sleep(wait_time)
                 continue
             except openai.APIError as e:
+                record_failure(e, True)
                 # Base APIError not matched by the specific handlers above — most
                 # commonly a transient upstream error delivered *mid-stream* as an
                 # SSE error event (e.g. a provider/gateway 'server_error' like
@@ -536,6 +731,7 @@ class LLMClient:
                 if attempt == max_retries:
                     raise
             except StreamStalled as e:
+                record_failure(e, True)
                 # A wedged-but-warm upstream. Closing the stream drops the
                 # connection, so the retry gets a fresh one — and, at the
                 # gateway, another shot at provider failover.
@@ -547,7 +743,21 @@ class LLMClient:
                     except Exception: pass
                 if attempt == max_retries:
                     raise
+            except asyncio.CancelledError as e:
+                record_failure(e, False)
+                self._event(
+                    "model_call_cancelled",
+                    {"attempt": attempt + 1},
+                    model_call_id=model_call_id,
+                )
+                if stream:
+                    try:
+                        await stream.close()
+                    except Exception:
+                        pass
+                raise
             except Exception as e:
+                record_failure(e, False)
                 logger.debug(f"OpenHack API error: {e}", exc_info=True)
                 if stream:
                     try: await stream.close()

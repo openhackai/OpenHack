@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from openhack.agents.eventlog import redact
+
 # ANSI styling — Signal Green is the OpenHack accent. Disabled when not a TTY.
 _TTY = sys.stdout.isatty()
 
@@ -140,38 +142,68 @@ def run_task(task: str, target_dir: Optional[str] = None, model: Optional[str] =
     except KeyboardInterrupt:
         session.cancel()
         print(_c(_MUTED, "\n  interrupted"))
-        _persist_run(session, task, target, "cancelled")
+        _persist_run(session, task, target, "cancelled", agent=agent)
         return {"error": "interrupted"}
     _print_result(result, session, fallback=state.get("last_text", ""))
-    _persist_run(session, task, target, "completed")
+    _persist_run(
+        session,
+        task,
+        target,
+        "failed" if result.get("error") else "completed",
+        agent=agent,
+    )
     return result
 
 
-def _persist_run(session, task: str, target: str, status: str) -> None:
+def _persist_run(session, task: str, target: str, status: str, agent=None) -> None:
     """Write a full structured trace of the run (every tool input/output, cost,
     findings) to ~/.openhack/scans/<id>.json for later review. Never fails the run."""
     try:
+        if status in {"running", "completed", "cancelled", "failed", "paused"}:
+            session.transition_status(status, "plain_terminal_report_status")
+        session.record_event(
+            "report_write_started",
+            {"status": status, "target_dir": target, "mode": "plain_terminal"},
+            agent="system",
+        )
         import json
         report_dir = Path.home() / ".openhack" / "scans"
         report_dir.mkdir(parents=True, exist_ok=True)
 
         def _trace(e):
-            out = e.tool_output
-            if out is not None and not isinstance(out, (dict, list, int, float, bool)):
-                s = str(out)
-                out = s if len(s) <= 8000 else s[:8000] + "…"
             return {
                 "timestamp": e.timestamp, "agent": e.agent, "event_type": e.event_type,
-                "content": e.content, "tool_name": e.tool_name,
-                "tool_input": e.tool_input, "tool_output": out,
+                "content": redact(e.content), "tool_name": e.tool_name,
+                "tool_input": redact(e.tool_input), "tool_output": redact(e.tool_output),
+                "event_id": e.event_id, "sequence": e.sequence,
+                "turn_id": e.turn_id, "model_call_id": e.model_call_id,
+                "tool_call_id": e.tool_call_id, "metadata": redact(e.metadata),
             }
 
         report = {
-            "version": 2, "kind": "hack", "task": task, "scan_id": session.id,
+            "version": 3, "event_schema_version": 1,
+            "kind": "agent", "task": task, "scan_id": session.id,
             "target_dir": target, "status": status,
+            "status_history": session.status_history,
+            "parent_session_id": session.parent_session_id,
+            "trace_id": session.trace_id,
+            "event_log_path": session.event_log_path,
+            "event_count": len(session.events),
+            "event_log_error": session.journal.last_error,
+            "provider": getattr(getattr(agent, "llm", None), "provider", None),
+            "model": getattr(getattr(agent, "llm", None), "model", None),
+            "system_prompt": getattr(agent, "_system_prompt", None),
             "cost": session.get_cost_breakdown(),
             "findings": [f.to_dict() for f in session.findings],
             "trace": [_trace(e) for e in session.trace],
+            "message_history": [
+                {
+                    k: v
+                    for k, v in redact(m.to_dict()).items()
+                    if k != "reasoning_content"
+                }
+                for m in (getattr(agent, "messages", None) or [])
+            ],
         }
         path = report_dir / f"{session.id}.json"
         tmp = path.with_suffix(".json.tmp")
@@ -179,8 +211,17 @@ def _persist_run(session, task: str, target: str, status: str) -> None:
             json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
         import os as _os
         _os.replace(tmp, path)
-    except Exception:
-        pass
+        session.record_event(
+            "report_write_completed",
+            {"path": str(path), "status": status, "bytes": path.stat().st_size},
+            agent="system",
+        )
+    except Exception as exc:
+        session.record_event(
+            "report_write_failed",
+            {"status": status, "error_type": type(exc).__name__, "error": str(exc)},
+            agent="system",
+        )
 
 
 def run_plan(objective: str, target_dir: Optional[str] = None, model: Optional[str] = None) -> dict:

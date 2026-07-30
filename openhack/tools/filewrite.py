@@ -15,6 +15,7 @@ only on the agent tier — the scan pipeline stays strictly read-only.
 """
 
 from pathlib import Path
+import hashlib
 from typing import Optional
 
 from openhack.tools.filesystem import FileSystemTools
@@ -29,9 +30,9 @@ class FileWriteTools:
     # this cap exists to give a clear error instead of a truncated write.
     MAX_CONTENT = 100_000
 
-    def __init__(self, jail_dir: Path):
+    def __init__(self, jail_dir: Path, unrestricted: bool = False):
         # Reuse FileSystemTools' jail so write and read enforce identical rules.
-        self._fs = FileSystemTools(Path(jail_dir))
+        self._fs = FileSystemTools(Path(jail_dir), unrestricted=unrestricted)
 
     @property
     def jail_dir(self) -> Path:
@@ -63,6 +64,13 @@ class FileWriteTools:
         except PermissionError as e:
             return {"error": str(e)}
 
+        existed_before = resolved.exists()
+        before_hash = None
+        before_size = None
+        if existed_before and resolved.is_file():
+            before_size = resolved.stat().st_size
+            before_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
+
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
             with open(resolved, "a" if append else "w", encoding="utf-8") as fp:
@@ -86,10 +94,18 @@ class FileWriteTools:
             total = None
         return {
             "path": self._rel(resolved),
+            "resolved_path": str(resolved),
             "bytes_written": len(content.encode("utf-8")),
             "total_size": total,
             "appended": bool(append),
-            "created": not append,
+            "created": not existed_before,
+            "existed_before": existed_before,
+            "size_before": before_size,
+            "sha256_before": before_hash,
+            "sha256_after": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+            "access_scope": (
+                "unrestricted" if self._fs.unrestricted else "target_jail"
+            ),
         }
 
     def _rel(self, resolved: Path) -> str:

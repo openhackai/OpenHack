@@ -234,11 +234,13 @@ class HunterAgent(BaseAgent):
     async def run(self, task: str, context: Optional[dict] = None) -> dict:
         context = context or {}
         self.session.current_agent = self.name
+        self.session.start_turn(task, self.name)
         self.findings = []
         self._files_read = set()
 
         system_prompt = self.get_system_prompt(context)
-        self.messages = [Message(role="user", content=task)]
+        self.messages = []
+        self._append_message(Message(role="user", content=task), source="run")
         self._seed_existing_instructions()
 
         max_iterations = self.max_iterations
@@ -313,10 +315,7 @@ class HunterAgent(BaseAgent):
                 else:
                     raise
 
-            self.session.total_cost += response.cost
-            if response.usage:
-                self.session.total_tokens += response.usage.get("total_tokens", 0)
-                self.context_manager.update_usage(response.usage.get("input_tokens", 0))
+            self._record_response_usage(response)
 
             if response.content:
                 self.session.add_trace(agent=self.name, event_type="thinking", content=response.content)
@@ -328,20 +327,29 @@ class HunterAgent(BaseAgent):
                         analysis_mode = False
                         analysis_mode_turns = 0
                         continue
-                    self.messages.append(Message(
+                    self._append_message(Message(
                         role="user",
                         content=(
                             "You responded with text but did not call any tools. "
                             "You MUST call report_finding or finish_hunt. "
                             "Do NOT respond with text — use the tools."
                         ),
-                    ))
+                    ), source="analysis_mode_guard")
                     continue
                 if len(self.findings) == 0 and continuation_prompts_sent < max_continuation_prompts:
                     continuation_prompts_sent += 1
-                    self.messages.append(Message(role="user", content=HUNTER_CONTINUATION_NO_FINDINGS))
+                    self._append_message(
+                        Message(role="user", content=HUNTER_CONTINUATION_NO_FINDINGS),
+                        source="no_findings_guard",
+                    )
                     continue
-                return self._build_result(response.content or "")
+                self._append_message(
+                    Message(role="assistant", content=response.content),
+                    source="model_text_response",
+                )
+                result = self._build_result(response.content or "")
+                self.session.finish_turn("completed", result, agent=self.name)
+                return result
 
             current_tools = [tc.name for tc in response.tool_calls]
             recent_tools.extend(current_tools)
@@ -352,7 +360,15 @@ class HunterAgent(BaseAgent):
                 if len(set(last_n)) == 1 and last_n[0] in ("list_dir", "glob"):
                     if continuation_prompts_sent < max_continuation_prompts:
                         continuation_prompts_sent += 1
-                        self.messages.append(Message(role="user", content=HUNTER_CONTINUATION_LOOP.format(tool_name=last_n[0])))
+                        self._append_message(
+                            Message(
+                                role="user",
+                                content=HUNTER_CONTINUATION_LOOP.format(
+                                    tool_name=last_n[0]
+                                ),
+                            ),
+                            source="loop_guard",
+                        )
                         recent_tools = []
                         continue
 
@@ -363,9 +379,8 @@ class HunterAgent(BaseAgent):
                     {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                     for tc in response.tool_calls
                 ],
-                reasoning_content=getattr(response, 'reasoning_content', None),
             )
-            self.messages.append(assistant_msg)
+            self._append_message(assistant_msg, source="model_tool_response")
 
             should_finish = False
             has_only_reads = all(tc.name == "read_file" for tc in response.tool_calls)
@@ -374,6 +389,12 @@ class HunterAgent(BaseAgent):
                     agent=self.name, event_type="tool_call",
                     content=f"Calling {tool_call.name}",
                     tool_name=tool_call.name, tool_input=tool_call.arguments,
+                    model_call_id=response.model_call_id,
+                    tool_call_id=tool_call.id,
+                    metadata={
+                        "raw_arguments": tool_call.raw_arguments,
+                        "parse_error": tool_call.parse_error,
+                    },
                 )
 
                 if tool_call.name == "report_finding":
@@ -399,6 +420,8 @@ class HunterAgent(BaseAgent):
                     agent=self.name, event_type="tool_result",
                     content=f"Result from {tool_call.name}",
                     tool_name=tool_call.name, tool_output=result,
+                    model_call_id=response.model_call_id,
+                    tool_call_id=tool_call.id,
                 )
 
                 raw_content = json.dumps(result) if isinstance(result, dict) else str(result)
@@ -407,10 +430,14 @@ class HunterAgent(BaseAgent):
                     tool_call_id=tool_call.id,
                     content=truncated_content,
                 )
-                self.messages.append(tool_result.to_message())
+                self._append_message(
+                    tool_result.to_message(), source=f"tool_result:{tool_call.name}"
+                )
 
             if should_finish:
-                return self._build_result(response.content or "")
+                result = self._build_result(response.content or "")
+                self.session.finish_turn("completed", result, agent=self.name)
+                return result
 
             if has_only_reads:
                 consecutive_reads += 1
@@ -428,7 +455,7 @@ class HunterAgent(BaseAgent):
                 analysis_mode = True
                 analysis_mode_turns = 0
                 files_list = ", ".join(sorted(self._files_read)[-10:])
-                self.messages.append(Message(
+                self._append_message(Message(
                     role="user",
                     content=(
                         f"[ANALYSIS CHECKPOINT] You have read {len(self._files_read)} files without reporting "
@@ -447,7 +474,7 @@ class HunterAgent(BaseAgent):
                         f"Report at confidence='medium' if uncertain. Under-reporting is a failure mode. "
                         f"You MUST use the report_finding tool, not describe findings in text."
                     ),
-                ))
+                ), source="analysis_checkpoint")
                 consecutive_reads = 0
                 logger.info(f"[{self.name}] Analysis checkpoint at iteration {iteration}, {len(self._files_read)} files read")
 
@@ -459,15 +486,21 @@ class HunterAgent(BaseAgent):
                 len(self.findings) == 0 and
                 continuation_prompts_sent < max_continuation_prompts):
                 continuation_prompts_sent += 1
-                self.messages.append(Message(
+                self._append_message(Message(
                     role="user",
                     content=HUNTER_CONTINUATION_NO_PROGRESS.format(
                         files_count=len(self._files_read), iteration=iteration,
                     ),
-                ))
+                ), source="no_progress_guard")
                 iterations_since_finding = 0
 
-        return self._build_result("Max iterations reached")
+        result = self._build_result("Max iterations reached")
+        self.session.finish_turn(
+            "cancelled" if self.session.cancelled else "max_iterations",
+            result,
+            agent=self.name,
+        )
+        return result
 
     def _build_result(self, summary: str) -> dict:
         return {

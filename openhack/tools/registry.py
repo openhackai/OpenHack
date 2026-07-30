@@ -17,6 +17,7 @@ from .oob import OOBTools
 from .browser import BrowserTools
 from .web import WebTools
 from .filewrite import FileWriteTools
+from .completion import CompletionTools
 
 
 class ToolRegistry:
@@ -32,7 +33,9 @@ class ToolRegistry:
                  include_stateful_browser: bool = False, browser_base_url: str = "",
                  shells=None):
         self.target_dir = target_dir
-        self.fs_tools = FileSystemTools(target_dir)
+        # Interactive operator sessions intentionally have host-wide filesystem
+        # access. The autonomous scan pipeline remains target-jailed/read-only.
+        self.fs_tools = FileSystemTools(target_dir, unrestricted=include_agent_tools)
         self.nextjs_tools = NextJSTools(self.fs_tools)
         self.ast_tools = ASTTools(self.fs_tools)
 
@@ -48,11 +51,13 @@ class ToolRegistry:
             self.browser_tools = BrowserTools(evidence_dir=target_dir / ".openhack-evidence")
             self.web_tools = WebTools()
             # Writing is agent-only: the scan pipeline stays strictly read-only.
-            self.filewrite_tools = FileWriteTools(jail_dir=target_dir)
+            self.filewrite_tools = FileWriteTools(jail_dir=target_dir, unrestricted=True)
+            self.completion_tools = CompletionTools()
             self._tool_sources += [
                 self.shell_tools, self.security_tools, self.mailbox_tools,
                 self.recon_tools, self.oob_tools, self.browser_tools,
                 self.web_tools, self.filewrite_tools,
+                self.completion_tools,
             ]
             # Stateful (persistent-session) browser — opt-in, for specialist
             # exploiters (e.g. XSS victim-bot flows). Off by default so the
