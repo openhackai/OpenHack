@@ -201,6 +201,16 @@ def _abbrev_home(path: str) -> str:
     return path
 
 
+def _resolve_path_argument(raw: str, *, default: Optional[str] = None) -> Path:
+    """Resolve a CLI/TUI path, accepting the ``@path`` mention syntax."""
+    value = (raw or "").strip()
+    if value.startswith("@"):
+        value = value[1:].strip()
+    if not value:
+        value = default or os.getcwd()
+    return Path(os.path.expanduser(value)).resolve()
+
+
 def _git_branch(path: str) -> str:
     """Current git branch for `path`, or "" if not a repo."""
     try:
@@ -3414,10 +3424,11 @@ class OpenHackApp:
         elif cmd == "/model":
             self._cmd_model(arg)
         elif cmd == "/scan":
-            target = (arg.strip() or os.getcwd())
-            target_path = Path(target).resolve()
+            target_path = _resolve_path_argument(arg, default=os.getcwd())
             if not target_path.exists():
                 self.last_status_line = f"error: directory not found: {target_path}"
+            elif not target_path.is_dir():
+                self.last_status_line = f"error: not a directory: {target_path}"
             else:
                 self._start_scan(str(target_path))
         elif cmd in ("/cd", "/cwd"):
@@ -3459,19 +3470,13 @@ class OpenHackApp:
         /scan target, @-file completion, the agent root, the landing footer —
         follows the new directory."""
         raw = arg.strip()
-        # Tolerate the '@dir' mention style — the @-completer inserts an @ prefix.
-        if raw.startswith("@"):
-            raw = raw[1:].strip()
         if not raw:
             self.last_status_line = f"cwd: {_abbrev_home(os.getcwd())} — usage: /cd <path>"
             return
-        target = Path(os.path.expanduser(raw))
-        if not target.is_absolute():
-            target = Path(os.getcwd()) / target
         try:
-            target = target.resolve()
+            target = _resolve_path_argument(raw)
         except OSError:
-            pass
+            target = Path(os.path.expanduser(raw.removeprefix("@").strip()))
         if not target.exists():
             self.last_status_line = f"error: no such directory: {target}"
             return
