@@ -3625,8 +3625,9 @@ class OpenHackApp:
                     else "class:picker.row"
                 )
                 check = "✓ " if provider["connected"] else "  "
-                hint = f"  {provider['hint']}" if provider.get("hint") else ""
-                text = f"  {check}{provider['label']}{hint}"
+                qualifier = provider.get("picker_hint", "")
+                suffix = f" ({qualifier})" if qualifier else ""
+                text = f"  {check}{provider['label']}{suffix}"
                 out.append((cls, text[:60].ljust(60)))
                 out.append(("", "\n"))
             return out
@@ -4583,6 +4584,12 @@ class OpenHackApp:
     # ── Model picker overlay ──────────────────────────────────────
     _CURATED_PROVIDERS = CURATED_PROVIDER_IDS
     _OTHER_PROVIDER_ID = "__other__"
+    _PROVIDER_PICKER_HINTS = {
+        "openhack": "Recommended",
+        "openai": "ChatGPT Plus/Pro or API key",
+        "anthropic": "API key",
+        "openrouter": "API key",
+    }
 
     def _provider_entries(self, specs) -> list[dict]:
         """Build the curated or long-tail picker without resolving providers."""
@@ -4594,6 +4601,7 @@ class OpenHackApp:
                 "id": "openhack",
                 "label": "OpenHack",
                 "hint": "Hosted inference",
+                "picker_hint": self._PROVIDER_PICKER_HINTS["openhack"],
                 "connected": True,
                 "category": "Popular",
             }
@@ -4604,6 +4612,9 @@ class OpenHackApp:
                     "id": spec.name,
                     "label": spec.label,
                     "hint": spec.hint,
+                    "picker_hint": self._PROVIDER_PICKER_HINTS.get(
+                        spec.name, ""
+                    ),
                     "connected": bool(
                         os.environ.get(spec.api_key_env)
                         or credentials.get(spec.name)
@@ -4644,6 +4655,7 @@ class OpenHackApp:
                     "id": self._OTHER_PROVIDER_ID,
                     "label": "Other…",
                     "hint": "Browse every supported provider",
+                    "picker_hint": "",
                     "connected": False,
                     "category": "More",
                 }
