@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 MODELS_DEV_URL = "https://models.dev/api.json"
 CATALOG_CACHE_PATH = Path.home() / ".openhack" / "models-dev.json"
 CATALOG_CACHE_TTL = 24 * 60 * 60
+_MEMORY_CATALOG: Optional[dict[str, Any]] = None
+_MEMORY_CACHE_PATH: Optional[Path] = None
+_MEMORY_LOCK = threading.Lock()
 
 # Preserve the product's existing ranking.  These models always float to the
 # top when a provider offers them.
@@ -156,6 +160,7 @@ def _write_cache(data: dict[str, Any], path: Path = CATALOG_CACHE_PATH) -> None:
 def load_models_dev(
     *,
     refresh: bool = False,
+    allow_network: bool = True,
     timeout: float = 4.0,
     cache_path: Path = CATALOG_CACHE_PATH,
 ) -> Optional[dict[str, Any]]:
@@ -164,13 +169,29 @@ def load_models_dev(
     Network failure is deliberately non-fatal: callers always have the bundled
     catalog for first-party, Zen, Go, and common BYOK providers.
     """
-    cached = _read_cache(cache_path)
+    global _MEMORY_CATALOG, _MEMORY_CACHE_PATH
+    with _MEMORY_LOCK:
+        memory = (
+            _MEMORY_CATALOG
+            if _MEMORY_CACHE_PATH == cache_path
+            else None
+        )
+    if memory is not None and not refresh:
+        return memory
+
+    cached = memory or _read_cache(cache_path)
+    if cached is not None:
+        with _MEMORY_LOCK:
+            _MEMORY_CATALOG = cached
+            _MEMORY_CACHE_PATH = cache_path
     fresh = False
     try:
         fresh = time.time() - cache_path.stat().st_mtime < CATALOG_CACHE_TTL
     except OSError:
         pass
     if cached and fresh and not refresh:
+        return cached
+    if not allow_network:
         return cached
 
     try:
@@ -181,6 +202,9 @@ def load_models_dev(
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
         if isinstance(data, dict):
+            with _MEMORY_LOCK:
+                _MEMORY_CATALOG = data
+                _MEMORY_CACHE_PATH = cache_path
             _write_cache(data, cache_path)
             return data
     except Exception as exc:
@@ -199,7 +223,7 @@ def provider_from_models_dev(
     *,
     catalog: Optional[dict[str, Any]] = None,
 ) -> Optional[CatalogProvider]:
-    catalog = catalog or load_models_dev()
+    catalog = catalog or load_models_dev(allow_network=False)
     raw = catalog.get(provider_id) if catalog else None
     if not isinstance(raw, dict):
         return None
@@ -228,10 +252,10 @@ def provider_from_models_dev(
 
 
 def discover_compatible_providers(
-    *, refresh: bool = False
+    *, refresh: bool = False, allow_network: bool = False
 ) -> list[CatalogProvider]:
     """Discover providers that explicitly use OpenAI-compatible wire format."""
-    catalog = load_models_dev(refresh=refresh)
+    catalog = load_models_dev(refresh=refresh, allow_network=allow_network)
     if not catalog:
         return []
     found: list[CatalogProvider] = []

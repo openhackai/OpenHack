@@ -50,7 +50,13 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.formatted_text import split_lines
 from prompt_toolkit.layout.dimension import Dimension as D
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation
+from prompt_toolkit.layout.processors import (
+    BeforeInput,
+    ConditionalProcessor,
+    PasswordProcessor,
+    Processor,
+    Transformation,
+)
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
@@ -1593,8 +1599,19 @@ class OpenHackApp:
         self.sessions_selected: int = 0
         self.model_index: list[dict] = []
         self.model_selected: int = 0
+        self._model_all: list[dict] = []
+        self._model_query: str = ""
         self.provider_index: list[dict] = []
         self.provider_selected: int = 0
+        self._provider_all: list[dict] = []
+        self._provider_query: str = ""
+        self._provider_action: str = "switch"
+        self._provider_refresh_started: bool = False
+        self._provider_auth_id: str = ""
+        self._provider_auth_label: str = ""
+        self._provider_method_index: int = 0
+        self._provider_oauth_message: str = ""
+        self._provider_oauth_task: Optional[asyncio.Task] = None
         self.viewing_target: str = ""  # header label when in "viewing" mode
         # Id of the report open in "viewing" mode — there is no live Session
         # then, so this is what keeps the bottom-right id honest.
@@ -1649,6 +1666,7 @@ class OpenHackApp:
             complete_while_typing=True,
             accept_handler=self._on_buffer_accept,
         )
+        self.input_buffer.on_text_changed += self._on_input_text_changed
 
         self.kb = self._build_keybindings()
         self.layout = self._build_layout()
@@ -1837,6 +1855,15 @@ class OpenHackApp:
         def _in_providers() -> bool:
             return self.mode == "providers"
 
+        def _in_provider_methods() -> bool:
+            return self.mode == "provider_methods"
+
+        def _in_provider_key() -> bool:
+            return self.mode == "provider_key"
+
+        def _in_provider_oauth() -> bool:
+            return self.mode == "provider_oauth"
+
         def _input_empty() -> bool:
             return not self.input_buffer.text
 
@@ -2016,34 +2043,37 @@ class OpenHackApp:
             self._close_sessions_overlay()
 
         # Model picker keybindings.
-        @kb.add("up", filter=Condition(lambda: _in_models() and _input_empty()))
+        @kb.add("up", filter=Condition(_in_models))
         def _m_up(event):
             if self.model_index:
                 self.model_selected = max(0, self.model_selected - 1)
                 self._invalidate()
 
-        @kb.add("down", filter=Condition(lambda: _in_models() and _input_empty()))
+        @kb.add("down", filter=Condition(_in_models))
         def _m_down(event):
             if self.model_index:
                 self.model_selected = min(len(self.model_index) - 1, self.model_selected + 1)
                 self._invalidate()
 
-        @kb.add("enter", filter=Condition(lambda: _in_models() and _input_empty()))
+        @kb.add("enter", filter=Condition(_in_models))
         def _m_enter(event):
             self._select_model_from_picker()
 
-        @kb.add("escape", eager=True, filter=Condition(lambda: _in_models() and _input_empty()))
+        @kb.add("escape", eager=True, filter=Condition(_in_models))
         def _m_esc(event):
-            self._close_model_picker()
+            if self._model_query:
+                self.input_buffer.reset()
+            else:
+                self._close_model_picker()
 
         # Provider picker keybindings.
-        @kb.add("up", filter=Condition(lambda: _in_providers() and _input_empty()))
+        @kb.add("up", filter=Condition(_in_providers))
         def _p_up(event):
             if self.provider_index:
                 self.provider_selected = max(0, self.provider_selected - 1)
                 self._invalidate()
 
-        @kb.add("down", filter=Condition(lambda: _in_providers() and _input_empty()))
+        @kb.add("down", filter=Condition(_in_providers))
         def _p_down(event):
             if self.provider_index:
                 self.provider_selected = min(
@@ -2051,13 +2081,43 @@ class OpenHackApp:
                 )
                 self._invalidate()
 
-        @kb.add("enter", filter=Condition(lambda: _in_providers() and _input_empty()))
+        @kb.add("enter", filter=Condition(_in_providers))
         def _p_enter(event):
             self._select_provider_from_picker()
 
-        @kb.add("escape", eager=True, filter=Condition(lambda: _in_providers() and _input_empty()))
+        @kb.add("escape", eager=True, filter=Condition(_in_providers))
         def _p_esc(event):
-            self._close_provider_picker()
+            if self._provider_query:
+                self.input_buffer.reset()
+            else:
+                self._close_provider_picker()
+
+        @kb.add("up", filter=Condition(_in_provider_methods))
+        def _pm_up(event):
+            self._provider_method_index = max(
+                0, self._provider_method_index - 1
+            )
+            self._invalidate()
+
+        @kb.add("down", filter=Condition(_in_provider_methods))
+        def _pm_down(event):
+            self._provider_method_index = min(
+                2, self._provider_method_index + 1
+            )
+            self._invalidate()
+
+        @kb.add("enter", filter=Condition(_in_provider_methods))
+        def _pm_enter(event):
+            self._select_provider_auth_method()
+
+        @kb.add("escape", eager=True, filter=Condition(_in_provider_methods))
+        @kb.add("escape", eager=True, filter=Condition(_in_provider_key))
+        @kb.add("escape", eager=True, filter=Condition(_in_provider_oauth))
+        def _provider_auth_escape(event):
+            self.input_buffer.reset()
+            self.mode = self.previous_mode or "landing"
+            self.previous_mode = None
+            self._invalidate()
 
         # Background-shell watcher (/bashes).
         def _in_shells() -> bool:
@@ -2258,6 +2318,9 @@ class OpenHackApp:
         is_sessions = Condition(lambda: self.mode == "sessions")
         is_models = Condition(lambda: self.mode == "models")
         is_providers = Condition(lambda: self.mode == "providers")
+        is_provider_methods = Condition(lambda: self.mode == "provider_methods")
+        is_provider_key = Condition(lambda: self.mode == "provider_key")
+        is_provider_oauth = Condition(lambda: self.mode == "provider_oauth")
         is_shells = Condition(lambda: self.mode == "shells")
         is_scanning = Condition(lambda: self.mode in ("scanning", "viewing"))
 
@@ -2266,6 +2329,9 @@ class OpenHackApp:
         sessions = self._build_sessions_container()
         models = self._build_model_container()
         providers = self._build_provider_container()
+        provider_methods = self._build_provider_methods_container()
+        provider_key = self._build_provider_key_container()
+        provider_oauth = self._build_provider_oauth_container()
         shells = self._build_shells_container()
 
         body = HSplit([
@@ -2273,6 +2339,9 @@ class OpenHackApp:
             ConditionalContainer(content=sessions, filter=is_sessions),
             ConditionalContainer(content=models, filter=is_models),
             ConditionalContainer(content=providers, filter=is_providers),
+            ConditionalContainer(content=provider_methods, filter=is_provider_methods),
+            ConditionalContainer(content=provider_key, filter=is_provider_key),
+            ConditionalContainer(content=provider_oauth, filter=is_provider_oauth),
             ConditionalContainer(content=shells, filter=is_shells),
             ConditionalContainer(content=scan, filter=is_scanning),
         ])
@@ -2339,6 +2408,12 @@ class OpenHackApp:
         return [[("class:wordmark", _WORDMARK)]]
 
     def _placeholder_text(self) -> str:
+        if self.mode == "providers":
+            return "Search providers"
+        if self.mode == "models":
+            return "Search models"
+        if self.mode == "provider_key":
+            return f"Paste {self._provider_auth_label} API key"
         return "Ask anything · /scan to scan · !cmd to run a shell command"
 
     def _current_session_id(self) -> str:
@@ -2381,6 +2456,10 @@ class OpenHackApp:
             content=BufferControl(
                 buffer=self.input_buffer,
                 input_processors=[
+                    ConditionalProcessor(
+                        PasswordProcessor(char="•"),
+                        filter=Condition(lambda: self.mode == "provider_key"),
+                    ),
                     BeforeInput("  ", style="class:input.box"),
                     _PlaceholderProcessor(lambda: "  " + self._placeholder_text()),
                 ],
@@ -3373,7 +3452,7 @@ class OpenHackApp:
             return [
                 ("class:header.brand", "openhack"),
                 ("class:header.sep", "  ·  "),
-                ("class:header.target", "model"),
+                ("class:header.target", f"model · {self.provider}"),
                 ("class:header.sep", "    "),
                 ("class:header.meta", f"{len(self.model_index)} available"),
             ]
@@ -3400,7 +3479,9 @@ class OpenHackApp:
 
         def hint_text():
             return [
-                ("class:hint", "  ↑/↓ "),
+                ("class:hint", "  type "),
+                ("class:hint.key", "to search"),
+                ("class:hint", "   ↑/↓ "),
                 ("class:hint.key", "navigate"),
                 ("class:hint", "   enter "),
                 ("class:hint.key", "select"),
@@ -3410,6 +3491,22 @@ class OpenHackApp:
 
         header = Window(FormattedTextControl(header_text), height=1)
         rule = Window(FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1)
+        search = VSplit(
+            [
+                Window(
+                    FormattedTextControl(
+                        lambda: [("class:input.placeholder", "  ⌕  ")]
+                    ),
+                    width=5,
+                    height=1,
+                    style="class:input.box",
+                ),
+                self._input_window,
+                Window(width=2, height=1, style="class:input.box"),
+            ],
+            height=1,
+            style="class:input.box",
+        )
 
         def _models_cursor() -> Point:
             # Row 0 = leading blank. Each model = 3 rows (label, desc, blank).
@@ -3429,71 +3526,111 @@ class OpenHackApp:
             Window(height=1),
             header,
             rule,
+            Window(height=1),
+            VSplit([Window(width=2), search, Window(width=2)]),
+            Window(height=1),
             body,
             rule,
             hint,
-            VSplit([Window(width=2), self._input_window]),
             Window(height=1),
         ])
 
     def _build_provider_container(self) -> HSplit:
-        """Scrollable provider switcher backed by Models.dev."""
+        """OpenCode-style searchable provider picker."""
         def header_text():
+            title = (
+                "Connect a provider"
+                if self._provider_action == "connect"
+                else "Switch provider"
+            )
             return [
-                ("class:header.brand", "openhack"),
-                ("class:header.sep", "  ·  "),
-                ("class:header.target", "provider"),
+                ("class:header.target", f"  {title}"),
                 ("class:header.sep", "    "),
-                ("class:header.meta", f"{len(self.provider_index)} available"),
+                (
+                    "class:header.meta",
+                    f"{len(self.provider_index)} result"
+                    f"{'' if len(self.provider_index) == 1 else 's'}",
+                ),
             ]
 
         def providers_text():
-            out: list[tuple[str, str]] = [("", "\n")]
+            out: list[tuple[str, str]] = []
             if not self.provider_index:
-                return [("class:pane.empty", "  no providers available\n")]
+                return [
+                    ("", "\n"),
+                    ("class:pane.empty", "  No providers match your search.\n"),
+                ]
+            category = None
+            show_categories = not self._provider_query.strip()
             for i, provider in enumerate(self.provider_index):
+                if show_categories and provider["category"] != category:
+                    if category is not None:
+                        out.append(("", "\n"))
+                    category = provider["category"]
+                    out.append(("class:session.meta", f"  {category}\n"))
                 selected = i == self.provider_selected
                 active = provider["id"] == self.provider
                 cls = "class:session.row.selected" if selected else "class:session.row"
                 pointer = "❯ " if selected else "  "
-                mark = "●" if active else " "
-                connection = "connected" if provider["connected"] else "connect required"
                 out.append((cls, f"  {pointer}{provider['label']}"))
-                out.append(
-                    (
-                        "class:sev.low" if active else "class:session.meta",
-                        f"  {mark}\n",
-                    )
-                )
-                out.append(
-                    (
-                        "class:session.meta",
-                        f"      {provider['id']} · {connection}",
-                    )
-                )
+                if provider["id"] == "openhack":
+                    out.append(("class:sev.low", "  recommended"))
                 if provider.get("hint"):
                     out.append(("class:session.meta", f" · {provider['hint']}"))
-                out.append(("", "\n\n"))
+                if active:
+                    out.append(("class:input.model.name", "  active"))
+                if provider["connected"]:
+                    out.append(("class:sev.low", "  ✓"))
+                out.append(("", "\n"))
             return out
 
         def hint_text():
+            action = "connect" if self._provider_action == "connect" else "select"
             return [
-                ("class:hint", "  ↑/↓ "),
+                ("class:hint", "  type "),
+                ("class:hint.key", "to search"),
+                ("class:hint", "   ↑/↓ "),
                 ("class:hint.key", "navigate"),
                 ("class:hint", "   enter "),
-                ("class:hint.key", "switch"),
-                ("class:hint", "   /connect <provider> "),
-                ("class:hint.key", "authenticate"),
+                ("class:hint.key", action),
                 ("class:hint", "   esc "),
-                ("class:hint.key", "cancel"),
+                ("class:hint.key", "clear/back"),
             ]
 
         def cursor() -> Point:
-            return Point(x=0, y=1 + self.provider_selected * 3)
+            row = 0
+            category = None
+            show_categories = not self._provider_query.strip()
+            for i, provider in enumerate(self.provider_index):
+                if show_categories and provider["category"] != category:
+                    if category is not None:
+                        row += 1
+                    category = provider["category"]
+                    row += 1
+                if i == self.provider_selected:
+                    break
+                row += 1
+            return Point(x=0, y=row)
 
         header = Window(FormattedTextControl(header_text), height=1)
         rule = Window(
             FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1
+        )
+        search = VSplit(
+            [
+                Window(
+                    FormattedTextControl(
+                        lambda: [("class:input.placeholder", "  ⌕  ")]
+                    ),
+                    width=5,
+                    height=1,
+                    style="class:input.box",
+                ),
+                self._input_window,
+                Window(width=2, height=1, style="class:input.box"),
+            ],
+            height=1,
+            style="class:input.box",
         )
         body = Window(
             FormattedTextControl(
@@ -3508,10 +3645,163 @@ class OpenHackApp:
                 Window(height=1),
                 header,
                 rule,
+                Window(height=1),
+                VSplit([Window(width=2), search, Window(width=2)]),
+                Window(height=1),
                 body,
                 rule,
                 hint,
-                VSplit([Window(width=2), self._input_window]),
+                Window(height=1),
+            ]
+        )
+
+    def _build_provider_methods_container(self) -> HSplit:
+        methods = (
+            ("ChatGPT Plus/Pro", "Sign in with your subscription in a browser"),
+            ("ChatGPT Plus/Pro (headless)", "Open a URL and enter a device code"),
+            ("OpenAI API key", "Use API Platform billing"),
+        )
+
+        def body_text():
+            out: list[tuple[str, str]] = [("", "\n")]
+            for index, (label, description) in enumerate(methods):
+                selected = index == self._provider_method_index
+                cls = "class:session.row.selected" if selected else "class:session.row"
+                out.append((cls, f"  {'❯' if selected else ' '} {label}\n"))
+                out.append(("class:session.meta", f"      {description}\n\n"))
+            return out
+
+        def cursor():
+            return Point(x=0, y=1 + self._provider_method_index * 3)
+
+        return HSplit(
+            [
+                Window(height=1),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            ("class:header.target", "  Connect OpenAI"),
+                            ("class:header.meta", "    Select auth method"),
+                        ]
+                    ),
+                    height=1,
+                ),
+                Window(
+                    FormattedTextControl(lambda: [("class:rule", "─" * 240)]),
+                    height=1,
+                ),
+                Window(
+                    FormattedTextControl(
+                        body_text, focusable=False, get_cursor_position=cursor
+                    ),
+                    always_hide_cursor=True,
+                ),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            ("class:hint", "  ↑/↓ "),
+                            ("class:hint.key", "navigate"),
+                            ("class:hint", "   enter "),
+                            ("class:hint.key", "select"),
+                            ("class:hint", "   esc "),
+                            ("class:hint.key", "back"),
+                        ]
+                    ),
+                    height=1,
+                ),
+                Window(height=1),
+            ]
+        )
+
+    def _build_provider_key_container(self) -> HSplit:
+        def description():
+            from openhack import providers as provider_registry
+
+            spec = provider_registry.get_spec(self._provider_auth_id)
+            env = spec.api_key_env if spec else "API_KEY"
+            return [
+                ("class:session.meta", f"  Stored securely in ~/.openhack/auth.json"),
+                ("", "\n"),
+                ("class:session.meta", f"  Environment alternative: {env}"),
+            ]
+
+        return HSplit(
+            [
+                Window(height=1),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            (
+                                "class:header.target",
+                                f"  Connect {self._provider_auth_label}",
+                            )
+                        ]
+                    ),
+                    height=1,
+                ),
+                Window(
+                    FormattedTextControl(lambda: [("class:rule", "─" * 240)]),
+                    height=1,
+                ),
+                Window(height=2),
+                Window(FormattedTextControl(description), height=2),
+                Window(height=2),
+                VSplit(
+                    [
+                        Window(width=2),
+                        self._input_window,
+                        Window(width=2),
+                    ],
+                    height=1,
+                ),
+                Window(height=1),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            ("class:hint", "  enter "),
+                            ("class:hint.key", "save and connect"),
+                            ("class:hint", "   esc "),
+                            ("class:hint.key", "cancel"),
+                        ]
+                    ),
+                    height=1,
+                ),
+                Window(),
+            ]
+        )
+
+    def _build_provider_oauth_container(self) -> HSplit:
+        return HSplit(
+            [
+                Window(height=1),
+                Window(
+                    FormattedTextControl(
+                        lambda: [("class:header.target", "  Connect OpenAI")]
+                    ),
+                    height=1,
+                ),
+                Window(
+                    FormattedTextControl(lambda: [("class:rule", "─" * 240)]),
+                    height=1,
+                ),
+                Window(height=2),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            ("class:session.row", f"  {self._provider_oauth_message}")
+                        ]
+                    ),
+                    wrap_lines=True,
+                ),
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            ("class:hint", "  esc "),
+                            ("class:hint.key", "return"),
+                        ]
+                    ),
+                    height=1,
+                ),
                 Window(height=1),
             ]
         )
@@ -3665,7 +3955,27 @@ class OpenHackApp:
 
     # ── Input handling ────────────────────────────────────────────
 
+    def _on_input_text_changed(self, _buffer: Buffer) -> None:
+        if self.mode == "providers":
+            query = self.input_buffer.text
+            if query != self._provider_query:
+                self._provider_query = query
+                self._filter_provider_index()
+                self._invalidate()
+        elif self.mode == "models":
+            query = self.input_buffer.text
+            if query != self._model_query:
+                self._model_query = query
+                self._filter_model_index()
+                self._invalidate()
+
     def _on_buffer_accept(self, buf: Buffer) -> bool:
+        if self.mode == "provider_key":
+            secret = buf.text.strip()
+            buf.reset()
+            if secret:
+                self._save_provider_api_key(secret)
+            return False
         text = buf.text.strip()
         buf.reset()
         if not text:
@@ -3910,6 +4220,32 @@ class OpenHackApp:
         parts = arg.strip().split()
         provider_id = parts[0] if parts else None
         auth_method = parts[1] if len(parts) > 1 else None
+        if provider_id is None:
+            self._open_provider_picker(action="connect")
+            return
+        provider_id = provider_id.lower()
+        if provider_id == "openai":
+            if auth_method is None:
+                self._open_provider_methods()
+                return
+            if auth_method in ("browser", "device"):
+                self._start_openai_oauth(auth_method)
+                return
+            if auth_method == "api":
+                self._open_provider_key("openai")
+                return
+            self.last_status_line = (
+                "unknown OpenAI auth method · use browser, device, or api"
+            )
+            return
+        if provider_id != "openhack":
+            from openhack import providers as provider_registry
+
+            if not provider_registry.is_known(provider_id):
+                self.last_status_line = f"unknown provider: {provider_id}"
+                return
+            self._open_provider_key(provider_id)
+            return
         connected = await self._run_external(
             run_provider_connect(provider_id, auth_method)
         )
@@ -3923,6 +4259,126 @@ class OpenHackApp:
         )
         self.model = cfg.get("model") or settings.openhack_model_id
         self.last_status_line = f"connected: {self.provider} · {self.model}"
+
+    def _remember_auth_origin(self) -> None:
+        if self.mode not in (
+            "providers",
+            "provider_methods",
+            "provider_key",
+            "provider_oauth",
+        ):
+            self.previous_mode = self.mode
+
+    def _open_provider_methods(self) -> None:
+        self._remember_auth_origin()
+        self._provider_auth_id = "openai"
+        self._provider_auth_label = "OpenAI"
+        self._provider_method_index = 0
+        self.input_buffer.reset()
+        self.mode = "provider_methods"
+        self.last_status_line = ""
+        self._invalidate()
+
+    def _open_provider_key(self, provider_id: str) -> None:
+        from openhack import providers as provider_registry
+
+        spec = provider_registry.get_spec(provider_id)
+        if spec is None:
+            self.last_status_line = f"unknown provider: {provider_id}"
+            return
+        self._remember_auth_origin()
+        self._provider_auth_id = provider_id
+        self._provider_auth_label = spec.label
+        self.input_buffer.reset()
+        self.mode = "provider_key"
+        self.last_status_line = ""
+        self._invalidate()
+
+    def _select_provider_auth_method(self) -> None:
+        method = ("browser", "device", "api")[self._provider_method_index]
+        if method == "api":
+            self._open_provider_key("openai")
+        else:
+            self._start_openai_oauth(method)
+
+    def _activate_connected_provider(self, provider_id: str) -> None:
+        from openhack import providers as provider_registry
+
+        resolved = provider_registry.resolve(provider_id)
+        if resolved is None or resolved.missing_key_env:
+            raise ValueError(f"{provider_id} did not produce usable credentials")
+        self.provider = provider_id
+        self.model = resolved.model
+        save_user_config({"provider": provider_id, "model": self.model})
+
+    def _save_provider_api_key(self, secret: str) -> None:
+        from openhack.provider_auth import set_api_key
+
+        provider_id = self._provider_auth_id
+        try:
+            set_api_key(provider_id, secret)
+            self._activate_connected_provider(provider_id)
+        except Exception as exc:
+            self.last_status_line = f"connection failed: {exc}"
+            return
+        origin = self.previous_mode or "landing"
+        self.mode = origin
+        self.previous_mode = None
+        self.last_status_line = f"connected: {self.provider} · {self.model}"
+        self._open_model_picker()
+
+    def _start_openai_oauth(self, method: str) -> None:
+        self._remember_auth_origin()
+        self.mode = "provider_oauth"
+        self.input_buffer.reset()
+        self._provider_oauth_message = (
+            "Opening OpenAI in your browser…"
+            if method == "browser"
+            else "Starting headless device authorization…"
+        )
+        self._invalidate()
+        self._provider_oauth_task = asyncio.create_task(
+            self._finish_openai_oauth(method)
+        )
+
+    async def _finish_openai_oauth(self, method: str) -> None:
+        from openhack.provider_auth import (
+            openai_browser_login,
+            openai_device_login,
+        )
+
+        loop = asyncio.get_running_loop()
+
+        def show_code(url: str, code: str) -> None:
+            def update() -> None:
+                self._provider_oauth_message = (
+                    f"Open {url}\n\nEnter code: {code}\n\n"
+                    "Waiting for authorization…"
+                )
+                self._invalidate()
+
+            loop.call_soon_threadsafe(update)
+
+        try:
+            if method == "browser":
+                await asyncio.to_thread(openai_browser_login)
+            else:
+                await asyncio.to_thread(openai_device_login, on_code=show_code)
+            self._activate_connected_provider("openai")
+        except Exception as exc:
+            self._provider_oauth_message = f"Connection failed: {exc}"
+            self.last_status_line = f"OpenAI connection failed: {exc}"
+            self._invalidate()
+            return
+
+        origin = self.previous_mode or "landing"
+        was_waiting = self.mode == "provider_oauth"
+        self.mode = origin
+        self.previous_mode = None
+        self.last_status_line = f"connected: {self.provider} · {self.model}"
+        if was_waiting:
+            self._open_model_picker()
+        self._invalidate()
 
     def _cmd_disconnect(self, arg: str) -> None:
         from openhack.provider_auth import get_credential, remove_credential
@@ -4126,48 +4582,185 @@ class OpenHackApp:
             self.last_status_line = f"{n} shell(s) · ↑/↓ navigate · k kill · esc back"
 
     # ── Model picker overlay ──────────────────────────────────────
-    def _open_provider_picker(self) -> None:
-        """Open the Models.dev-backed provider switcher."""
-        from openhack import providers as provider_registry
-        from openhack.provider_auth import get_credential
+    _POPULAR_PROVIDERS = (
+        "openhack",
+        "opencode",
+        "opencode-go",
+        "openai",
+        "anthropic",
+        "google",
+        "openrouter",
+    )
 
+    def _provider_entries(self, specs) -> list[dict]:
+        """Build picker rows without resolving providers or rereading auth."""
+        from openhack.provider_auth import all_credentials
+
+        credentials = all_credentials()
         entries = [
             {
                 "id": "openhack",
                 "label": "OpenHack",
-                "hint": "Recommended · hosted inference",
+                "hint": "Hosted inference",
                 "connected": bool(settings.openhack_api_key),
+                "category": "Popular",
             }
         ]
-        for spec in provider_registry.list_provider_specs():
-            resolved = provider_registry.resolve(spec.name)
+        for spec in specs:
             entries.append(
                 {
                     "id": spec.name,
                     "label": spec.label,
                     "hint": spec.hint,
                     "connected": bool(
-                        (resolved and not resolved.missing_key_env)
-                        or get_credential(spec.name)
+                        os.environ.get(spec.api_key_env)
+                        or spec.keyless_default
+                        or credentials.get(spec.name)
+                    ),
+                    "category": (
+                        "Popular"
+                        if spec.name in self._POPULAR_PROVIDERS
+                        else "Providers"
                     ),
                 }
             )
-        self.provider_index = entries
+        priority = {
+            provider_id: index
+            for index, provider_id in enumerate(self._POPULAR_PROVIDERS)
+        }
+        return sorted(
+            entries,
+            key=lambda entry: (
+                0 if entry["category"] == "Popular" else 1,
+                priority.get(entry["id"], 999),
+                entry["label"].casefold(),
+                entry["id"],
+            ),
+        )
+
+    @staticmethod
+    def _provider_match_score(entry: dict, query: str) -> Optional[int]:
+        """Small fuzzy matcher: exact/prefix/substring first, subsequence last."""
+        terms = query.casefold().split()
+        fields = [
+            entry["label"].casefold(),
+            entry["id"].casefold(),
+            entry.get("hint", "").casefold(),
+        ]
+        total = 0
+        for term in terms:
+            best: Optional[int] = None
+            for field in fields:
+                if field == term:
+                    score = 0
+                elif field.startswith(term):
+                    score = 5
+                elif term in field:
+                    score = 10 + field.index(term)
+                else:
+                    position = -1
+                    gap = 0
+                    matched = True
+                    for char in term:
+                        next_position = field.find(char, position + 1)
+                        if next_position < 0:
+                            matched = False
+                            break
+                        if position >= 0:
+                            gap += next_position - position - 1
+                        position = next_position
+                    if not matched:
+                        continue
+                    score = 100 + gap
+                best = score if best is None else min(best, score)
+            if best is None:
+                return None
+            total += best
+        return total
+
+    def _filter_provider_index(self) -> None:
+        selected_id = (
+            self.provider_index[self.provider_selected]["id"]
+            if self.provider_index
+            and 0 <= self.provider_selected < len(self.provider_index)
+            else self.provider
+        )
+        query = self._provider_query.strip()
+        if not query:
+            filtered = list(self._provider_all)
+        else:
+            scored = [
+                (score, entry)
+                for entry in self._provider_all
+                if (score := self._provider_match_score(entry, query)) is not None
+            ]
+            filtered = [
+                entry
+                for _, entry in sorted(
+                    scored,
+                    key=lambda item: (
+                        item[0],
+                        0 if item[1]["category"] == "Popular" else 1,
+                        item[1]["label"].casefold(),
+                    ),
+                )
+            ]
+        self.provider_index = filtered
         self.provider_selected = next(
             (
                 index
-                for index, entry in enumerate(entries)
-                if entry["id"] == self.provider
+                for index, entry in enumerate(filtered)
+                if entry["id"] == selected_id
             ),
+            0,
+        )
+
+    def _open_provider_picker(self, action: str = "switch") -> None:
+        """Open immediately from cache; refresh Models.dev in the background."""
+        from openhack import providers as provider_registry
+
+        self._provider_action = action
+        self._provider_query = ""
+        self._provider_all = self._provider_entries(
+            provider_registry.list_provider_specs()
+        )
+        self.provider_index = list(self._provider_all)
+        self.provider_selected = next(
+            (i for i, entry in enumerate(self.provider_index)
+             if entry["id"] == self.provider),
             0,
         )
         if self.mode not in ("sessions", "models", "providers", "shells"):
             self.previous_mode = self.mode
         self.mode = "providers"
+        self.input_buffer.reset()
         self.last_status_line = ""
         self._invalidate()
+        if not self._provider_refresh_started:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                self._provider_refresh_started = True
+                loop.create_task(self._refresh_provider_catalog())
+
+    async def _refresh_provider_catalog(self) -> None:
+        from openhack import providers as provider_registry
+
+        try:
+            specs = await asyncio.to_thread(
+                provider_registry.list_provider_specs, refresh=True
+            )
+        except Exception:
+            return
+        self._provider_all = self._provider_entries(specs)
+        if self.mode == "providers":
+            self._filter_provider_index()
+            self._invalidate()
 
     def _close_provider_picker(self) -> None:
+        self.input_buffer.reset()
         self.mode = self.previous_mode or "landing"
         self.previous_mode = None
         self._invalidate()
@@ -4176,6 +4769,15 @@ class OpenHackApp:
         if not self.provider_index:
             return
         selected = self.provider_index[self.provider_selected]
+        should_connect = (
+            self._provider_action == "connect"
+            or (selected["id"] != "openhack" and not selected["connected"])
+        )
+        provider_id = selected["id"]
+        if should_connect:
+            self._close_provider_picker()
+            asyncio.create_task(self._cmd_connect(provider_id))
+            return
         self._cmd_provider(selected["id"])
         status = self.last_status_line
         self._close_provider_picker()
@@ -4185,23 +4787,70 @@ class OpenHackApp:
         """Open a full-screen, scrollable model picker."""
         from openhack import providers as provider_registry
 
-        self.model_index = provider_registry.provider_models(self.provider)
+        self._model_query = ""
+        self._model_all = provider_registry.provider_models(self.provider)
         if self.model and not any(
-            model["id"] == self.model for model in self.model_index
+            model["id"] == self.model for model in self._model_all
         ):
-            self.model_index.insert(
+            self._model_all.insert(
                 0, {"id": self.model, "label": self.model, "desc": "Current model"}
             )
+        self.model_index = list(self._model_all)
         self.model_selected = next(
             (i for i, m in enumerate(self.model_index) if m["id"] == self.model), 0
         )
         if self.mode not in ("sessions", "models", "providers", "shells"):
             self.previous_mode = self.mode
         self.mode = "models"
+        if hasattr(self, "input_buffer"):
+            self.input_buffer.reset()
         self.last_status_line = ""
         self._invalidate()
 
+    def _filter_model_index(self) -> None:
+        selected_id = (
+            self.model_index[self.model_selected]["id"]
+            if self.model_index
+            and 0 <= self.model_selected < len(self.model_index)
+            else self.model
+        )
+        query = self._model_query.strip()
+        if not query:
+            filtered = list(self._model_all)
+        else:
+            scored = []
+            for model in self._model_all:
+                entry = {
+                    "id": model["id"],
+                    "label": model.get("label", model["id"]),
+                    "hint": model.get("desc", ""),
+                }
+                score = self._provider_match_score(entry, query)
+                if score is not None:
+                    scored.append((score, model))
+            filtered = [
+                model
+                for _, model in sorted(
+                    scored,
+                    key=lambda item: (
+                        item[0],
+                        item[1].get("label", item[1]["id"]).casefold(),
+                    ),
+                )
+            ]
+        self.model_index = filtered
+        self.model_selected = next(
+            (
+                index
+                for index, model in enumerate(filtered)
+                if model["id"] == selected_id
+            ),
+            0,
+        )
+
     def _close_model_picker(self) -> None:
+        if hasattr(self, "input_buffer"):
+            self.input_buffer.reset()
         self.mode = self.previous_mode or "landing"
         self.previous_mode = None
         self._invalidate()

@@ -177,7 +177,9 @@ def is_known(name: str) -> bool:
 def list_provider_specs(*, refresh: bool = False) -> list[ProviderSpec]:
     specs = list(PROVIDERS.values())
     present = set(PROVIDERS)
-    for remote in discover_compatible_providers(refresh=refresh):
+    for remote in discover_compatible_providers(
+        refresh=refresh, allow_network=refresh
+    ):
         if remote.id in present or not remote.env:
             continue
         ids = rank_model_ids(model["id"] for model in remote.models)

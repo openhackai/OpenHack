@@ -93,3 +93,32 @@ def test_unresolved_endpoint_template_is_not_offered(monkeypatch):
     assert model_catalog.provider_from_models_dev(
         "templated", catalog=catalog
     ) is None
+
+
+def test_cache_only_discovery_never_waits_for_network(monkeypatch, tmp_path):
+    payload = {
+        "cached": {
+            "name": "Cached",
+            "npm": "@ai-sdk/openai-compatible",
+            "api": "https://cached.test/v1",
+            "env": ["CACHED_KEY"],
+            "models": {"model": {"name": "Model"}},
+        }
+    }
+    cache = tmp_path / "models.json"
+    cache.write_text(json.dumps(payload))
+    monkeypatch.setattr(model_catalog, "_MEMORY_CATALOG", None)
+    calls = []
+    monkeypatch.setattr(
+        model_catalog.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: calls.append(True),
+    )
+
+    loaded = model_catalog.load_models_dev(
+        allow_network=False,
+        cache_path=cache,
+    )
+
+    assert loaded == payload
+    assert calls == []

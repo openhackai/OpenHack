@@ -182,7 +182,9 @@ OpenHack follows OpenCode's provider workflow:
 
 The provider list and model metadata are synchronized from Models.dev and
 cached for one day. OpenHack, OpenCode Zen, and OpenCode Go also have bundled
-offline catalogs. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
+offline catalogs. `/provider`, `/connect`, and `/model` use searchable pickers;
+provider refresh happens in the background so opening them never waits on the
+network. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
 `gemma-4-31b` ranking stays at the top whenever those models are available.
 
 You can override at runtime via environment variables:
