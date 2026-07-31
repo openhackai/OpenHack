@@ -3536,7 +3536,7 @@ class OpenHackApp:
         ])
 
     def _build_provider_container(self) -> HSplit:
-        """OpenCode-style searchable provider picker."""
+        """Open the searchable provider picker."""
         def header_text():
             title = (
                 "Connect a provider"
@@ -4584,8 +4584,6 @@ class OpenHackApp:
     # ── Model picker overlay ──────────────────────────────────────
     _POPULAR_PROVIDERS = (
         "openhack",
-        "opencode",
-        "opencode-go",
         "openai",
         "anthropic",
         "google",

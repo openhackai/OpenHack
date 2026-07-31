@@ -21,6 +21,15 @@ def test_list_includes_openhack_and_byok():
         assert name in listed
 
 
+def test_opencode_plans_are_not_available():
+    listed = providers.list_providers()
+    for name in ("opencode", "opencode-go"):
+        assert name not in listed
+        assert not providers.is_known(name)
+        assert providers.get_spec(name) is None
+        assert providers.resolve(name) is None
+
+
 def test_resolve_openai_reads_key_and_base(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     r = providers.resolve("openai")

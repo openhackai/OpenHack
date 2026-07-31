@@ -1,8 +1,8 @@
 """Provider registry and Models.dev-backed discovery.
 
-Like OpenCode, OpenHack combines a short curated list with Models.dev.  The
-curated providers are instant and work offline; the live registry supplies the
-long tail and the current model catalog.
+OpenHack combines a short curated list with Models.dev. The curated providers
+are instant and work offline; the live registry supplies the long tail and the
+current model catalog.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from openhack.model_catalog import (
+    EXCLUDED_PROVIDER_IDS,
     discover_compatible_providers,
     merge_models,
     provider_from_models_dev,
@@ -37,19 +38,8 @@ class ProviderSpec:
     hint: str = ""
 
 
-# Deliberately ordered: OpenHack and the providers/model plans the user asked
-# for are first.  Models.dev providers follow alphabetically in the picker.
+# Curated providers appear first. Models.dev providers follow alphabetically.
 PROVIDERS: dict[str, ProviderSpec] = {
-    "opencode": ProviderSpec(
-        "opencode", "OpenCode Zen", "https://opencode.ai/zen/v1",
-        "OPENCODE_API_KEY", "grok-4.5", True,
-        hint="Zen plan · curated frontier and free models",
-    ),
-    "opencode-go": ProviderSpec(
-        "opencode-go", "OpenCode Go", "https://opencode.ai/zen/go/v1",
-        "OPENCODE_API_KEY", "grok-4.5", True,
-        hint="Go plan · value-focused coding models",
-    ),
     "openai": ProviderSpec(
         "openai", "OpenAI", "https://api.openai.com/v1",
         "OPENAI_API_KEY", "gpt-5.6-sol", True,
@@ -152,6 +142,8 @@ class ResolvedProvider:
 
 
 def get_spec(name: str) -> Optional[ProviderSpec]:
+    if name in EXCLUDED_PROVIDER_IDS:
+        return None
     if name in PROVIDERS:
         return PROVIDERS[name]
     remote = provider_from_models_dev(name)
@@ -180,7 +172,11 @@ def list_provider_specs(*, refresh: bool = False) -> list[ProviderSpec]:
     for remote in discover_compatible_providers(
         refresh=refresh, allow_network=refresh
     ):
-        if remote.id in present or not remote.env:
+        if (
+            remote.id in EXCLUDED_PROVIDER_IDS
+            or remote.id in present
+            or not remote.env
+        ):
             continue
         ids = rank_model_ids(model["id"] for model in remote.models)
         if not ids:

@@ -3,7 +3,13 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from openhack.config import load_user_config, save_user_config, Settings, CONFIG_PATH
+from openhack.config import (
+    CONFIG_PATH,
+    Settings,
+    load_user_config,
+    resolve_provider,
+    save_user_config,
+)
 
 
 class TestLoadSaveConfig:
@@ -30,6 +36,19 @@ class TestLoadSaveConfig:
             save_user_config({"b": 2})
             loaded = load_user_config()
             assert loaded == {"a": 1, "b": 2}
+
+    def test_removed_provider_falls_back_to_openhack(self, tmp_path):
+        config_path = tmp_path / "config"
+        config_path.write_text(json.dumps({
+            "provider": "opencode-go",
+            "model": "qwen3.7-plus",
+        }))
+        with patch("openhack.config.CONFIG_PATH", config_path):
+            loaded = load_user_config()
+
+        assert loaded["provider"] == "openhack"
+        assert loaded["model"] == "grok-4.5"
+        assert resolve_provider("opencode") == "openhack"
 
 
 class TestSettings:

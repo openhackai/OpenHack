@@ -12,6 +12,17 @@ _PROVIDER_KEY_FIELDS = {
     "openhack": "openhack_api_key",
 }
 
+_REMOVED_PROVIDER_IDS = frozenset({"opencode", "opencode-go"})
+
+
+def _normalize_user_config(data: dict) -> dict:
+    """Return a usable config when a previously selected provider was removed."""
+    if data.get("provider") not in _REMOVED_PROVIDER_IDS:
+        return data
+    normalized = dict(data)
+    normalized.update({"provider": "openhack", "model": "grok-4.5"})
+    return normalized
+
 
 def _dotenv_nonempty_keys(path: Path) -> set[str]:
     """Return uppercase keys with non-empty values from a dotenv file."""
@@ -41,7 +52,8 @@ def load_user_config() -> dict:
     """Load persistent config from ~/.openhack/config."""
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text())
+            loaded = json.loads(CONFIG_PATH.read_text())
+            return _normalize_user_config(loaded) if isinstance(loaded, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
@@ -66,7 +78,7 @@ def save_user_config(data: dict) -> None:
 
 def resolve_provider(name: str) -> str:
     """Normalize provider name."""
-    return name
+    return "openhack" if name in _REMOVED_PROVIDER_IDS else name
 
 
 PROD_APP_URL = "https://app.openhack.com"

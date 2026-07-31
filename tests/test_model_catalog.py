@@ -3,19 +3,9 @@ import json
 from openhack import model_catalog
 
 
-def test_bundled_zen_and_go_catalogs_are_complete():
-    zen = model_catalog.bundled_models("opencode")
-    go = model_catalog.bundled_models("opencode-go")
-
-    assert len(zen) == 60
-    assert len(go) == 16
-    assert {row["id"] for row in go} >= {
-        "grok-4.5",
-        "glm-5.2",
-        "kimi-k3",
-        "qwen3.7-max",
-        "deepseek-v4-pro",
-    }
+def test_excluded_plans_have_no_bundled_models():
+    assert model_catalog.bundled_models("opencode") == []
+    assert model_catalog.bundled_models("opencode-go") == []
 
 
 def test_existing_openhack_models_keep_top_rank():
@@ -27,7 +17,7 @@ def test_existing_openhack_models_keep_top_rank():
 
 def test_merge_uses_live_ids_but_catalog_labels():
     merged = model_catalog.merge_models(
-        "opencode", ["unknown-live", "glm-5.2", "grok-4.5"]
+        "openhack", ["unknown-live", "glm-5.2", "grok-4.5"]
     )
     assert [row["id"] for row in merged] == [
         "grok-4.5",
@@ -39,6 +29,14 @@ def test_merge_uses_live_ids_but_catalog_labels():
 
 def test_models_dev_cache_and_compatible_provider_discovery(monkeypatch, tmp_path):
     payload = {
+        "opencode": {
+            "id": "opencode",
+            "name": "Excluded plan",
+            "npm": "@ai-sdk/openai-compatible",
+            "api": "https://excluded.test/v1",
+            "env": ["EXCLUDED_KEY"],
+            "models": {"excluded": {"name": "Excluded"}},
+        },
         "compatible": {
             "id": "compatible",
             "name": "Compatible",
@@ -78,6 +76,9 @@ def test_models_dev_cache_and_compatible_provider_discovery(monkeypatch, tmp_pat
     monkeypatch.setattr(model_catalog, "load_models_dev", lambda **kwargs: payload)
     found = model_catalog.discover_compatible_providers()
     assert [provider.id for provider in found] == ["compatible"]
+    assert model_catalog.provider_from_models_dev(
+        "opencode", catalog=payload
+    ) is None
 
 
 def test_unresolved_endpoint_template_is_not_offered(monkeypatch):

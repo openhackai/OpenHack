@@ -18,7 +18,7 @@ def test_provider_command_without_argument_opens_picker():
 
 def test_model_picker_uses_active_provider_catalog(monkeypatch):
     app = OpenHackApp.__new__(OpenHackApp)
-    app.provider = "opencode-go"
+    app.provider = "openai"
     app.model = "grok-4.5"
     app.mode = "landing"
     app.previous_mode = None

@@ -170,19 +170,17 @@ openhack --resume <session-id>
 Preferences are stored in `~/.openhack/config`. Provider credentials are kept
 separately in `~/.openhack/auth.json`; both files use owner-only permissions.
 
-OpenHack follows OpenCode's provider workflow:
+Use the provider commands to connect or switch inference services:
 
 ```text
 /provider
 /connect openai          # choose ChatGPT Plus/Pro browser, headless, or API key
-/connect opencode        # OpenCode Zen
-/connect opencode-go     # OpenCode Go
 /model
 ```
 
 The provider list and model metadata are synchronized from Models.dev and
-cached for one day. OpenHack, OpenCode Zen, and OpenCode Go also have bundled
-offline catalogs. `/provider`, `/connect`, and `/model` use searchable pickers;
+cached for one day. OpenHack also has a bundled offline model catalog.
+`/provider`, `/connect`, and `/model` use searchable pickers;
 provider refresh happens in the background so opening them never waits on the
 network. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
 `gemma-4-31b` ranking stays at the top whenever those models are available.
