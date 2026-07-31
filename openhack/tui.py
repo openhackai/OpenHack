@@ -289,25 +289,6 @@ class _PlaceholderProcessor(Processor):
 
 PROVIDER_DEFAULTS = {"openhack": "grok-4.5"}
 
-# Models the OpenHack hosted provider serves (must match the inference backend's
-# MODEL_MAP). Shown by `/model` so users can discover what they can switch to.
-# mistral-large-2512 was dropped: the inference backend now permits only
-# US-headquartered providers, and Mistral (FR) is its sole OpenRouter provider,
-# so every request would 400 as an unknown model. Offering it in the picker
-# would just be a guaranteed failure.
-from openhack.model_catalog import OPENHACK_MODELS as _OPENHACK_MODEL_ROWS
-
-OPENHACK_MODELS = [row[0] for row in _OPENHACK_MODEL_ROWS]
-
-# Display label + one-line description per served model, for the /model picker.
-OPENHACK_MODEL_INFO = {
-    "grok-4.5": ("Grok 4.5", "Frontier model by xAI · strongest exploitation · default"),
-    "glm-5.2": ("GLM 5.2", "Reasoning model by Z.ai · fast & cost-efficient"),
-    "kimi-k2.5": ("Kimi K2.5", "Flagship security model by Moonshot"),
-    "gemma-4-31b": ("Gemma 4 31B", "Open-weight model by Google · free"),
-    "mistral-large-2512": ("Mistral Large", "Open-weight dense model by Mistral"),
-}
-
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
     "You help users understand vulnerability scan results, explain security concepts, "
@@ -360,10 +341,9 @@ _SLASH_COMMANDS = [
     ("/clear", "Clear the conversation / return to landing"),
     ("/sessions", "Browse and re-load past scan results"),
     ("/bashes", "Watch and kill background shells (started with !cmd &)"),
-    ("/provider", "Switch LLM provider (openhack, openai, anthropic, …)"),
     ("/connect", "Connect a provider or ChatGPT Plus/Pro subscription"),
     ("/disconnect", "Remove saved credentials for a provider"),
-    ("/model", "Set or show the model ID"),
+    ("/models", "Choose a model from all connected providers"),
     ("/config", "Show or set configuration"),
     ("/cost", "Show cost + tokens for the current session"),
     ("/mouse", "Toggle mouse capture (off = drag-to-select text)"),
@@ -1606,7 +1586,6 @@ class OpenHackApp:
         self.provider_selected: int = 0
         self._provider_all: list[dict] = []
         self._provider_query: str = ""
-        self._provider_action: str = "switch"
         self._provider_show_all: bool = False
         self._provider_specs: list = []
         self._provider_refresh_started: bool = False
@@ -1670,6 +1649,7 @@ class OpenHackApp:
             accept_handler=self._on_buffer_accept,
         )
         self.input_buffer.on_text_changed += self._on_input_text_changed
+        self._picker_input_window = self._make_picker_input_window()
 
         self.kb = self._build_keybindings()
         self.layout = self._build_layout()
@@ -2062,6 +2042,11 @@ class OpenHackApp:
         def _m_enter(event):
             self._select_model_from_picker()
 
+        @kb.add("c-a", filter=Condition(_in_models), eager=True)
+        def _m_connect(event):
+            self._close_model_picker()
+            self._open_provider_picker()
+
         @kb.add("escape", eager=True, filter=Condition(_in_models))
         def _m_esc(event):
             if self._model_query:
@@ -2310,6 +2295,13 @@ class OpenHackApp:
             "modal.body": f"bg:{OH_PANEL} {OH_TEXT}",
             "modal.hint": f"bg:{OH_PANEL} {OH_MUTED}",
             "modal.key": f"bg:{OH_PANEL} bold {OH_PRIMARY}",
+            "picker.frame": f"bg:{OH_ELEM} {OH_TEXT}",
+            "picker.title": f"bg:{OH_ELEM} bold {OH_TEXT}",
+            "picker.meta": f"bg:{OH_ELEM} {OH_MUTED}",
+            "picker.section": f"bg:{OH_ELEM} bold {OH_CYAN}",
+            "picker.row": f"bg:{OH_ELEM} {OH_TEXT}",
+            "picker.row.selected": f"bg:{OH_ORANGE} {OH_BG}",
+            "picker.search": f"bg:{OH_ELEM} {OH_TEXT}",
             "completion-menu.completion": f"bg:{OH_ELEM} {OH_TEXT}",
             "completion-menu.completion.current": f"bg:{OH_SECONDARY} {OH_BG}",
         })
@@ -2317,15 +2309,22 @@ class OpenHackApp:
     # ── Layout ────────────────────────────────────────────────────
 
     def _build_layout(self) -> Layout:
-        is_landing = Condition(lambda: self.mode == "landing")
-        is_sessions = Condition(lambda: self.mode == "sessions")
+        picker_modes = ("models", "providers")
+
+        def _base_mode() -> str:
+            if self.mode in picker_modes:
+                return self.previous_mode or "landing"
+            return self.mode
+
+        is_landing = Condition(lambda: _base_mode() == "landing")
+        is_sessions = Condition(lambda: _base_mode() == "sessions")
         is_models = Condition(lambda: self.mode == "models")
         is_providers = Condition(lambda: self.mode == "providers")
         is_provider_methods = Condition(lambda: self.mode == "provider_methods")
         is_provider_key = Condition(lambda: self.mode == "provider_key")
         is_provider_oauth = Condition(lambda: self.mode == "provider_oauth")
-        is_shells = Condition(lambda: self.mode == "shells")
-        is_scanning = Condition(lambda: self.mode in ("scanning", "viewing"))
+        is_shells = Condition(lambda: _base_mode() == "shells")
+        is_scanning = Condition(lambda: _base_mode() in ("scanning", "viewing"))
 
         landing = self._build_landing_container()
         scan = self._build_scan_container()
@@ -2340,8 +2339,6 @@ class OpenHackApp:
         body = HSplit([
             ConditionalContainer(content=landing, filter=is_landing),
             ConditionalContainer(content=sessions, filter=is_sessions),
-            ConditionalContainer(content=models, filter=is_models),
-            ConditionalContainer(content=providers, filter=is_providers),
             ConditionalContainer(content=provider_methods, filter=is_provider_methods),
             ConditionalContainer(content=provider_key, filter=is_provider_key),
             ConditionalContainer(content=provider_oauth, filter=is_provider_oauth),
@@ -2395,6 +2392,20 @@ class OpenHackApp:
                     xcursor=True,
                     ycursor=True,
                     content=CompletionsMenu(max_height=12, scroll_offset=1),
+                ),
+                Float(
+                    content=ConditionalContainer(
+                        models, filter=is_models
+                    ),
+                    width=64,
+                    height=30,
+                ),
+                Float(
+                    content=ConditionalContainer(
+                        providers, filter=is_providers
+                    ),
+                    width=64,
+                    height=30,
                 ),
                 Float(
                     top=0, left=0, right=0, bottom=0,
@@ -2469,6 +2480,26 @@ class OpenHackApp:
             ),
             height=1,
             style="class:input.box",
+        )
+
+    def _make_picker_input_window(self) -> Window:
+        """Search field used by the centered provider and model popups."""
+        return Window(
+            content=BufferControl(
+                buffer=self.input_buffer,
+                input_processors=[
+                    BeforeInput("  ", style="class:picker.search"),
+                    _PlaceholderProcessor(
+                        lambda: (
+                            "  Search providers"
+                            if self.mode == "providers"
+                            else "  Search models"
+                        )
+                    ),
+                ],
+            ),
+            height=1,
+            style="class:picker.search",
         )
 
     def _input_box(self, width) -> VSplit:
@@ -3450,70 +3481,76 @@ class OpenHackApp:
         ])
 
     def _build_model_container(self) -> HSplit:
-        """Standalone model picker — full-screen, scroll with ↑/↓, enter selects."""
-        def header_text():
-            return [
-                ("class:header.brand", "openhack"),
-                ("class:header.sep", "  ·  "),
-                ("class:header.target", f"model · {self.provider}"),
-                ("class:header.sep", "    "),
-                ("class:header.meta", f"{len(self.model_index)} available"),
-            ]
+        """Centered, grouped model picker for every connected provider."""
 
         def models_text():
-            out: list[tuple[str, str]] = [("", "\n")]
+            out: list[tuple[str, str]] = []
             if not self.model_index:
-                out.append(("class:pane.empty", "  no models available\n"))
+                out.append((
+                    "class:picker.meta",
+                    "  No connected-provider models. Use /connect first.\n",
+                ))
                 return out
+            section = None
             for i, m in enumerate(self.model_index):
+                if m["section"] != section:
+                    if section is not None:
+                        out.append(("", "\n"))
+                    section = m["section"]
+                    out.append(("class:picker.section", f"  {section}\n"))
                 selected = i == self.model_selected
-                active = m["id"] == self.model
-                cls = "class:session.row.selected" if selected else "class:session.row"
-                pointer = "❯ " if selected else "  "
-                mark = "  ●" if active else "   "
-                out.append((cls, f"  {pointer}{m['label']}"))
-                out.append(("class:session.meta", f"    {m['id']}"))
-                out.append(("class:sev.low" if active else "class:session.meta", f"{mark}"))
+                active = (
+                    m["provider"] == self.provider and m["id"] == self.model
+                )
+                cls = (
+                    "class:picker.row.selected"
+                    if selected
+                    else "class:picker.row"
+                )
+                bullet = "● " if active else "  "
+                suffix = (
+                    f"  {m['provider_label']}"
+                    if m.get("recent")
+                    else ""
+                )
+                text = f"  {bullet}{m['label']}{suffix}"
+                out.append((cls, text[:60].ljust(60)))
                 out.append(("", "\n"))
-                if m.get("desc"):
-                    out.append(("class:session.meta", f"      {m['desc']}"))
-                out.append(("", "\n\n"))
             return out
 
-        def hint_text():
-            return [
-                ("class:hint", "  type "),
-                ("class:hint.key", "to search"),
-                ("class:hint", "   ↑/↓ "),
-                ("class:hint.key", "navigate"),
-                ("class:hint", "   enter "),
-                ("class:hint.key", "select"),
-                ("class:hint", "   esc "),
-                ("class:hint.key", "cancel"),
-            ]
-
-        header = Window(FormattedTextControl(header_text), height=1)
-        rule = Window(FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1)
-        search = VSplit(
+        header = VSplit(
             [
                 Window(
                     FormattedTextControl(
-                        lambda: [("class:input.placeholder", "  ⌕  ")]
+                        lambda: [("class:picker.title", "  Select model")]
+                    ),
+                    height=1,
+                ),
+                Window(
+                    FormattedTextControl(
+                        lambda: [("class:picker.meta", "esc  ")]
                     ),
                     width=5,
                     height=1,
-                    style="class:input.box",
+                    align=WindowAlign.RIGHT,
                 ),
-                self._input_window,
-                Window(width=2, height=1, style="class:input.box"),
             ],
             height=1,
-            style="class:input.box",
         )
 
         def _models_cursor() -> Point:
-            # Row 0 = leading blank. Each model = 3 rows (label, desc, blank).
-            return Point(x=0, y=1 + self.model_selected * 3)
+            row = 0
+            section = None
+            for index, model in enumerate(self.model_index):
+                if model["section"] != section:
+                    if section is not None:
+                        row += 1
+                    section = model["section"]
+                    row += 1
+                if index == self.model_selected:
+                    break
+                row += 1
+            return Point(x=0, y=row)
 
         body = Window(
             FormattedTextControl(
@@ -3523,40 +3560,47 @@ class OpenHackApp:
             wrap_lines=False,
             always_hide_cursor=True,
         )
-        hint = Window(FormattedTextControl(hint_text), height=1)
-
-        return HSplit([
-            Window(height=1),
-            header,
-            rule,
-            Window(height=1),
-            VSplit([Window(width=2), search, Window(width=2)]),
-            Window(height=1),
-            body,
-            rule,
-            hint,
-            Window(height=1),
-        ])
+        footer = Window(
+            FormattedTextControl(
+                lambda: [
+                    ("class:picker.row", "  Connect provider"),
+                    ("class:picker.meta", "  ctrl+a"),
+                    ("class:picker.meta", "    ↑↓ navigate · enter select"),
+                ]
+            ),
+            height=1,
+        )
+        return HSplit(
+            [
+                Window(height=1, style="class:picker.frame"),
+                header,
+                Window(height=1, style="class:picker.frame"),
+                VSplit([
+                    Window(width=2, style="class:picker.frame"),
+                    self._picker_input_window,
+                    Window(width=2, style="class:picker.frame"),
+                ], height=1),
+                Window(height=1, style="class:picker.frame"),
+                body,
+                Window(height=1, style="class:picker.frame"),
+                footer,
+                Window(height=1, style="class:picker.frame"),
+            ],
+            width=D(preferred=64, max=70),
+            height=D(preferred=30, max=34),
+            style="class:picker.frame",
+        )
 
     def _build_provider_container(self) -> HSplit:
-        """Open the searchable provider picker."""
+        """Centered searchable provider connection popup."""
         def header_text():
-            if self._provider_show_all:
-                title = "Other providers"
-            else:
-                title = (
-                    "Connect a provider"
-                    if self._provider_action == "connect"
-                    else "Switch provider"
-                )
             return [
-                ("class:header.target", f"  {title}"),
-                ("class:header.sep", "    "),
                 (
-                    "class:header.meta",
-                    f"{len(self.provider_index)} result"
-                    f"{'' if len(self.provider_index) == 1 else 's'}",
-                ),
+                    "class:picker.title",
+                    "  Other providers"
+                    if self._provider_show_all
+                    else "  Connect a provider",
+                )
             ]
 
         def providers_text():
@@ -3564,7 +3608,7 @@ class OpenHackApp:
             if not self.provider_index:
                 return [
                     ("", "\n"),
-                    ("class:pane.empty", "  No providers match your search.\n"),
+                    ("class:picker.meta", "  No providers match your search.\n"),
                 ]
             category = None
             show_categories = not self._provider_query.strip()
@@ -3573,34 +3617,23 @@ class OpenHackApp:
                     if category is not None:
                         out.append(("", "\n"))
                     category = provider["category"]
-                    out.append(("class:session.meta", f"  {category}\n"))
+                    out.append(("class:picker.section", f"  {category}\n"))
                 selected = i == self.provider_selected
-                active = provider["id"] == self.provider
-                cls = "class:session.row.selected" if selected else "class:session.row"
-                pointer = "❯ " if selected else "  "
-                out.append((cls, f"  {pointer}{provider['label']}"))
-                if provider["id"] == "openhack":
-                    out.append(("class:sev.low", "  recommended"))
-                if provider.get("hint"):
-                    out.append(("class:session.meta", f" · {provider['hint']}"))
-                if active:
-                    out.append(("class:input.model.name", "  active"))
-                if provider["connected"]:
-                    out.append(("class:sev.low", "  ✓"))
+                cls = (
+                    "class:picker.row.selected"
+                    if selected
+                    else "class:picker.row"
+                )
+                check = "✓ " if provider["connected"] else "  "
+                hint = f"  {provider['hint']}" if provider.get("hint") else ""
+                text = f"  {check}{provider['label']}{hint}"
+                out.append((cls, text[:60].ljust(60)))
                 out.append(("", "\n"))
             return out
 
         def hint_text():
-            action = "connect" if self._provider_action == "connect" else "select"
             return [
-                ("class:hint", "  type "),
-                ("class:hint.key", "to search"),
-                ("class:hint", "   ↑/↓ "),
-                ("class:hint.key", "navigate"),
-                ("class:hint", "   enter "),
-                ("class:hint.key", action),
-                ("class:hint", "   esc "),
-                ("class:hint.key", "clear/back"),
+                ("class:picker.meta", "  ↑↓ navigate · enter connect · esc back"),
             ]
 
         def cursor() -> Point:
@@ -3618,25 +3651,19 @@ class OpenHackApp:
                 row += 1
             return Point(x=0, y=row)
 
-        header = Window(FormattedTextControl(header_text), height=1)
-        rule = Window(
-            FormattedTextControl(lambda: [("class:rule", "─" * 240)]), height=1
-        )
-        search = VSplit(
+        header = VSplit(
             [
+                Window(FormattedTextControl(header_text), height=1),
                 Window(
                     FormattedTextControl(
-                        lambda: [("class:input.placeholder", "  ⌕  ")]
+                        lambda: [("class:picker.meta", "esc  ")]
                     ),
                     width=5,
                     height=1,
-                    style="class:input.box",
+                    align=WindowAlign.RIGHT,
                 ),
-                self._input_window,
-                Window(width=2, height=1, style="class:input.box"),
             ],
             height=1,
-            style="class:input.box",
         )
         body = Window(
             FormattedTextControl(
@@ -3648,17 +3675,23 @@ class OpenHackApp:
         hint = Window(FormattedTextControl(hint_text), height=1)
         return HSplit(
             [
-                Window(height=1),
+                Window(height=1, style="class:picker.frame"),
                 header,
-                rule,
-                Window(height=1),
-                VSplit([Window(width=2), search, Window(width=2)]),
-                Window(height=1),
+                Window(height=1, style="class:picker.frame"),
+                VSplit([
+                    Window(width=2, style="class:picker.frame"),
+                    self._picker_input_window,
+                    Window(width=2, style="class:picker.frame"),
+                ], height=1),
+                Window(height=1, style="class:picker.frame"),
                 body,
-                rule,
+                Window(height=1, style="class:picker.frame"),
                 hint,
-                Window(height=1),
-            ]
+                Window(height=1, style="class:picker.frame"),
+            ],
+            width=D(preferred=64, max=70),
+            height=D(preferred=30, max=34),
+            style="class:picker.frame",
         )
 
     def _build_provider_methods_container(self) -> HSplit:
@@ -4081,14 +4114,12 @@ class OpenHackApp:
             self._cmd_logout()
         elif cmd == "/setup":
             await self._cmd_setup()
-        elif cmd == "/provider":
-            self._cmd_provider(arg)
         elif cmd == "/connect":
             await self._cmd_connect(arg)
         elif cmd == "/disconnect":
             self._cmd_disconnect(arg)
-        elif cmd == "/model":
-            self._cmd_model(arg)
+        elif cmd == "/models":
+            self._cmd_models(arg)
         elif cmd == "/sidebar":
             self._toggle_sidebar_visibility()
         elif cmd == "/scan":
@@ -4193,40 +4224,6 @@ class OpenHackApp:
         self._at_index = None
         self.last_status_line = f"cwd → {_abbrev_home(os.getcwd())}"
 
-    def _cmd_provider(self, name: str) -> None:
-        from openhack import providers as _providers
-
-        name = name.lower().strip()
-        if not name:
-            self._open_provider_picker()
-            return
-        if not _providers.is_known(name):
-            self.last_status_line = (
-                f"unknown provider: {name} · try one of: "
-                + ", ".join(_providers.list_providers())
-            )
-            return
-
-        self.provider = name
-        if name == "openhack":
-            self.model = settings.openhack_model_id or "grok-4.5"
-            save_user_config({"provider": name, "model": self.model})
-            self.last_status_line = f"switched to openhack ({self.model})"
-            return
-
-        resolved = _providers.resolve(name)
-        if resolved is None:
-            self.last_status_line = f"could not resolve provider: {name}"
-            return
-        self.model = resolved.model
-        save_user_config({"provider": name, "model": self.model})
-        if resolved.missing_key_env:
-            self.last_status_line = (
-                f"switched to {name} ({self.model}) — set {resolved.missing_key_env} to use it"
-            )
-        else:
-            self.last_status_line = f"switched to {name} ({self.model})"
-
     async def _cmd_connect(self, arg: str) -> None:
         if self.mode == "scanning":
             self.last_status_line = "cannot connect a provider while a scan is in progress"
@@ -4235,7 +4232,7 @@ class OpenHackApp:
         provider_id = parts[0] if parts else None
         auth_method = parts[1] if len(parts) > 1 else None
         if provider_id is None:
-            self._open_provider_picker(action="connect")
+            self._open_provider_picker()
             return
         provider_id = provider_id.lower()
         if provider_id == "openai":
@@ -4254,9 +4251,15 @@ class OpenHackApp:
             return
         if provider_id != "openhack":
             from openhack import providers as provider_registry
+            from openhack.provider_auth import set_api_key
 
             if not provider_registry.is_known(provider_id):
                 self.last_status_line = f"unknown provider: {provider_id}"
+                return
+            spec = provider_registry.get_spec(provider_id)
+            if spec and spec.keyless_default:
+                set_api_key(provider_id, spec.keyless_default)
+                self.last_status_line = f"connected: {spec.label}"
                 return
             self._open_provider_key(provider_id)
             return
@@ -4315,35 +4318,21 @@ class OpenHackApp:
         else:
             self._start_openai_oauth(method)
 
-    def _activate_connected_provider(self, provider_id: str) -> None:
-        from openhack import providers as provider_registry
-
-        resolved = provider_registry.resolve(provider_id)
-        if resolved is None:
-            raise ValueError(f"{provider_id} could not be resolved")
-        if resolved.missing_key_env:
-            raise ValueError(
-                f"set {resolved.missing_key_env} to finish connecting {provider_id}"
-            )
-        self.provider = provider_id
-        self.model = resolved.model
-        save_user_config({"provider": provider_id, "model": self.model})
-
     def _save_provider_api_key(self, secret: str) -> None:
         from openhack.provider_auth import set_api_key
 
         provider_id = self._provider_auth_id
         try:
             set_api_key(provider_id, secret)
-            self._activate_connected_provider(provider_id)
         except Exception as exc:
             self.last_status_line = f"connection failed: {exc}"
             return
         origin = self.previous_mode or "landing"
         self.mode = origin
         self.previous_mode = None
-        self.last_status_line = f"connected: {self.provider} · {self.model}"
-        self._open_model_picker()
+        self._focus_main_input()
+        self.last_status_line = f"connected: {self._provider_auth_label}"
+        self._invalidate()
 
     def _start_openai_oauth(self, method: str) -> None:
         self._remember_auth_origin()
@@ -4382,7 +4371,6 @@ class OpenHackApp:
                 await asyncio.to_thread(openai_browser_login)
             else:
                 await asyncio.to_thread(openai_device_login, on_code=show_code)
-            self._activate_connected_provider("openai")
         except Exception as exc:
             self._provider_oauth_message = f"Connection failed: {exc}"
             self.last_status_line = f"OpenAI connection failed: {exc}"
@@ -4393,9 +4381,10 @@ class OpenHackApp:
         was_waiting = self.mode == "provider_oauth"
         self.mode = origin
         self.previous_mode = None
-        self.last_status_line = f"connected: {self.provider} · {self.model}"
+        self._focus_main_input()
+        self.last_status_line = "connected: OpenAI"
         if was_waiting:
-            self._open_model_picker()
+            self._invalidate()
         self._invalidate()
 
     def _cmd_disconnect(self, arg: str) -> None:
@@ -4418,19 +4407,11 @@ class OpenHackApp:
             save_user_config({"provider": self.provider, "model": self.model})
         self.last_status_line = f"disconnected {provider_id}"
 
-    def _cmd_model(self, arg: str) -> None:
-        arg = arg.strip()
-        if not arg:
-            # Open the scrollable picker instead of dumping a string.
-            self._open_model_picker()
-            return
-        self.model = arg
-        save_user_config({"model": arg})
-        known = self.provider != "openhack" or arg in OPENHACK_MODELS
-        self.last_status_line = (
-            f"model set to {arg}" if known
-            else f"model set to {arg} — note: not in OpenHack's served list, requests may fail"
-        )
+    def _cmd_models(self, arg: str = "") -> None:
+        self._open_model_picker()
+        if arg.strip():
+            self.input_buffer.text = arg.strip()
+            self.input_buffer.cursor_position = len(self.input_buffer.text)
 
     # ── Copy finding for AI agent ─────────────────────────────────
 
@@ -4613,8 +4594,8 @@ class OpenHackApp:
                 "id": "openhack",
                 "label": "OpenHack",
                 "hint": "Hosted inference",
-                "connected": bool(settings.openhack_api_key),
-                "category": "Providers",
+                "connected": True,
+                "category": "Popular",
             }
         ]
         for spec in specs:
@@ -4625,10 +4606,10 @@ class OpenHackApp:
                     "hint": spec.hint,
                     "connected": bool(
                         os.environ.get(spec.api_key_env)
-                        or spec.keyless_default
                         or credentials.get(spec.name)
+                        or spec.name == self.provider
                     ),
-                    "category": "Providers",
+                    "category": "Popular",
                 }
             )
         priority = {
@@ -4642,7 +4623,7 @@ class OpenHackApp:
                 if entry["id"] not in self._CURATED_PROVIDERS
             ]
             for entry in entries:
-                entry["category"] = "Other providers"
+                entry["category"] = "Providers"
         else:
             active_long_tail = [
                 entry
@@ -4672,7 +4653,7 @@ class OpenHackApp:
             key=lambda entry: (
                 (
                     0
-                    if entry["category"] == "Providers"
+                    if entry["category"] == "Popular"
                     else 1
                     if entry["category"] == "Current"
                     else 2
@@ -4760,11 +4741,22 @@ class OpenHackApp:
             0,
         )
 
-    def _open_provider_picker(self, action: str = "switch") -> None:
+    def _focus_picker_input(self) -> None:
+        try:
+            self.app.layout.focus(self._picker_input_window)
+        except Exception:
+            pass
+
+    def _focus_main_input(self) -> None:
+        try:
+            self.app.layout.focus(self._input_window)
+        except Exception:
+            pass
+
+    def _open_provider_picker(self) -> None:
         """Open immediately from cache; refresh Models.dev in the background."""
         from openhack import providers as provider_registry
 
-        self._provider_action = action
         self._provider_show_all = False
         self._provider_query = ""
         self._provider_specs = provider_registry.list_provider_specs()
@@ -4775,10 +4767,11 @@ class OpenHackApp:
              if entry["id"] == self.provider),
             0,
         )
-        if self.mode not in ("sessions", "models", "providers", "shells"):
+        if self.mode not in ("models", "providers"):
             self.previous_mode = self.mode
         self.mode = "providers"
         self.input_buffer.reset()
+        self._focus_picker_input()
         self.last_status_line = ""
         self._invalidate()
         if not self._provider_refresh_started:
@@ -4813,11 +4806,13 @@ class OpenHackApp:
             self.provider_index = list(self._provider_all)
             self.provider_selected = 0
             self.input_buffer.reset()
+            self._focus_picker_input()
             self._invalidate()
             return
         self.input_buffer.reset()
         self.mode = self.previous_mode or "landing"
         self.previous_mode = None
+        self._focus_main_input()
         self._invalidate()
 
     def _select_provider_from_picker(self) -> None:
@@ -4831,52 +4826,132 @@ class OpenHackApp:
             self.provider_index = list(self._provider_all)
             self.provider_selected = 0
             self.input_buffer.reset()
+            self._focus_picker_input()
             self._invalidate()
             return
-        should_connect = (
-            self._provider_action == "connect"
-            or (selected["id"] != "openhack" and not selected["connected"])
-        )
         provider_id = selected["id"]
-        if should_connect:
-            self._close_provider_picker(force=True)
-            asyncio.create_task(self._cmd_connect(provider_id))
-            return
-        self._cmd_provider(selected["id"])
-        status = self.last_status_line
         self._close_provider_picker(force=True)
-        self.last_status_line = status
+        asyncio.create_task(self._cmd_connect(provider_id))
 
     def _open_model_picker(self) -> None:
-        """Open a full-screen, scrollable model picker."""
-        from openhack import providers as provider_registry
-
+        """Show all models from all connected providers in one grouped popup."""
         self._model_query = ""
-        self._model_all = provider_registry.provider_models(self.provider)
-        if self.model and not any(
-            model["id"] == self.model for model in self._model_all
-        ):
-            self._model_all.insert(
-                0, {"id": self.model, "label": self.model, "desc": "Current model"}
-            )
+        self._model_all = self._connected_model_entries()
         self.model_index = list(self._model_all)
         self.model_selected = next(
-            (i for i, m in enumerate(self.model_index) if m["id"] == self.model), 0
+            (
+                index
+                for index, model in enumerate(self.model_index)
+                if model.get("recent")
+            ),
+            0,
         )
-        if self.mode not in ("sessions", "models", "providers", "shells"):
+        if self.mode not in ("models", "providers"):
             self.previous_mode = self.mode
         self.mode = "models"
-        if hasattr(self, "input_buffer"):
-            self.input_buffer.reset()
+        self.input_buffer.reset()
+        self._focus_picker_input()
         self.last_status_line = ""
         self._invalidate()
 
+    def _connected_model_entries(self) -> list[dict]:
+        from openhack import providers as provider_registry
+        from openhack.provider_auth import all_credentials
+
+        specs = provider_registry.list_provider_specs()
+        credentials = all_credentials()
+        by_id = {spec.name: spec for spec in specs}
+        connected_ids = ["openhack"]
+        connected_ids.extend(
+            spec.name
+            for spec in specs
+            if (
+                spec.name == self.provider
+                or os.environ.get(spec.api_key_env)
+                or credentials.get(spec.name)
+            )
+        )
+        priority = {
+            provider_id: index
+            for index, provider_id in enumerate(self._CURATED_PROVIDERS)
+        }
+        connected_ids = sorted(
+            dict.fromkeys(connected_ids),
+            key=lambda provider_id: (
+                priority.get(provider_id, 999),
+                provider_id,
+            ),
+        )
+
+        entries: list[dict] = []
+        for provider_id in connected_ids:
+            label = (
+                "OpenHack"
+                if provider_id == "openhack"
+                else by_id.get(provider_id).label
+                if by_id.get(provider_id)
+                else provider_id
+            )
+            models = provider_registry.provider_models(provider_id)
+            if (
+                provider_id == self.provider
+                and self.model
+                and not any(model["id"] == self.model for model in models)
+            ):
+                models.insert(
+                    0,
+                    {
+                        "id": self.model,
+                        "label": self.model,
+                        "desc": "Current model",
+                    },
+                )
+            entries.extend(
+                {
+                    **model,
+                    "provider": provider_id,
+                    "provider_label": label,
+                    "section": label,
+                    "recent": False,
+                }
+                for model in models
+            )
+
+        lookup = {
+            (entry["provider"], entry["id"]): entry
+            for entry in entries
+        }
+        configured_recents = load_user_config().get("recent_models") or []
+        recent_keys = [(self.provider, self.model)]
+        recent_keys.extend(
+            (str(item.get("provider") or ""), str(item.get("model") or ""))
+            for item in configured_recents
+            if isinstance(item, dict)
+        )
+        recent_rows = []
+        seen = set()
+        for key in recent_keys:
+            if key in seen or key not in lookup:
+                continue
+            seen.add(key)
+            recent_rows.append({
+                **lookup[key],
+                "section": "Recent",
+                "recent": True,
+            })
+            if len(recent_rows) == 5:
+                break
+        return [*recent_rows, *entries]
+
     def _filter_model_index(self) -> None:
-        selected_id = (
-            self.model_index[self.model_selected]["id"]
+        selected_key = (
+            (
+                self.model_index[self.model_selected]["provider"],
+                self.model_index[self.model_selected]["id"],
+            )
             if self.model_index
             and 0 <= self.model_selected < len(self.model_index)
-            else self.model
+            else (self.provider, self.model)
         )
         query = self._model_query.strip()
         if not query:
@@ -4884,10 +4959,12 @@ class OpenHackApp:
         else:
             scored = []
             for model in self._model_all:
+                if model.get("recent"):
+                    continue
                 entry = {
                     "id": model["id"],
                     "label": model.get("label", model["id"]),
-                    "hint": model.get("desc", ""),
+                    "hint": model.get("provider_label", ""),
                 }
                 score = self._provider_match_score(entry, query)
                 if score is not None:
@@ -4907,7 +4984,7 @@ class OpenHackApp:
             (
                 index
                 for index, model in enumerate(filtered)
-                if model["id"] == selected_id
+                if (model["provider"], model["id"]) == selected_key
             ),
             0,
         )
@@ -4917,14 +4994,35 @@ class OpenHackApp:
             self.input_buffer.reset()
         self.mode = self.previous_mode or "landing"
         self.previous_mode = None
+        self._focus_main_input()
         self._invalidate()
 
     def _select_model_from_picker(self) -> None:
         if self.model_index:
-            chosen = self.model_index[self.model_selected]["id"]
-            self.model = chosen
-            save_user_config({"model": chosen})
-            self.last_status_line = f"model set to {chosen}"
+            chosen = self.model_index[self.model_selected]
+            self.provider = chosen["provider"]
+            self.model = chosen["id"]
+            existing_recents = load_user_config().get("recent_models") or []
+            recent_models = [
+                {"provider": self.provider, "model": self.model},
+                *[
+                    item
+                    for item in existing_recents
+                    if isinstance(item, dict)
+                    and (
+                        item.get("provider"),
+                        item.get("model"),
+                    ) != (self.provider, self.model)
+                ],
+            ][:5]
+            save_user_config({
+                "provider": self.provider,
+                "model": self.model,
+                "recent_models": recent_models,
+            })
+            self.last_status_line = (
+                f"model set to {self.model} · {chosen['provider_label']}"
+            )
         self._close_model_picker()
 
     def _refresh_sessions_index(self) -> None:

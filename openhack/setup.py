@@ -76,8 +76,8 @@ PROVIDERS = [
             ("glm-5.2", "GLM 5.2", "Reasoning model by Z.ai · fast & cost-efficient"),
             ("kimi-k2.5", "Kimi K2.5", "Flagship security analysis model by Moonshot"),
             ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
-            # mistral-large-2512 removed — see OPENHACK_MODELS in tui.py: no
-            # US-headquartered provider serves it, so it can't be routed.
+            # mistral-large-2512 removed: no permitted inference provider
+            # currently serves it, so it cannot be routed.
         ],
         "default_model": "grok-4.5",
     },

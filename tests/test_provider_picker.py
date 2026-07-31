@@ -3,41 +3,70 @@ import asyncio
 from prompt_toolkit.buffer import Buffer
 
 from openhack import providers
-from openhack.tui import OpenHackApp
+from openhack.tui import OpenHackApp, _SLASH_COMMANDS
 
 
-def test_provider_command_without_argument_opens_picker():
-    app = OpenHackApp.__new__(OpenHackApp)
-    called = []
-    app._open_provider_picker = lambda: called.append(True)
+def test_command_surface_uses_connect_and_models_without_provider():
+    commands = {command for command, _ in _SLASH_COMMANDS}
+    assert "/connect" in commands
+    assert "/models" in commands
+    assert "/provider" not in commands
+    assert "/providers" not in commands
+    assert "/model" not in commands
 
-    app._cmd_provider("")
 
-    assert called == [True]
-
-
-def test_model_picker_uses_active_provider_catalog(monkeypatch):
-    app = OpenHackApp.__new__(OpenHackApp)
+def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
+    app = _searchable_app()
     app.provider = "openai"
-    app.model = "grok-4.5"
-    app.mode = "landing"
-    app.previous_mode = None
-    app.last_status_line = "old"
-    app._invalidate = lambda: None
+    app.model = "gpt-a"
+    specs = [
+        providers.ProviderSpec(
+            "openai", "OpenAI", "https://api.openai.com/v1",
+            "OPENAI_API_KEY", "gpt-a",
+        ),
+        providers.ProviderSpec(
+            "anthropic", "Anthropic", "https://api.anthropic.com/v1",
+            "ANTHROPIC_API_KEY", "claude-a",
+        ),
+    ]
+    monkeypatch.setattr(providers, "list_provider_specs", lambda: specs)
+    monkeypatch.setattr(
+        "openhack.provider_auth.all_credentials",
+        lambda: {"openai": {"type": "api", "key": "saved"}},
+    )
+    monkeypatch.setattr(
+        "openhack.tui.load_user_config",
+        lambda: {
+            "recent_models": [
+                {"provider": "openhack", "model": "grok-4.5"},
+            ]
+        },
+    )
     monkeypatch.setattr(
         providers,
         "provider_models",
-        lambda name: [
-            {"id": "grok-4.5", "label": "Grok 4.5", "desc": ""},
-            {"id": "kimi-k3", "label": "Kimi K3", "desc": ""},
-        ],
+        lambda name: {
+            "openhack": [
+                {"id": "grok-4.5", "label": "Grok 4.5", "desc": ""},
+            ],
+            "openai": [
+                {"id": "gpt-a", "label": "GPT A", "desc": ""},
+                {"id": "gpt-b", "label": "GPT B", "desc": ""},
+            ],
+        }[name],
     )
 
     app._open_model_picker()
 
     assert app.mode == "models"
     assert app.previous_mode == "landing"
-    assert [model["id"] for model in app.model_index] == ["grok-4.5", "kimi-k3"]
+    assert [(model["section"], model["id"]) for model in app.model_index] == [
+        ("Recent", "gpt-a"),
+        ("Recent", "grok-4.5"),
+        ("OpenHack", "grok-4.5"),
+        ("OpenAI", "gpt-a"),
+        ("OpenAI", "gpt-b"),
+    ]
 
 
 def _searchable_app():
@@ -49,7 +78,6 @@ def _searchable_app():
     app.last_status_line = ""
     app._provider_refresh_started = True
     app._provider_query = ""
-    app._provider_action = "switch"
     app._provider_show_all = False
     app._provider_specs = []
     app._provider_all = []
@@ -164,19 +192,31 @@ def test_other_entry_reveals_long_tail_and_escape_returns_to_curated(monkeypatch
 def test_connect_without_provider_opens_searchable_connect_picker():
     app = _searchable_app()
     opened = []
-    app._open_provider_picker = lambda action="switch": opened.append(action)
+    app._open_provider_picker = lambda: opened.append(True)
 
     asyncio.run(app._cmd_connect(""))
 
-    assert opened == ["connect"]
+    assert opened == [True]
 
 
 def test_model_search_filters_large_provider_catalog():
     app = _searchable_app()
     app._model_all = [
-        {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "frontier"},
-        {"id": "claude-sonnet-5", "label": "Claude Sonnet 5", "desc": ""},
-        {"id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro", "desc": ""},
+        {
+            "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "frontier",
+            "provider": "openai", "provider_label": "OpenAI",
+            "section": "OpenAI", "recent": False,
+        },
+        {
+            "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "desc": "",
+            "provider": "anthropic", "provider_label": "Anthropic",
+            "section": "Anthropic", "recent": False,
+        },
+        {
+            "id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro", "desc": "",
+            "provider": "google", "provider_label": "Google AI Studio",
+            "section": "Google AI Studio", "recent": False,
+        },
     ]
     app.model_index = list(app._model_all)
     app._model_query = "sonet"
@@ -186,23 +226,52 @@ def test_model_search_filters_large_provider_catalog():
     assert [model["id"] for model in app.model_index] == ["claude-sonnet-5"]
 
 
-def test_api_key_entry_stores_secret_and_opens_model_picker(monkeypatch):
+def test_api_key_entry_connects_without_switching_active_model(monkeypatch):
     app = _searchable_app()
     app._provider_auth_id = "openrouter"
     app._provider_auth_label = "OpenRouter"
     app.mode = "provider_key"
     stored = []
-    opened = []
+    original = (app.provider, app.model)
     monkeypatch.setattr(
         "openhack.provider_auth.set_api_key",
         lambda provider_id, secret: stored.append((provider_id, secret)),
     )
-    app._activate_connected_provider = lambda provider_id: setattr(
-        app, "provider", provider_id
-    )
-    app._open_model_picker = lambda: opened.append(True)
-
     app._save_provider_api_key("secret-value")
 
     assert stored == [("openrouter", "secret-value")]
-    assert opened == [True]
+    assert (app.provider, app.model) == original
+    assert app.last_status_line == "connected: OpenRouter"
+
+
+def test_selecting_model_switches_provider_and_model(monkeypatch):
+    app = _searchable_app()
+    app.mode = "models"
+    app.previous_mode = "landing"
+    app.model_index = [{
+        "id": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "provider": "anthropic",
+        "provider_label": "Anthropic",
+        "section": "Anthropic",
+        "recent": False,
+    }]
+    saved = []
+    monkeypatch.setattr(
+        "openhack.tui.save_user_config",
+        lambda values: saved.append(values),
+    )
+    monkeypatch.setattr("openhack.tui.load_user_config", lambda: {})
+
+    app._select_model_from_picker()
+
+    assert app.provider == "anthropic"
+    assert app.model == "claude-sonnet-5"
+    assert saved == [{
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "recent_models": [{
+            "provider": "anthropic",
+            "model": "claude-sonnet-5",
+        }],
+    }]

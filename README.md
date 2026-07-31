@@ -90,10 +90,9 @@ For every confirmed finding you get: severity, CVSS score, file location, full d
 | `/verify browser` *(Beta)* | Launch a headless browser to verify client-side vulns (XSS, CSRF, etc.)                            |
 | `/login`                   | Re-login to your OpenHack account                                                                  |
 | `/setup`                   | Run the setup wizard again                                                                         |
-| `/provider`                | Browse and switch providers; catalog is synced from Models.dev                                     |
-| `/connect [provider]`      | Securely connect an API key or an OpenAI ChatGPT Plus/Pro subscription                             |
+| `/connect [provider]`      | Connect an API key or OpenAI subscription using the provider popup                                |
 | `/disconnect [provider]`   | Remove a provider's saved credentials                                                              |
-| `/model`                   | Browse the active provider's models; the established OpenHack models remain first                  |
+| `/models`                  | Choose from every model offered by all connected providers                                         |
 | `/config`                  | Show current config; `/config <key> <value>` to set                                                |
 | `/sidebar`                 | Show/hide the contextual right panel or Findings list (`Ctrl+B`)                                   |
 | `/cost`                    | Cost breakdown for the last scan                                                                   |
@@ -173,14 +172,13 @@ separately in `~/.openhack/auth.json`; both files use owner-only permissions.
 Use the provider commands to connect or switch inference services:
 
 ```text
-/provider
-/connect openai          # choose ChatGPT Plus/Pro browser, headless, or API key
-/model
+/connect                 # connect one or more providers
+/models                  # select across every connected provider
 ```
 
 The provider list and model metadata are synchronized from Models.dev and
 cached for one day. OpenHack also has a bundled offline model catalog.
-`/provider`, `/connect`, and `/model` use searchable pickers;
+`/connect` and `/models` use centered, searchable, scrollable pickers;
 provider refresh happens in the background so opening them never waits on the
 network. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
 `gemma-4-31b` ranking stays at the top whenever those models are available.
@@ -205,10 +203,9 @@ You can override at runtime via environment variables:
 
 OpenHack reads and processes your source code **locally** — prompts are built
 on your machine. Model prompts are sent to the provider you select. With the
-hosted OpenHack provider they go through OpenHack Inference; with BYOK, Zen,
-Go, local, or OpenAI subscription connections they go directly to that
-provider. Review the selected provider's data policy before scanning sensitive
-code.
+hosted OpenHack provider they go through OpenHack Inference; with BYOK, local,
+or OpenAI subscription connections they go directly to that provider. Review
+the selected provider's data policy before scanning sensitive code.
 
 ## Contributing
 

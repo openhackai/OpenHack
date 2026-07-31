@@ -10,7 +10,6 @@ Usage:
   openhack --sessions                 List all saved scan sessions
   openhack --resume <id>              Resume a previous scan session
   openhack --classify [path]          Classify frameworks and detect entry points
-  openhack --providers                List LLM providers you can connect
   openhack --login                    Log in to your OpenHack account
   openhack --setup                    Run the setup wizard
   openhack --showkey                  Print the raw bytes your terminal sends (key diagnostic)
@@ -124,30 +123,6 @@ def _cmd_agent():
         run_repl(target_dir=str(target))
     except KeyboardInterrupt:
         print()
-
-
-def _cmd_providers():
-    """List LLM providers you can connect (bring-your-own-key)."""
-    from openhack import providers
-    from openhack.config import settings
-    from openhack.provider_auth import get_credential
-
-    print("\nLLM providers (switch with /provider; authenticate with /connect)\n")
-    active = settings.llm_provider
-    mark = "→" if active == "openhack" else " "
-    print(f"  {mark} openhack        OpenHack hosted (default; free credits, no setup)")
-    for spec in providers.list_provider_specs():
-        name = spec.name
-        import os as _os
-        has_key = bool(
-            _os.environ.get(spec.api_key_env)
-            or spec.keyless_default
-            or get_credential(name)
-        )
-        mark = "→" if active == name else " "
-        key_note = "key set" if has_key else f"needs {spec.api_key_env}"
-        print(f"  {mark} {name:<14}  {spec.label:<22}  default {spec.default_model}  [{key_note}]")
-    print("\n  Run OpenHack and use /provider, /connect, and /model.\n")
 
 
 def _cmd_sessions():
@@ -328,7 +303,6 @@ COMMANDS = {
     "plan": _cmd_plan,
     "agent": _cmd_agent,
     "interactive": _cmd_agent,
-    "providers": _cmd_providers,
     "scan": _cmd_scan,
     "sessions": _cmd_sessions,
     "resume": _cmd_resume,

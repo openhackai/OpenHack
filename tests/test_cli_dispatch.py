@@ -39,7 +39,7 @@ def test_no_args_launches_tui_on_cwd(routed):
 @pytest.mark.parametrize("flag,name", [
     ("--scan", "scan"), ("--hack", "hack"), ("--plan", "plan"),
     ("--agent", "agent"), ("--sessions", "sessions"), ("--resume", "resume"),
-    ("--classify", "classify"), ("--providers", "providers"),
+    ("--classify", "classify"),
     ("--login", "login"), ("--setup", "setup"),
 ])
 def test_flag_forms_route_to_command(routed, flag, name):
@@ -68,6 +68,12 @@ def test_unknown_option_errors(routed):
     call, out = routed("--nope")
     assert call is None
     assert "Unknown option: --nope" in out
+
+
+def test_providers_cli_command_was_removed(routed):
+    call, out = routed("--providers")
+    assert call is None
+    assert "Unknown option: --providers" in out
 
 
 def test_help_and_version(routed):
