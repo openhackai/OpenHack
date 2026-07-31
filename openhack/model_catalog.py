@@ -139,6 +139,37 @@ def _expand_api(api: str) -> Optional[str]:
     return None if "${" in expanded else expanded.rstrip("/")
 
 
+def models_from_models_dev(
+    provider_id: str,
+    *,
+    catalog: Optional[dict[str, Any]] = None,
+) -> list[dict[str, str]]:
+    """Return model metadata without requiring Models.dev to define an API URL.
+
+    Curated providers already have endpoints in ``providers.py``. Models.dev
+    sometimes omits ``api`` for those providers while still publishing their
+    complete model catalogs.
+    """
+    if provider_id in EXCLUDED_PROVIDER_IDS:
+        return []
+    catalog = catalog or load_models_dev(allow_network=False)
+    raw = catalog.get(provider_id) if catalog else None
+    if not isinstance(raw, dict):
+        return []
+    models_raw = raw.get("models") or {}
+    if not isinstance(models_raw, dict):
+        return []
+    return [
+        {
+            "id": str(model_id),
+            "label": str(info.get("name") or model_id),
+            "desc": str(info.get("description") or ""),
+        }
+        for model_id, info in models_raw.items()
+        if isinstance(info, dict) and info.get("status") != "deprecated"
+    ]
+
+
 def provider_from_models_dev(
     provider_id: str,
     *,
@@ -152,18 +183,9 @@ def provider_from_models_dev(
         return None
     api = _expand_api(str(raw.get("api") or ""))
     env = tuple(str(value) for value in raw.get("env") or [] if value)
-    models_raw = raw.get("models") or {}
-    if not api or not isinstance(models_raw, dict):
+    if not api:
         return None
-    models = tuple(
-        {
-            "id": str(model_id),
-            "label": str(info.get("name") or model_id),
-            "desc": str(info.get("description") or ""),
-        }
-        for model_id, info in models_raw.items()
-        if isinstance(info, dict) and info.get("status") != "deprecated"
-    )
+    models = tuple(models_from_models_dev(provider_id, catalog=catalog))
     return CatalogProvider(
         id=provider_id,
         name=str(raw.get("name") or provider_id),
@@ -215,8 +237,7 @@ def bundled_models(provider_id: str) -> list[dict[str, str]]:
             {"id": model_id, "label": label, "desc": desc}
             for model_id, label, desc in OPENHACK_MODELS
         ]
-    remote = provider_from_models_dev(provider_id)
-    return list(remote.models) if remote else []
+    return models_from_models_dev(provider_id)
 
 
 def merge_models(

@@ -96,6 +96,30 @@ def test_unresolved_endpoint_template_is_not_offered(monkeypatch):
     ) is None
 
 
+def test_model_catalog_does_not_require_models_dev_api_url(monkeypatch):
+    catalog = {
+        "openai": {
+            "name": "OpenAI",
+            "models": {
+                "gpt-a": {"name": "GPT A"},
+                "old": {"name": "Old", "status": "deprecated"},
+            },
+        }
+    }
+    monkeypatch.setattr(
+        model_catalog,
+        "load_models_dev",
+        lambda **kwargs: catalog,
+    )
+
+    assert model_catalog.bundled_models("openai") == [
+        {"id": "gpt-a", "label": "GPT A", "desc": ""}
+    ]
+    assert model_catalog.provider_from_models_dev(
+        "openai", catalog=catalog
+    ) is None
+
+
 def test_cache_only_discovery_never_waits_for_network(monkeypatch, tmp_path):
     payload = {
         "cached": {
