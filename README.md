@@ -184,6 +184,12 @@ cached for one day. OpenHack also has a bundled offline model catalog.
 provider refresh happens in the background so opening them never waits on the
 network. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
 `gemma-4-31b` ranking stays at the top whenever those models are available.
+The first provider screen is curated; choose **Other…** to search the complete
+Models.dev-backed catalog.
+
+Cloudflare Workers AI additionally needs `CLOUDFLARE_ACCOUNT_ID`. Azure OpenAI
+needs its full `/openai/v1` endpoint in `AZURE_OPENAI_BASE_URL`. Amazon Bedrock
+uses its Mantle endpoint and additionally needs `AWS_REGION`.
 
 You can override at runtime via environment variables:
 

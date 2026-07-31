@@ -76,6 +76,7 @@ from openhack.config import (
     reload_settings,
     _PROVIDER_KEY_FIELDS,
 )
+from openhack.providers import CURATED_PROVIDER_IDS
 from openhack.setup import run_provider_connect, run_setup_command
 from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
@@ -1606,6 +1607,8 @@ class OpenHackApp:
         self._provider_all: list[dict] = []
         self._provider_query: str = ""
         self._provider_action: str = "switch"
+        self._provider_show_all: bool = False
+        self._provider_specs: list = []
         self._provider_refresh_started: bool = False
         self._provider_auth_id: str = ""
         self._provider_auth_label: str = ""
@@ -3538,11 +3541,14 @@ class OpenHackApp:
     def _build_provider_container(self) -> HSplit:
         """Open the searchable provider picker."""
         def header_text():
-            title = (
-                "Connect a provider"
-                if self._provider_action == "connect"
-                else "Switch provider"
-            )
+            if self._provider_show_all:
+                title = "Other providers"
+            else:
+                title = (
+                    "Connect a provider"
+                    if self._provider_action == "connect"
+                    else "Switch provider"
+                )
             return [
                 ("class:header.target", f"  {title}"),
                 ("class:header.sep", "    "),
@@ -3719,10 +3725,18 @@ class OpenHackApp:
 
             spec = provider_registry.get_spec(self._provider_auth_id)
             env = spec.api_key_env if spec else "API_KEY"
+            required = (
+                f" · also requires {', '.join(spec.required_env)}"
+                if spec and spec.required_env
+                else ""
+            )
             return [
                 ("class:session.meta", f"  Stored securely in ~/.openhack/auth.json"),
                 ("", "\n"),
-                ("class:session.meta", f"  Environment alternative: {env}"),
+                (
+                    "class:session.meta",
+                    f"  Environment alternative: {env}{required}",
+                ),
             ]
 
         return HSplit(
@@ -4305,8 +4319,12 @@ class OpenHackApp:
         from openhack import providers as provider_registry
 
         resolved = provider_registry.resolve(provider_id)
-        if resolved is None or resolved.missing_key_env:
-            raise ValueError(f"{provider_id} did not produce usable credentials")
+        if resolved is None:
+            raise ValueError(f"{provider_id} could not be resolved")
+        if resolved.missing_key_env:
+            raise ValueError(
+                f"set {resolved.missing_key_env} to finish connecting {provider_id}"
+            )
         self.provider = provider_id
         self.model = resolved.model
         save_user_config({"provider": provider_id, "model": self.model})
@@ -4582,16 +4600,11 @@ class OpenHackApp:
             self.last_status_line = f"{n} shell(s) · ↑/↓ navigate · k kill · esc back"
 
     # ── Model picker overlay ──────────────────────────────────────
-    _POPULAR_PROVIDERS = (
-        "openhack",
-        "openai",
-        "anthropic",
-        "google",
-        "openrouter",
-    )
+    _CURATED_PROVIDERS = CURATED_PROVIDER_IDS
+    _OTHER_PROVIDER_ID = "__other__"
 
     def _provider_entries(self, specs) -> list[dict]:
-        """Build picker rows without resolving providers or rereading auth."""
+        """Build the curated or long-tail picker without resolving providers."""
         from openhack.provider_auth import all_credentials
 
         credentials = all_credentials()
@@ -4601,7 +4614,7 @@ class OpenHackApp:
                 "label": "OpenHack",
                 "hint": "Hosted inference",
                 "connected": bool(settings.openhack_api_key),
-                "category": "Popular",
+                "category": "Providers",
             }
         ]
         for spec in specs:
@@ -4615,21 +4628,55 @@ class OpenHackApp:
                         or spec.keyless_default
                         or credentials.get(spec.name)
                     ),
-                    "category": (
-                        "Popular"
-                        if spec.name in self._POPULAR_PROVIDERS
-                        else "Providers"
-                    ),
+                    "category": "Providers",
                 }
             )
         priority = {
             provider_id: index
-            for index, provider_id in enumerate(self._POPULAR_PROVIDERS)
+            for index, provider_id in enumerate(self._CURATED_PROVIDERS)
         }
+        if self._provider_show_all:
+            entries = [
+                entry
+                for entry in entries
+                if entry["id"] not in self._CURATED_PROVIDERS
+            ]
+            for entry in entries:
+                entry["category"] = "Other providers"
+        else:
+            active_long_tail = [
+                entry
+                for entry in entries
+                if entry["id"] == self.provider
+                and entry["id"] not in self._CURATED_PROVIDERS
+            ]
+            for entry in active_long_tail:
+                entry["category"] = "Current"
+            entries = [
+                entry
+                for entry in entries
+                if entry["id"] in self._CURATED_PROVIDERS
+            ]
+            entries.extend(active_long_tail)
+            entries.append(
+                {
+                    "id": self._OTHER_PROVIDER_ID,
+                    "label": "Other…",
+                    "hint": "Browse every supported provider",
+                    "connected": False,
+                    "category": "More",
+                }
+            )
         return sorted(
             entries,
             key=lambda entry: (
-                0 if entry["category"] == "Popular" else 1,
+                (
+                    0
+                    if entry["category"] == "Providers"
+                    else 1
+                    if entry["category"] == "Current"
+                    else 2
+                ),
                 priority.get(entry["id"], 999),
                 entry["label"].casefold(),
                 entry["id"],
@@ -4718,10 +4765,10 @@ class OpenHackApp:
         from openhack import providers as provider_registry
 
         self._provider_action = action
+        self._provider_show_all = False
         self._provider_query = ""
-        self._provider_all = self._provider_entries(
-            provider_registry.list_provider_specs()
-        )
+        self._provider_specs = provider_registry.list_provider_specs()
+        self._provider_all = self._provider_entries(self._provider_specs)
         self.provider_index = list(self._provider_all)
         self.provider_selected = next(
             (i for i, entry in enumerate(self.provider_index)
@@ -4752,12 +4799,22 @@ class OpenHackApp:
             )
         except Exception:
             return
-        self._provider_all = self._provider_entries(specs)
+        self._provider_specs = specs
+        self._provider_all = self._provider_entries(self._provider_specs)
         if self.mode == "providers":
             self._filter_provider_index()
             self._invalidate()
 
-    def _close_provider_picker(self) -> None:
+    def _close_provider_picker(self, *, force: bool = False) -> None:
+        if self._provider_show_all and not force:
+            self._provider_show_all = False
+            self._provider_query = ""
+            self._provider_all = self._provider_entries(self._provider_specs)
+            self.provider_index = list(self._provider_all)
+            self.provider_selected = 0
+            self.input_buffer.reset()
+            self._invalidate()
+            return
         self.input_buffer.reset()
         self.mode = self.previous_mode or "landing"
         self.previous_mode = None
@@ -4767,18 +4824,27 @@ class OpenHackApp:
         if not self.provider_index:
             return
         selected = self.provider_index[self.provider_selected]
+        if selected["id"] == self._OTHER_PROVIDER_ID:
+            self._provider_show_all = True
+            self._provider_query = ""
+            self._provider_all = self._provider_entries(self._provider_specs)
+            self.provider_index = list(self._provider_all)
+            self.provider_selected = 0
+            self.input_buffer.reset()
+            self._invalidate()
+            return
         should_connect = (
             self._provider_action == "connect"
             or (selected["id"] != "openhack" and not selected["connected"])
         )
         provider_id = selected["id"]
         if should_connect:
-            self._close_provider_picker()
+            self._close_provider_picker(force=True)
             asyncio.create_task(self._cmd_connect(provider_id))
             return
         self._cmd_provider(selected["id"])
         status = self.last_status_line
-        self._close_provider_picker()
+        self._close_provider_picker(force=True)
         self.last_status_line = status
 
     def _open_model_picker(self) -> None:

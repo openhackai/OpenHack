@@ -50,6 +50,8 @@ def _searchable_app():
     app._provider_refresh_started = True
     app._provider_query = ""
     app._provider_action = "switch"
+    app._provider_show_all = False
+    app._provider_specs = []
     app._provider_all = []
     app.provider_index = []
     app.provider_selected = 0
@@ -119,6 +121,43 @@ def test_open_provider_picker_never_resolves_every_provider(monkeypatch):
     assert [entry["id"] for entry in app.provider_index] == [
         "openhack",
         "openai",
+        "__other__",
+    ]
+
+
+def test_other_entry_reveals_long_tail_and_escape_returns_to_curated(monkeypatch):
+    app = _searchable_app()
+    app._provider_specs = [
+        providers.ProviderSpec(
+            "openai", "OpenAI", "https://api.openai.com/v1",
+            "OPENAI_API_KEY", "gpt-5.6-sol",
+        ),
+        providers.ProviderSpec(
+            "xai", "xAI", "https://api.x.ai/v1",
+            "XAI_API_KEY", "grok-4.5",
+        ),
+    ]
+    monkeypatch.setattr("openhack.provider_auth.all_credentials", lambda: {})
+    app._provider_all = app._provider_entries(app._provider_specs)
+    app.provider_index = list(app._provider_all)
+    app.provider_selected = next(
+        index
+        for index, entry in enumerate(app.provider_index)
+        if entry["id"] == "__other__"
+    )
+
+    app._select_provider_from_picker()
+
+    assert app._provider_show_all
+    assert [entry["id"] for entry in app.provider_index] == ["xai"]
+
+    app._close_provider_picker()
+
+    assert not app._provider_show_all
+    assert [entry["id"] for entry in app.provider_index] == [
+        "openhack",
+        "openai",
+        "__other__",
     ]
 
 

@@ -36,6 +36,7 @@ class ProviderSpec:
     pricing: dict = field(default_factory=dict)
     keyless_default: Optional[str] = None
     hint: str = ""
+    required_env: tuple[str, ...] = ()
 
 
 # Curated providers appear first. Models.dev providers follow alphabetically.
@@ -58,6 +59,19 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "google": ProviderSpec(
         "google", "Google AI Studio", "https://generativelanguage.googleapis.com/v1beta/openai",
         "GEMINI_API_KEY", "gemini-3.1-pro", True,
+    ),
+    "vercel": ProviderSpec(
+        "vercel", "Vercel AI Gateway", "https://ai-gateway.vercel.sh/v1",
+        "AI_GATEWAY_API_KEY", "anthropic/claude-sonnet-4.6", True,
+        hint="Hundreds of models through Vercel AI Gateway",
+    ),
+    "cloudflare-workers-ai": ProviderSpec(
+        "cloudflare-workers-ai", "Cloudflare Workers AI",
+        "https://api.cloudflare.com/client/v4/accounts/"
+        "${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+        "CLOUDFLARE_API_KEY", "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        hint="Requires CLOUDFLARE_ACCOUNT_ID",
+        required_env=("CLOUDFLARE_ACCOUNT_ID",),
     ),
     "xai": ProviderSpec(
         "xai", "xAI", "https://api.x.ai/v1",
@@ -103,6 +117,19 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "moonshotai", "Moonshot AI", "https://api.moonshot.ai/v1",
         "MOONSHOT_API_KEY", "kimi-k2.5",
     ),
+    "azure": ProviderSpec(
+        "azure", "Azure OpenAI", "${AZURE_OPENAI_BASE_URL}",
+        "AZURE_OPENAI_API_KEY", "gpt-5-mini", True,
+        hint="Requires the full v1 URL in AZURE_OPENAI_BASE_URL",
+        required_env=("AZURE_OPENAI_BASE_URL",),
+    ),
+    "amazon-bedrock": ProviderSpec(
+        "amazon-bedrock", "Amazon Bedrock",
+        "https://bedrock-mantle.${AWS_REGION}.api.aws/v1",
+        "AWS_BEARER_TOKEN_BEDROCK", "openai.gpt-oss-120b", True,
+        hint="Bedrock Mantle · requires AWS_REGION",
+        required_env=("AWS_REGION",),
+    ),
     "zai": ProviderSpec(
         "zai", "Z.AI", "https://api.z.ai/api/paas/v4",
         "ZHIPU_API_KEY", "glm-5.2",
@@ -126,6 +153,26 @@ PROVIDERS: dict[str, ProviderSpec] = {
         hint="Local models · no key required",
     ),
 }
+
+# The first provider screen stays intentionally small. Everything else remains
+# available through the searchable "Other…" entry.
+CURATED_PROVIDER_IDS = (
+    "openhack",
+    "anthropic",
+    "openai",
+    "openrouter",
+    "google",
+    "vercel",
+    "cloudflare-workers-ai",
+    "fireworks-ai",
+    "groq",
+    "together",
+    "deepseek",
+    "azure",
+    "amazon-bedrock",
+    "ollama",
+    "moonshotai",
+)
 
 
 @dataclass
@@ -237,7 +284,13 @@ def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider
     )
     api_key = env_key or stored_key or spec.keyless_default
     env_prefix = name.upper().replace("-", "_")
-    base_url = os.environ.get(f"{env_prefix}_BASE_URL", spec.base_url)
+    base_url = os.path.expandvars(
+        os.environ.get(f"{env_prefix}_BASE_URL", spec.base_url)
+    )
+    missing_required_env = next(
+        (env_name for env_name in spec.required_env if not os.environ.get(env_name)),
+        None,
+    )
     selected_model = (
         model
         or os.environ.get(f"{env_prefix}_MODEL")
@@ -250,5 +303,9 @@ def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider
         model=selected_model,
         supports_prompt_cache=spec.supports_prompt_cache,
         pricing=spec.pricing,
-        missing_key_env=None if api_key else spec.api_key_env,
+        missing_key_env=(
+            spec.api_key_env
+            if not api_key
+            else missing_required_env
+        ),
     )

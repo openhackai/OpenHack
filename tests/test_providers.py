@@ -21,6 +21,68 @@ def test_list_includes_openhack_and_byok():
         assert name in listed
 
 
+def test_curated_provider_list_matches_primary_picker():
+    assert providers.CURATED_PROVIDER_IDS == (
+        "openhack",
+        "anthropic",
+        "openai",
+        "openrouter",
+        "google",
+        "vercel",
+        "cloudflare-workers-ai",
+        "fireworks-ai",
+        "groq",
+        "together",
+        "deepseek",
+        "azure",
+        "amazon-bedrock",
+        "ollama",
+        "moonshotai",
+    )
+
+
+def test_endpoint_dependent_providers_report_required_environment(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {"type": "api", "key": "saved"},
+    )
+    for env_name in (
+        "CLOUDFLARE_ACCOUNT_ID",
+        "AZURE_OPENAI_BASE_URL",
+        "AWS_REGION",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    assert (
+        providers.resolve("cloudflare-workers-ai").missing_key_env
+        == "CLOUDFLARE_ACCOUNT_ID"
+    )
+    assert (
+        providers.resolve("azure").missing_key_env
+        == "AZURE_OPENAI_BASE_URL"
+    )
+    assert providers.resolve("amazon-bedrock").missing_key_env == "AWS_REGION"
+    assert providers.resolve("vercel").missing_key_env is None
+
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "account")
+    monkeypatch.setenv(
+        "AZURE_OPENAI_BASE_URL",
+        "https://resource.openai.azure.com/openai/v1",
+    )
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    assert providers.resolve("cloudflare-workers-ai").base_url == (
+        "https://api.cloudflare.com/client/v4/accounts/account/ai/v1"
+    )
+    assert providers.resolve("azure").base_url == (
+        "https://resource.openai.azure.com/openai/v1"
+    )
+    assert providers.resolve("amazon-bedrock").base_url == (
+        "https://bedrock-mantle.us-west-2.api.aws/v1"
+    )
+
+
 def test_opencode_plans_are_not_available():
     listed = providers.list_providers()
     for name in ("opencode", "opencode-go"):
