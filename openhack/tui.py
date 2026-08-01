@@ -2452,7 +2452,19 @@ class OpenHackApp:
         immediately — and it lives here, at the bottom, because the TUI has no
         top chrome.
         """
-        cwd = _abbrev_home(os.getcwd())
+        # This function is called from prompt_toolkit's synchronous render
+        # path, including SIGWINCH redraws.  A Ctrl+C arriving during getcwd()
+        # can interrupt that syscall with EINTR; letting it escape tears down
+        # the event-loop callback and leaves the terminal at "Press ENTER to
+        # continue".  Rendering must be exception-free, so retain the most
+        # recent successful cwd and use it for that transient frame.
+        try:
+            live_cwd = os.getcwd()
+        except OSError:
+            live_cwd = getattr(self, "_last_render_cwd", ".")
+        else:
+            self._last_render_cwd = live_cwd
+        cwd = _abbrev_home(live_cwd)
         if len(cwd) > 44:  # keep the line readable — show the tail that matters
             parts = cwd.split(os.sep)
             cwd = "…" + os.sep + os.sep.join(parts[-2:]) if len(parts) > 2 else cwd[-44:]
