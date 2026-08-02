@@ -125,7 +125,13 @@ async def _input_with_back_async(
 
 # ── Arrow-key selection menu ──────────────────────────────────────
 
-async def _select_menu_async(title: str, items: list[tuple[str, str, str]], default_idx: int = 0) -> int:
+async def _select_menu_async(
+    title: str,
+    items: list[tuple[str, str, str]],
+    default_idx: int = 0,
+    *,
+    cancel_label: str = "cancel",
+) -> int:
     """Render an arrow-key driven selection menu. Returns the chosen index.
 
     items: list of (value, label, hint)
@@ -146,7 +152,10 @@ async def _select_menu_async(title: str, items: list[tuple[str, str, str]], defa
                 if hint:
                     lines.append(("class:hint", f"  {hint}"))
                 lines.append(("", "\n"))
-        lines.append(("class:footer", "\n  ↑/↓ to move · Enter to select · q to cancel"))
+        lines.append((
+            "class:footer",
+            f"\n  ↑/↓ to move · Enter to select · q/Esc to {cancel_label}",
+        ))
         return lines
 
     kb = KeyBindings()
@@ -372,6 +381,7 @@ async def _run_first_time_onboarding() -> bool:
     from openhack.agents.llm import fetch_available_models
 
     _banner()
+    auth_idx: Optional[int] = None
     while True:
         idx = await _select_menu_async(
             "Connect a provider",
@@ -390,6 +400,16 @@ async def _run_first_time_onboarding() -> bool:
 
         provider_id = ("openhack", "openai", "anthropic", "google", "other")[idx]
         if provider_id == "openhack":
+            auth_idx = await _select_menu_async(
+                "Connect OpenHack",
+                [
+                    ("login", "Login with OpenHack", "Recommended · opens your browser"),
+                    ("apikey", "Use an API key", "Paste an existing OpenHack key"),
+                ],
+                cancel_label="go back",
+            )
+            if auth_idx < 0:
+                continue
             break
         connected = await run_provider_connect(
             None if provider_id == "other" else provider_id,
@@ -405,15 +425,7 @@ async def _run_first_time_onboarding() -> bool:
 
     provider = PROVIDERS[0]
     cfg = load_user_config()
-    auth_idx = await _select_menu_async(
-        "Connect OpenHack",
-        [
-            ("login", "Login with OpenHack", "Recommended · opens your browser"),
-            ("apikey", "Use an API key", "Paste an existing OpenHack key"),
-        ],
-    )
-    if auth_idx < 0:
-        return False
+    assert auth_idx is not None
 
     login_result = None
     api_key: Optional[str] = None
@@ -699,7 +711,11 @@ async def run_provider_connect(
             (spec.name, spec.label, spec.hint or spec.api_key_env)
             for spec in specs
         ]
-        idx = await _select_menu_async("Connect a provider", items)
+        idx = await _select_menu_async(
+            "Connect a provider",
+            items,
+            cancel_label="go back" if allow_back else "cancel",
+        )
         if idx < 0:
             return False
         provider_id = items[idx][0]
@@ -720,6 +736,7 @@ async def run_provider_connect(
                 ("device", "ChatGPT Plus/Pro (headless)", "Open a URL and enter a code"),
                 ("api", "OpenAI API key", "Billed through the API platform"),
             ],
+            cancel_label="go back" if allow_back else "cancel",
         )
         if idx < 0:
             return False

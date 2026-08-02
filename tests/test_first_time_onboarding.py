@@ -99,3 +99,22 @@ async def test_back_from_provider_credentials_returns_to_provider_menu(monkeypat
 
     assert await setup._run_first_time_onboarding() is False
     assert connect_calls == [("google", {"allow_back": True})]
+
+
+@pytest.mark.asyncio
+async def test_back_from_openhack_auth_returns_to_provider_menu(monkeypatch):
+    choices = iter([0, -1, -1])  # OpenHack, back, then cancel onboarding
+    titles = []
+
+    async def select(title, *args, **kwargs):
+        titles.append((title, kwargs.get("cancel_label")))
+        return next(choices)
+
+    monkeypatch.setattr(setup, "_select_menu_async", select)
+
+    assert await setup._run_first_time_onboarding() is False
+    assert titles == [
+        ("Connect a provider", None),
+        ("Connect OpenHack", "go back"),
+        ("Connect a provider", None),
+    ]
