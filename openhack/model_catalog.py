@@ -33,6 +33,11 @@ PREFERRED_MODEL_IDS = (
     "grok-4.5",
     "kimi-k2.5",
     "gemma-4-31b",
+    "gpt-oss-120b",
+    "deepseek-v3.2",
+    "minimax-m2.5",
+    "gemini-3-flash",
+    "nemotron-3-super",
 )
 
 # These third-party plans are intentionally not OpenHack providers. Keep the
@@ -45,6 +50,11 @@ OPENHACK_MODELS = (
     ("grok-4.5", "Grok 4.5", "Deep exploitation · strongest for difficult attack chains"),
     ("kimi-k2.5", "Kimi K2.5", "Multimodal security analysis by Moonshot AI"),
     ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
+    ("gpt-oss-120b", "GPT-OSS 120B", "Open-weight reasoning model by OpenAI"),
+    ("deepseek-v3.2", "DeepSeek V3.2", "Long-context reasoning and tool use"),
+    ("minimax-m2.5", "MiniMax M2.5", "Efficient agentic reasoning and coding"),
+    ("gemini-3-flash", "Gemini 3 Flash", "Fast, long-context model by Google"),
+    ("nemotron-3-super", "Nemotron 3 Super", "Open agentic model by NVIDIA"),
 )
 
 

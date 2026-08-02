@@ -8,6 +8,21 @@ def test_excluded_plans_have_no_bundled_models():
     assert model_catalog.bundled_models("opencode-go") == []
 
 
+def test_openhack_bundles_all_hosted_model_metadata():
+    models = model_catalog.bundled_models("openhack")
+    assert [model["id"] for model in models] == [
+        "glm-5.2",
+        "grok-4.5",
+        "kimi-k2.5",
+        "gemma-4-31b",
+        "gpt-oss-120b",
+        "deepseek-v3.2",
+        "minimax-m2.5",
+        "gemini-3-flash",
+        "nemotron-3-super",
+    ]
+
+
 def test_existing_openhack_models_keep_top_rank():
     ranked = model_catalog.rank_model_ids(
         ["other", "kimi-k2.5", "grok-4.5", "glm-5.2", "last"]
