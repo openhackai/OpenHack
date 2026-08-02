@@ -105,6 +105,24 @@ async def _input_async(message: str, is_password: bool = False) -> str:
     return await session.prompt_async(message, is_password=is_password)
 
 
+async def _input_with_back_async(
+    message: str, *, is_password: bool = False
+) -> Optional[str]:
+    """Read one value, returning ``None`` when Esc/Ctrl-C requests Back."""
+    kb = KeyBindings()
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    def _back(event):
+        event.app.exit(result=None)
+
+    session: PromptSession = PromptSession(key_bindings=kb)
+    try:
+        return await session.prompt_async(message, is_password=is_password)
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
 # ── Arrow-key selection menu ──────────────────────────────────────
 
 async def _select_menu_async(title: str, items: list[tuple[str, str, str]], default_idx: int = 0) -> int:
@@ -184,7 +202,12 @@ def _select_menu(title: str, items: list[tuple[str, str, str]], default_idx: int
 
 # ── API key input ─────────────────────────────────────────────────
 
-async def _prompt_api_key(provider: dict, existing_key: Optional[str] = None) -> Optional[str]:
+async def _prompt_api_key(
+    provider: dict,
+    existing_key: Optional[str] = None,
+    *,
+    allow_back: bool = False,
+) -> Optional[str]:
     """Prompt for an API key with masked display."""
     _html("")
     _html(f'  {B}API Key for {_esc(provider["display"])}{EB}')
@@ -203,10 +226,23 @@ async def _prompt_api_key(provider: dict, existing_key: Optional[str] = None) ->
         _html(f'  {DIM}Press Enter to use environment value{EDIM}')
         _html("")
 
+    if allow_back:
+        _html(f'  {DIM}Esc or blank input returns to provider selection{EDIM}')
+        _html("")
+
     try:
-        key = (await _input_async("  API Key: ", is_password=True)).strip()
+        raw_key = await (
+            _input_with_back_async("  API Key: ", is_password=True)
+            if allow_back
+            else _input_async("  API Key: ", is_password=True)
+        )
     except (EOFError, KeyboardInterrupt):
         return existing_key
+    if raw_key is None:
+        return None
+    key = raw_key.strip()
+    if allow_back and not key:
+        return None
 
     if not key:
         if existing_key:
@@ -336,32 +372,36 @@ async def _run_first_time_onboarding() -> bool:
     from openhack.agents.llm import fetch_available_models
 
     _banner()
-    idx = await _select_menu_async(
-        "Connect a provider",
-        [
-            ("openhack", "OpenHack", "Recommended · free credits on signup"),
-            ("openai", "OpenAI", "API key or ChatGPT Plus/Pro"),
-            ("anthropic", "Anthropic", "API key"),
-            ("google", "Google AI Studio", "API key"),
-            ("other", "Other…", "Browse every supported provider"),
-        ],
-    )
-    if idx < 0:
-        _html(f"  {DIM}Onboarding cancelled.{EDIM}")
-        _html("")
-        return False
-
-    provider_id = ("openhack", "openai", "anthropic", "google", "other")[idx]
-    if provider_id != "openhack":
-        connected = await run_provider_connect(
-            None if provider_id == "other" else provider_id
+    while True:
+        idx = await _select_menu_async(
+            "Connect a provider",
+            [
+                ("openhack", "OpenHack", "Recommended · free credits on signup"),
+                ("openai", "OpenAI", "API key or ChatGPT Plus/Pro"),
+                ("anthropic", "Anthropic", "API key"),
+                ("google", "Google AI Studio", "API key"),
+                ("other", "Other…", "Browse every supported provider"),
+            ],
         )
-        if connected:
-            save_user_config({"onboarding_version": 1})
-            _html(f"  {GREEN}✓{EGREEN} {B}Security agent ready.{EB}")
-            _html(f"  {DIM}Opening OpenHack…{EDIM}")
+        if idx < 0:
+            _html(f"  {DIM}Onboarding cancelled.{EDIM}")
             _html("")
-        return connected
+            return False
+
+        provider_id = ("openhack", "openai", "anthropic", "google", "other")[idx]
+        if provider_id == "openhack":
+            break
+        connected = await run_provider_connect(
+            None if provider_id == "other" else provider_id,
+            allow_back=True,
+        )
+        if not connected:
+            continue
+        save_user_config({"onboarding_version": 1})
+        _html(f"  {GREEN}✓{EGREEN} {B}Security agent ready.{EB}")
+        _html(f"  {DIM}Opening OpenHack…{EDIM}")
+        _html("")
+        return True
 
     provider = PROVIDERS[0]
     cfg = load_user_config()
@@ -388,7 +428,9 @@ async def _run_first_time_onboarding() -> bool:
             _html("")
             return False
     else:
-        api_key = await _prompt_api_key(provider, cfg.get("openhack_api_key"))
+        api_key = await _prompt_api_key(
+            provider, cfg.get("openhack_api_key"), allow_back=True
+        )
         if not api_key:
             _html(f"  {YELLOW}⚠{EYELLOW}  An API key is required.")
             _html("")
@@ -631,6 +673,8 @@ async def run_setup_command() -> bool:
 async def run_provider_connect(
     provider_id: Optional[str] = None,
     auth_method: Optional[str] = None,
+    *,
+    allow_back: bool = False,
 ) -> bool:
     """Connect a BYOK/subscription provider from inside the scanner.
 
@@ -704,7 +748,18 @@ async def run_provider_connect(
             _html(f"  {DIM}Environment variable: {_esc(spec.api_key_env)}{EDIM}")
             if current:
                 _html(f"  {DIM}Current: {_esc(_mask_key(current))}{EDIM}")
-            key = (await _input_async("  API Key: ", is_password=True)).strip()
+            if allow_back:
+                _html(f"  {DIM}Esc or blank input goes back{EDIM}")
+            raw_key = await (
+                _input_with_back_async("  API Key: ", is_password=True)
+                if allow_back
+                else _input_async("  API Key: ", is_password=True)
+            )
+            if raw_key is None:
+                return False
+            key = raw_key.strip()
+            if allow_back and not key:
+                return False
             if not key:
                 key = current or os.environ.get(spec.api_key_env, "")
             if not key:

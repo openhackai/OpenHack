@@ -69,8 +69,9 @@ async def test_external_provider_onboarding_reuses_connect_flow(monkeypatch):
     async def select(*args, **kwargs):
         return 1  # OpenAI
 
-    async def connect(provider_id):
+    async def connect(provider_id, **kwargs):
         assert provider_id == "openai"
+        assert kwargs["allow_back"] is True
         return True
 
     monkeypatch.setattr(setup, "_select_menu_async", select)
@@ -79,3 +80,22 @@ async def test_external_provider_onboarding_reuses_connect_flow(monkeypatch):
 
     assert await setup._run_first_time_onboarding() is True
     assert saved == [{"onboarding_version": 1}]
+
+
+@pytest.mark.asyncio
+async def test_back_from_provider_credentials_returns_to_provider_menu(monkeypatch):
+    choices = iter([3, -1])  # Google, then cancel from provider menu
+    connect_calls = []
+
+    async def select(*args, **kwargs):
+        return next(choices)
+
+    async def connect(provider_id, **kwargs):
+        connect_calls.append((provider_id, kwargs))
+        return False  # Esc/blank from the credential prompt
+
+    monkeypatch.setattr(setup, "_select_menu_async", select)
+    monkeypatch.setattr(setup, "run_provider_connect", connect)
+
+    assert await setup._run_first_time_onboarding() is False
+    assert connect_calls == [("google", {"allow_back": True})]
