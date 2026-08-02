@@ -72,14 +72,14 @@ PROVIDERS = [
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
         "models": [
-            ("grok-4.5", "Grok 4.5", "Frontier model by xAI · strongest exploitation (default)"),
-            ("glm-5.2", "GLM 5.2", "Reasoning model by Z.ai · fast & cost-efficient"),
-            ("kimi-k2.5", "Kimi K2.5", "Flagship security analysis model by Moonshot"),
-            ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
+            ("glm-5.2", "GLM 5.2", "Recommended · best balance for agentic security work"),
+            ("grok-4.5", "Grok 4.5", "Deep exploitation · difficult attack chains"),
+            ("gemma-4-31b", "Gemma 4 31B", "Fast and open-weight"),
+            ("kimi-k2.5", "Kimi K2.5", "Alternative · multimodal security analysis"),
             # mistral-large-2512 removed: no permitted inference provider
             # currently serves it, so it cannot be routed.
         ],
-        "default_model": "grok-4.5",
+        "default_model": "glm-5.2",
     },
 ]
 
@@ -308,9 +308,9 @@ def _banner() -> None:
     _html("")
     _html(f'  <b><ansibrightwhite>         ████████</ansibrightwhite></b>')
     _html("")
-    _html(f'  <b><ansicyan>  OpenHack</ansicyan></b> — First Time Setup')
+    _html(f'  <b><ansicyan>  OpenHack</ansicyan></b>')
     _html("")
-    _html(f'  {DIM}Welcome to OpenHack! Let\'s get started with setup.{EDIM}')
+    _html(f'  {DIM}The open-source security agent.{EDIM}')
     _html("")
 
 
@@ -331,14 +331,134 @@ def _setup_banner() -> None:
     _html("")
 
 
+async def _run_first_time_onboarding() -> bool:
+    """Short first-run path: connect, verify, choose a default, enter the TUI."""
+    from openhack.agents.llm import fetch_available_models
+
+    _banner()
+    idx = await _select_menu_async(
+        "Connect a provider",
+        [
+            ("openhack", "OpenHack", "Recommended · free credits on signup"),
+            ("openai", "OpenAI", "API key or ChatGPT Plus/Pro"),
+            ("anthropic", "Anthropic", "API key"),
+            ("google", "Google AI Studio", "API key"),
+            ("other", "Other…", "Browse every supported provider"),
+        ],
+    )
+    if idx < 0:
+        _html(f"  {DIM}Onboarding cancelled.{EDIM}")
+        _html("")
+        return False
+
+    provider_id = ("openhack", "openai", "anthropic", "google", "other")[idx]
+    if provider_id != "openhack":
+        connected = await run_provider_connect(
+            None if provider_id == "other" else provider_id
+        )
+        if connected:
+            save_user_config({"onboarding_version": 1})
+            _html(f"  {GREEN}✓{EGREEN} {B}Security agent ready.{EB}")
+            _html(f"  {DIM}Opening OpenHack…{EDIM}")
+            _html("")
+        return connected
+
+    provider = PROVIDERS[0]
+    cfg = load_user_config()
+    auth_idx = await _select_menu_async(
+        "Connect OpenHack",
+        [
+            ("login", "Login with OpenHack", "Recommended · opens your browser"),
+            ("apikey", "Use an API key", "Paste an existing OpenHack key"),
+        ],
+    )
+    if auth_idx < 0:
+        return False
+
+    login_result = None
+    api_key: Optional[str] = None
+    if auth_idx == 0:
+        try:
+            login_result = await device_login(
+                cfg.get("openhack_app_url") or settings.openhack_app_url
+            )
+            api_key = login_result.token
+        except (DeviceLoginCancelled, DeviceLoginExpired, DeviceLoginError) as exc:
+            _html(f"  {YELLOW}⚠{EYELLOW}  Connection failed: {_esc(str(exc))}")
+            _html("")
+            return False
+    else:
+        api_key = await _prompt_api_key(provider, cfg.get("openhack_api_key"))
+        if not api_key:
+            _html(f"  {YELLOW}⚠{EYELLOW}  An API key is required.")
+            _html("")
+            return False
+
+    _html("")
+    _html(f"  {DIM}Verifying OpenHack inference…{EDIM}")
+    live_models = await asyncio.to_thread(
+        fetch_available_models,
+        api_key=api_key,
+        base_url=settings.openhack_base_url,
+        timeout=8,
+    )
+    if not live_models:
+        _html(f"  {YELLOW}⚠{EYELLOW}  Could not verify this connection.")
+        _html(f"  {DIM}Check the credential and try again.{EDIM}")
+        _html("")
+        return False
+    _html(f"  {GREEN}✓{EGREEN} Connected to OpenHack")
+    _html(f"  {GREEN}✓{EGREEN} Inference verified")
+
+    available = set(live_models)
+    curated = [item for item in provider["models"] if item[0] in available]
+    if not curated:
+        curated = [(mid, mid, "Available through OpenHack") for mid in live_models]
+    model_idx = await _select_menu_async(
+        "Choose your default model",
+        curated,
+        default_idx=next(
+            (i for i, item in enumerate(curated) if item[0] == "glm-5.2"), 0
+        ),
+    )
+    model_id = curated[model_idx if model_idx >= 0 else 0][0]
+
+    new_cfg = {
+        "provider": "openhack",
+        "model": model_id,
+        "openhack_model_id": model_id,
+        "openhack_api_key": api_key,
+        "onboarding_version": 1,
+    }
+    if login_result:
+        for attr, key in (
+            ("org_id", "openhack_org_id"),
+            ("org_slug", "openhack_org_slug"),
+            ("org_name", "openhack_org_name"),
+            ("user_email", "openhack_user_email"),
+            ("user_first_name", "openhack_user_first_name"),
+            ("user_last_name", "openhack_user_last_name"),
+        ):
+            value = getattr(login_result, attr, None)
+            if value:
+                new_cfg[key] = value
+    save_user_config(new_cfg)
+    reload_settings()
+    _html("")
+    _html(f"  {GREEN}✓{EGREEN} {B}Security agent ready · {_esc(model_id)}{EB}")
+    _html(f"  {DIM}Opening OpenHack…{EDIM}")
+    _html("")
+    return True
+
+
 async def _run_wizard(is_first_time: bool = True) -> bool:
     """Run the interactive configuration wizard. Returns True if config was saved."""
+    if is_first_time:
+        return await _run_first_time_onboarding()
+
     cfg = load_user_config()
 
-    if is_first_time:
-        _banner()
-    else:
-        _setup_banner()
+    _setup_banner()
 
     provider = PROVIDERS[0]
     default_model = provider["default_model"]

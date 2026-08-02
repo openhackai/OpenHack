@@ -20,7 +20,7 @@ def _normalize_user_config(data: dict) -> dict:
     if data.get("provider") not in _REMOVED_PROVIDER_IDS:
         return data
     normalized = dict(data)
-    normalized.update({"provider": "openhack", "model": "grok-4.5"})
+    normalized.update({"provider": "openhack", "model": "glm-5.2"})
     return normalized
 
 
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     openhack_api_key: Optional[str] = None
     openhack_base_url: str = ""
     openhack_app_url: str = ""
-    openhack_model_id: str = "grok-4.5"
+    openhack_model_id: str = "glm-5.2"
 
     openhack_org_id: Optional[str] = None
     openhack_org_slug: Optional[str] = None

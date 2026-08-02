@@ -29,8 +29,8 @@ _MEMORY_LOCK = threading.Lock()
 # Preserve the product's existing ranking.  These models always float to the
 # top when a provider offers them.
 PREFERRED_MODEL_IDS = (
-    "grok-4.5",
     "glm-5.2",
+    "grok-4.5",
     "kimi-k2.5",
     "gemma-4-31b",
 )
@@ -41,8 +41,8 @@ PREFERRED_MODEL_IDS = (
 EXCLUDED_PROVIDER_IDS = frozenset({"opencode", "opencode-go"})
 
 OPENHACK_MODELS = (
-    ("grok-4.5", "Grok 4.5", "Frontier model by xAI · strongest exploitation"),
-    ("glm-5.2", "GLM 5.2", "Fast, capable long-horizon reasoning by Z.ai"),
+    ("glm-5.2", "GLM 5.2", "Recommended · best balance for agentic security work"),
+    ("grok-4.5", "Grok 4.5", "Deep exploitation · strongest for difficult attack chains"),
     ("kimi-k2.5", "Kimi K2.5", "Multimodal security analysis by Moonshot AI"),
     ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
 )

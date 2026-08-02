@@ -12,7 +12,7 @@ def test_existing_openhack_models_keep_top_rank():
     ranked = model_catalog.rank_model_ids(
         ["other", "kimi-k2.5", "grok-4.5", "glm-5.2", "last"]
     )
-    assert ranked == ["grok-4.5", "glm-5.2", "kimi-k2.5", "other", "last"]
+    assert ranked == ["glm-5.2", "grok-4.5", "kimi-k2.5", "other", "last"]
 
 
 def test_merge_uses_live_ids_but_catalog_labels():
@@ -20,11 +20,11 @@ def test_merge_uses_live_ids_but_catalog_labels():
         "openhack", ["unknown-live", "glm-5.2", "grok-4.5"]
     )
     assert [row["id"] for row in merged] == [
-        "grok-4.5",
         "glm-5.2",
+        "grok-4.5",
         "unknown-live",
     ]
-    assert merged[0]["label"] == "Grok 4.5"
+    assert merged[0]["label"] == "GLM 5.2"
 
 
 def test_models_dev_cache_and_compatible_provider_discovery(monkeypatch, tmp_path):

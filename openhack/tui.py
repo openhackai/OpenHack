@@ -287,7 +287,7 @@ class _PlaceholderProcessor(Processor):
 
 
 
-PROVIDER_DEFAULTS = {"openhack": "grok-4.5"}
+PROVIDER_DEFAULTS = {"openhack": "glm-5.2"}
 
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
@@ -2472,7 +2472,7 @@ class OpenHackApp:
             ("class:input.box", "  "),
             ("class:input.model.agent", cwd),
             ("class:input.model.sep", " · "),
-            ("class:input.model.name", self.model or "grok-4.5"),
+            ("class:input.model.name", self.model or "glm-5.2"),
             ("class:input.model.provider", f"  {self.provider}"),
         ]
 
@@ -2572,25 +2572,23 @@ class OpenHackApp:
 
         def tip():
             cfg = load_user_config()
-            logged_in = bool(
-                cfg.get("openhack_user_first_name")
-                or cfg.get("openhack_user_email")
-                or self.user_email
-            )
-            if not logged_in:
+            connected = bool(cfg.get("provider"))
+            if not connected:
                 return [
                     ("class:tip.label", "● Tip  "),
                     ("class:tip", "Run "),
-                    ("class:tip.key", "/login"),
-                    ("class:tip", " to get $20 in free credits and start scanning"),
+                    ("class:tip.key", "/connect"),
+                    ("class:tip", " to connect a model provider"),
                 ]
             return [
-                ("class:tip.label", "● Tip  "),
-                ("class:tip", "Type "),
-                ("class:tip.key", "/scan ."),
-                ("class:tip", " to scan the current directory, or "),
+                ("class:tip.label", "● Ready  "),
+                ("class:tip", "Type a security task  ·  "),
+                ("class:tip.key", "/connect"),
+                ("class:tip", " add provider  ·  "),
+                ("class:tip.key", "/models"),
+                ("class:tip", " switch model  ·  "),
                 ("class:tip.key", "?"),
-                ("class:tip", " for help"),
+                ("class:tip", " help"),
             ]
 
         def hints():
@@ -4416,7 +4414,7 @@ class OpenHackApp:
         remove_credential(provider_id)
         if self.provider == provider_id:
             self.provider = "openhack"
-            self.model = settings.openhack_model_id or "grok-4.5"
+            self.model = settings.openhack_model_id or "glm-5.2"
             save_user_config({"provider": self.provider, "model": self.model})
         self.last_status_line = f"disconnected {provider_id}"
 
