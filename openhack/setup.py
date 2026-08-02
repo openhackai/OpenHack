@@ -141,7 +141,20 @@ async def _select_menu_async(
     def _get_text():
         lines = []
         lines.append(("class:title", f"  {title}\n\n"))
-        for i, (_, label, hint) in enumerate(items):
+        max_visible = 10
+        if len(items) <= max_visible:
+            start = 0
+            end = len(items)
+        else:
+            start = max(
+                0,
+                min(selected[0] - max_visible // 2, len(items) - max_visible),
+            )
+            end = start + max_visible
+        if start:
+            lines.append(("class:footer", f"    ↑ {start} more\n"))
+        for i in range(start, end):
+            _, label, hint = items[i]
             if i == selected[0]:
                 lines.append(("class:selected", f"  ❯ {label}"))
                 if hint:
@@ -152,6 +165,8 @@ async def _select_menu_async(
                 if hint:
                     lines.append(("class:hint", f"  {hint}"))
                 lines.append(("", "\n"))
+        if end < len(items):
+            lines.append(("class:footer", f"    ↓ {len(items) - end} more\n"))
         lines.append((
             "class:footer",
             f"\n  ↑/↓ to move · Enter to select · q/Esc to {cancel_label}",
@@ -379,6 +394,7 @@ def _setup_banner() -> None:
 async def _run_first_time_onboarding() -> bool:
     """Short first-run path: connect, verify, choose a default, enter the TUI."""
     from openhack.agents.llm import fetch_available_models
+    from openhack.model_catalog import merge_models
 
     _banner()
     auth_idx: Optional[int] = None
@@ -464,10 +480,11 @@ async def _run_first_time_onboarding() -> bool:
     _html(f"  {GREEN}✓{EGREEN} Connected to OpenHack")
     _html(f"  {GREEN}✓{EGREEN} Inference verified")
 
-    available = set(live_models)
-    curated = [item for item in provider["models"] if item[0] in available]
-    if not curated:
-        curated = [(mid, mid, "Available through OpenHack") for mid in live_models]
+    catalog = merge_models("openhack", live_models)
+    curated = [
+        (entry["id"], entry["label"], entry.get("desc", ""))
+        for entry in catalog
+    ]
     model_idx = await _select_menu_async(
         "Choose your default model",
         curated,

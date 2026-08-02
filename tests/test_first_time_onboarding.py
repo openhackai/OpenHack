@@ -9,8 +9,11 @@ from openhack import setup
 async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
     choices = iter([0, 0, 0])  # OpenHack, browser login, GLM 5.2
     saved = []
+    model_items = []
 
-    async def select(*args, **kwargs):
+    async def select(title, items, *args, **kwargs):
+        if title == "Choose your default model":
+            model_items.extend(items)
         return next(choices)
 
     async def login(_url):
@@ -30,13 +33,24 @@ async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
     monkeypatch.setattr(setup, "reload_settings", lambda: None)
     monkeypatch.setattr(
         "openhack.agents.llm.fetch_available_models",
-        lambda **kwargs: ["grok-4.5", "glm-5.2", "kimi-k2.5"],
+        lambda **kwargs: [
+            "grok-4.5",
+            "glm-5.2",
+            "kimi-k2.5",
+            "new-hosted-model",
+        ],
     )
 
     assert await setup._run_first_time_onboarding() is True
     assert saved[-1]["provider"] == "openhack"
     assert saved[-1]["model"] == "glm-5.2"
     assert saved[-1]["onboarding_version"] == 1
+    assert [item[0] for item in model_items] == [
+        "glm-5.2",
+        "grok-4.5",
+        "kimi-k2.5",
+        "new-hosted-model",
+    ]
 
 
 @pytest.mark.asyncio
