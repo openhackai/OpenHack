@@ -79,8 +79,10 @@ async def test_openhack_onboarding_does_not_save_unverified_key(monkeypatch):
 @pytest.mark.asyncio
 async def test_external_provider_onboarding_reuses_connect_flow(monkeypatch):
     saved = []
+    menu_sections = []
 
     async def select(*args, **kwargs):
+        menu_sections.append(kwargs.get("section_before"))
         return 1  # OpenAI
 
     async def connect(provider_id, **kwargs):
@@ -94,6 +96,7 @@ async def test_external_provider_onboarding_reuses_connect_flow(monkeypatch):
 
     assert await setup._run_first_time_onboarding() is True
     assert saved == [{"onboarding_version": 1}]
+    assert menu_sections == [{1: "Use your own provider"}]
 
 
 @pytest.mark.asyncio

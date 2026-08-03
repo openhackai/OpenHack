@@ -131,12 +131,14 @@ async def _select_menu_async(
     default_idx: int = 0,
     *,
     cancel_label: str = "cancel",
+    section_before: Optional[dict[int, str]] = None,
 ) -> int:
     """Render an arrow-key driven selection menu. Returns the chosen index.
 
     items: list of (value, label, hint)
     """
     selected = [default_idx]
+    sections = section_before or {}
 
     def _get_text():
         lines = []
@@ -154,6 +156,11 @@ async def _select_menu_async(
         if start:
             lines.append(("class:footer", f"    ↑ {start} more\n"))
         for i in range(start, end):
+            if i in sections:
+                # A visual group label, not a menu item: keyboard indexes and
+                # arrow navigation continue to operate exclusively on items.
+                lines.append(("", "\n"))
+                lines.append(("class:section", f"  {sections[i].upper()}\n\n"))
             _, label, hint = items[i]
             if i == selected[0]:
                 lines.append(("class:selected", f"  ❯ {label}"))
@@ -204,6 +211,7 @@ async def _select_menu_async(
         "hint.selected": "ansigray",
         "unselected": "",
         "hint": "ansigray",
+        "section": "bold ansigray",
         "footer": "ansigray italic",
     })
 
@@ -408,6 +416,7 @@ async def _run_first_time_onboarding() -> bool:
                 ("google", "Google AI Studio", "API key"),
                 ("other", "Other…", "Browse every supported provider"),
             ],
+            section_before={1: "Use your own provider"},
         )
         if idx < 0:
             _html(f"  {DIM}Onboarding cancelled.{EDIM}")
