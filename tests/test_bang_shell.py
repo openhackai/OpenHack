@@ -3,6 +3,8 @@
 import asyncio
 import time
 
+from prompt_toolkit.buffer import Buffer
+
 from openhack.tui import OpenHackApp, ScanState
 from openhack.agents.session import Session
 
@@ -45,6 +47,52 @@ def test_bang_dispatch_routes_to_start_shell():
     app._start_shell = lambda cmd: calls.append(cmd)
     asyncio.run(app._handle_input("!ls -la"))
     assert calls == ["ls -la"]
+
+
+def _composer_app(text="", mode="landing"):
+    app = OpenHackApp.__new__(OpenHackApp)
+    app.mode = mode
+    app.provider = "openhack"
+    app.model = "glm-5.2"
+    app.input_buffer = Buffer()
+    app.input_buffer.text = text
+    app._shell_input_mode = False
+    app._invalidate = lambda: None
+    return app
+
+
+def test_bang_prefix_activates_shell_composer_ui():
+    app = _composer_app("!curl https://example.com")
+
+    assert app._is_shell_input() is True
+    assert app._input_box_style() == "class:input.shell.box"
+    assert app._input_bar_style() == "class:input.shell.bar"
+    assert "SHELL MODE" in "".join(text for _, text in app._model_line())
+
+
+def test_removing_bang_restores_normal_composer_ui():
+    app = _composer_app("!pwd")
+    app._shell_input_mode = True
+    invalidations = []
+    app._invalidate = lambda: invalidations.append(True)
+
+    app.input_buffer.text = "pwd"
+    app._on_input_text_changed(app.input_buffer)
+
+    assert app._is_shell_input() is False
+    assert app._input_box_style() == "class:input.box"
+    assert app._input_bar_style() == "class:input.bar"
+    assert invalidations == [True]
+
+
+def test_bang_after_leading_whitespace_matches_submit_dispatch():
+    app = _composer_app("   !git status")
+    assert app._is_shell_input() is True
+
+
+def test_bang_does_not_activate_inside_picker_input():
+    app = _composer_app("!openai", mode="providers")
+    assert app._is_shell_input() is False
 
 
 def test_run_shell_streams_output_and_exit_code():

@@ -130,6 +130,7 @@ OH_GREEN     = "#00B97E"  # success == the signal green
 OH_CYAN      = "#5BB39E"  # soft teal (info, kept in the green family)
 OH_YELLOW    = "#DEBA50"
 OH_USER_BG   = "#1A1D1F"  # subtle grey band behind the user's own messages
+OH_SHELL_BG  = "#18140B"  # subtle warm tint while composing a local shell command
 
 
 # ── Brand ─────────────────────────────────────────────────────────
@@ -1570,6 +1571,10 @@ class OpenHackApp:
         # the agent's run_in_background tool).
         self._shell_proc = None
         self._shell_active = False
+        # Live composer state. This is separate from _shell_active (which means
+        # a submitted process is running): it flips as soon as the input starts
+        # with `!`, so users can see which execution path Enter will take.
+        self._shell_input_mode = False
         # Transient upstream-retry notice from LLMClient (see _on_llm_status).
         self._llm_status = ""
         self.shells = ShellManager()
@@ -2178,6 +2183,13 @@ class OpenHackApp:
             "input.model.sep": f"bg:{OH_ELEM} {OH_MUTED}",
             "input.model.name": f"bg:{OH_ELEM} {OH_TEXT}",
             "input.model.provider": f"bg:{OH_ELEM} {OH_MUTED}",
+            # Shell composer: a restrained amber tint makes the execution mode
+            # obvious without turning the whole terminal into a warning state.
+            "input.shell.box": f"bg:{OH_SHELL_BG} {OH_TEXT}",
+            "input.shell.bar": f"bold {OH_ORANGE} bg:{OH_SHELL_BG}",
+            "input.shell.label": f"bg:{OH_SHELL_BG} bold {OH_ORANGE}",
+            "input.shell.detail": f"bg:{OH_SHELL_BG} {OH_MUTED}",
+            "input.shell.cwd": f"bg:{OH_SHELL_BG} {OH_TEXT}",
             # hints
             "hint": OH_MUTED,
             "hint.key": OH_TEXT,
@@ -2468,6 +2480,13 @@ class OpenHackApp:
         if len(cwd) > 44:  # keep the line readable — show the tail that matters
             parts = cwd.split(os.sep)
             cwd = "…" + os.sep + os.sep.join(parts[-2:]) if len(parts) > 2 else cwd[-44:]
+        if self._is_shell_input():
+            return [
+                ("class:input.shell.box", "  "),
+                ("class:input.shell.label", "SHELL MODE"),
+                ("class:input.shell.detail", "  ·  commands run locally  ·  "),
+                ("class:input.shell.cwd", cwd),
+            ]
         return [
             ("class:input.box", "  "),
             ("class:input.model.agent", cwd),
@@ -2475,6 +2494,22 @@ class OpenHackApp:
             ("class:input.model.name", self.model or "glm-5.2"),
             ("class:input.model.provider", f"  {self.provider}"),
         ]
+
+    def _is_shell_input(self) -> bool:
+        """Whether the current composer text will dispatch as a bang command."""
+        if getattr(self, "mode", "landing") in {"providers", "models", "provider_key"}:
+            return False
+        buffer = getattr(self, "input_buffer", None)
+        return bool(buffer and buffer.text.lstrip().startswith("!"))
+
+    def _input_box_style(self) -> str:
+        return "class:input.shell.box" if self._is_shell_input() else "class:input.box"
+
+    def _input_bar_style(self) -> str:
+        return "class:input.shell.bar" if self._is_shell_input() else "class:input.bar"
+
+    def _input_prefix(self) -> list[tuple[str, str]]:
+        return [(self._input_box_style(), "  ")]
 
     def _make_input_window(self) -> Window:
         """Create the shared buffer window (blue prompt, dim placeholder)."""
@@ -2486,12 +2521,12 @@ class OpenHackApp:
                         PasswordProcessor(char="•"),
                         filter=Condition(lambda: self.mode == "provider_key"),
                     ),
-                    BeforeInput("  ", style="class:input.box"),
+                    BeforeInput(self._input_prefix),
                     _PlaceholderProcessor(lambda: "  " + self._placeholder_text()),
                 ],
             ),
             height=1,
-            style="class:input.box",
+            style=self._input_box_style,
         )
 
     def _make_picker_input_window(self) -> Window:
@@ -2518,20 +2553,20 @@ class OpenHackApp:
         """The prompt: a signal-green left accent bar + element-bg box holding
         the input line and the model/agent status line."""
         inner = HSplit([
-            Window(height=1, style="class:input.box"),  # airy top padding
+            Window(height=1, style=self._input_box_style),  # airy top padding
             self._input_window,
-            Window(height=1, style="class:input.box"),  # gap before the model line
+            Window(height=1, style=self._input_box_style),  # gap before the model line
             Window(
                 FormattedTextControl(self._model_line),
-                height=1, style="class:input.box",
+                height=1, style=self._input_box_style,
             ),
-            Window(height=1, style="class:input.box"),  # bottom padding
-        ], style="class:input.box")
+            Window(height=1, style=self._input_box_style),  # bottom padding
+        ], style=self._input_box_style)
         return VSplit([
-            Window(width=1, char="▌", style="class:input.bar"),
+            Window(width=1, char="▌", style=self._input_bar_style),
             inner,
-            Window(width=1, style="class:input.box"),
-        ], width=width, style="class:input.box")
+            Window(width=1, style=self._input_box_style),
+        ], width=width, style=self._input_box_style)
 
     def _cwd_fragments(self, dim: str, bright: str) -> list[tuple[str, str]]:
         """`~/parent/`(dim) + `name`(bright) + `:branch`(dim)."""
@@ -4014,6 +4049,10 @@ class OpenHackApp:
     # ── Input handling ────────────────────────────────────────────
 
     def _on_input_text_changed(self, _buffer: Buffer) -> None:
+        shell_input_mode = self._is_shell_input()
+        if shell_input_mode != getattr(self, "_shell_input_mode", False):
+            self._shell_input_mode = shell_input_mode
+            self._invalidate()
         if self.mode == "providers":
             query = self.input_buffer.text
             if query != self._provider_query:
