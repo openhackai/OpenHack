@@ -402,7 +402,7 @@ async def _run_first_time_onboarding() -> bool:
         idx = await _select_menu_async(
             "Connect a provider",
             [
-                ("openhack", "OpenHack", "Recommended · free credits on signup"),
+                ("openhack", "OpenHack", "⚡️ Fast & use any model · free credits on signup"),
                 ("openai", "OpenAI", "API key or ChatGPT Plus/Pro"),
                 ("anthropic", "Anthropic", "API key"),
                 ("google", "Google AI Studio", "API key"),
