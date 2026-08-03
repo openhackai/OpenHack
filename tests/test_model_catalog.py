@@ -20,6 +20,12 @@ def test_openhack_bundles_all_hosted_model_metadata():
         "minimax-m2.5",
         "gemini-3-flash",
         "nemotron-3-super",
+        "gpt-5.6-luna",
+        "gpt-5.6-luna-pro",
+        "gpt-5.6-terra",
+        "gpt-5.6-terra-pro",
+        "gpt-5.6-sol",
+        "gpt-5.6-sol-pro",
     ]
 
 

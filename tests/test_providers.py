@@ -141,6 +141,31 @@ def test_saved_api_key_is_used_without_environment(monkeypatch):
     assert resolved.missing_key_env is None
 
 
+def test_connected_state_requires_real_credentials_not_stale_selection(monkeypatch):
+    monkeypatch.delenv("OPENHACK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
+    monkeypatch.setattr(
+        "openhack.config.load_user_config",
+        lambda: {"provider": "openai", "model": "gpt-5.6-sol"},
+    )
+
+    assert not providers.is_connected("openhack")
+    assert not providers.is_connected("openai")
+
+
+def test_openai_oauth_counts_as_connected(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {"type": "oauth", "refresh": "refresh-token"},
+    )
+    monkeypatch.setattr("openhack.config.load_user_config", lambda: {})
+
+    assert providers.is_connected("openai")
+
+
 def test_openai_oauth_resolves_to_codex_responses_endpoint(monkeypatch):
     monkeypatch.setattr(
         providers,
@@ -222,10 +247,17 @@ def test_fetch_available_models_none_on_error(monkeypatch):
     assert llm.fetch_available_models(api_key="sk-test") is None
 
 
-def test_pricing_covers_all_served_models():
+def test_legacy_pricing_covers_non_openrouter_fallback_models():
     from openhack.agents.llm import LLMClient
-    for m in ("glm-5.2", "kimi-k2.5", "gemma-4-31b", "mistral-large-2512"):
+    for m in (
+        "glm-5.2",
+        "kimi-k2.5",
+        "gemma-4-31b",
+        "mistral-large-2512",
+    ):
         assert m in LLMClient.PRICING
+
+    assert not any(model.startswith("gpt-5.6-") for model in LLMClient.PRICING)
 
 
 def test_llmclient_unknown_provider_cost_is_zero(monkeypatch):

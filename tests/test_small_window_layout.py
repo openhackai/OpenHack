@@ -1,4 +1,4 @@
-"""Small terminals should degrade quietly instead of replacing the UI."""
+"""Small terminals should explain why the regular UI cannot be rendered."""
 
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import Window
@@ -13,8 +13,11 @@ def _fallback_text(split) -> str:
     return "".join(text for _, text in fragments)
 
 
-def test_splits_do_not_use_prompt_toolkit_window_too_small_message():
+def test_splits_render_an_informative_small_window_fallback():
     child = Window(height=20, width=80)
 
-    assert "too small" not in _fallback_text(HSplit([child])).lower()
-    assert "too small" not in _fallback_text(VSplit([child])).lower()
+    for split in (HSplit([child]), VSplit([child])):
+        text = _fallback_text(split).lower()
+        assert "openhack" in text
+        assert "window too small" in text
+        assert "enlarge your terminal" in text

@@ -249,3 +249,56 @@ def test_unfinished_promise_does_not_override_completion_summary():
     )
 
     assert answer == "Exploit written and verified."
+
+
+def test_let_me_know_invitation_keeps_full_completed_answer():
+    essay = "# Hacking\n\n" + ("Complete essay paragraph. " * 20) + "Let me know."
+    answer = BaseAgent._operator_answer_for_completion(
+        summary="Wrote an essay on hacking.",
+        reason="completed",
+        response_content=essay,
+        guarded_content=None,
+    )
+
+    assert answer == essay
+
+
+def test_finish_task_may_repeat_across_user_turns(tmp_path):
+    def finish():
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="finish",
+                    name="finish_task",
+                    arguments={
+                        "summary": "Hi! What can I help you with?",
+                        "reason": "no_action_needed",
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    llm = _ScriptedLLM([
+        LLMResponse(content="Hi! What can I help you with?", finish_reason="stop"),
+        finish(),
+        LLMResponse(content="Hi! What can I help you with?", finish_reason="stop"),
+        finish(),
+    ])
+    session = _session(tmp_path)
+    agent = InteractiveAgent(
+        llm,
+        ToolRegistry(tmp_path, include_agent_tools=True, session=session),
+        session,
+    )
+
+    first = asyncio.run(agent.run("hi", {"target_dir": str(tmp_path)}))
+    second = asyncio.run(agent.continue_run("hi"))
+
+    assert first["response"] == "Hi! What can I help you with?"
+    assert second["response"] == "Hi! What can I help you with?"
+    assert llm.calls == 4
+    assert len([
+        event for event in session.events
+        if event.event_type == "finish_task_accepted"
+    ]) == 2

@@ -97,6 +97,7 @@ def test_subscription_responses_stream_maps_text_tools_and_usage(monkeypatch):
     assert captured["store"] is False
     assert captured["instructions"] == "system"
     assert captured["tool_choice"] == "required"
+    assert "max_output_tokens" not in captured
     assert chunks[0].choices[0].delta.content == "hello"
     assert chunks[2].choices[0].delta.tool_calls[0].function.arguments == '{"path":"a"}'
     assert chunks[-1].usage.prompt_tokens == 10

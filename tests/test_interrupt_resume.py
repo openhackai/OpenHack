@@ -9,10 +9,12 @@ must clear the flag so a follow-up genuinely resumes the conversation.
 """
 
 import asyncio
+from types import SimpleNamespace
 
 from openhack.agents.base import BaseAgent
 from openhack.agents.llm import LLMResponse, Message
 from openhack.agents.session import Session
+from openhack.tui import OpenHackApp, ScanState
 
 
 class _FakeLLM:
@@ -97,3 +99,35 @@ def test_continue_run_clears_flag_even_on_fresh_fallback():
     assert session.cancelled is False
     assert llm.calls == 1
     assert result == {"response": "fresh answer"}
+
+
+def test_interrupted_live_response_is_committed_to_transcript():
+    app = OpenHackApp.__new__(OpenHackApp)
+    app._stream_buf = "An answer that was still streaming"
+    app.scan = ScanState(target="/tmp")
+    session = Session(target_dir="/tmp", on_trace=app._on_trace, persist_events=False)
+    agent = SimpleNamespace(name="openhack")
+
+    app._commit_interrupted_stream(session, agent)
+
+    assert session.trace[-1].content == "An answer that was still streaming"
+    assert session.trace[-1].metadata == {"partial": True, "interrupted": True}
+    assert app._stream_buf == ""
+
+
+def test_queued_messages_are_shown_until_agent_consumes_them():
+    app = OpenHackApp.__new__(OpenHackApp)
+    app.session = Session(target_dir="/tmp", persist_events=False)
+    app.agent = SimpleNamespace(_instructions_watermark=0)
+    app.scan_task = SimpleNamespace(done=lambda: False)
+    app.session.add_user_instruction("make the answer shorter")
+    app.session.add_user_instruction("also include the proof")
+
+    rendered = "".join(text for _, text in app._queued_message_fragments())
+
+    assert "queued 2" in rendered
+    assert "make the answer shorter" in rendered
+    assert "also include the proof" in rendered
+
+    app.agent._instructions_watermark = 2
+    assert app._queued_message_fragments() == []

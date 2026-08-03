@@ -40,6 +40,15 @@ PREFERRED_MODEL_IDS = (
     "nemotron-3-super",
 )
 
+OPENHACK_OPENAI_MODEL_IDS = frozenset({
+    "gpt-5.6-luna",
+    "gpt-5.6-luna-pro",
+    "gpt-5.6-terra",
+    "gpt-5.6-terra-pro",
+    "gpt-5.6-sol",
+    "gpt-5.6-sol-pro",
+})
+
 # These third-party plans are intentionally not OpenHack providers. Keep the
 # exclusion at the catalog boundary so cached or refreshed Models.dev data
 # cannot silently add them back.
@@ -55,6 +64,12 @@ OPENHACK_MODELS = (
     ("minimax-m2.5", "MiniMax M2.5", "Efficient agentic reasoning and coding"),
     ("gemini-3-flash", "Gemini 3 Flash", "Fast, long-context model by Google"),
     ("nemotron-3-super", "Nemotron 3 Super", "Open agentic model by NVIDIA"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna", "Fastest GPT-5.6 tier · served by OpenHack"),
+    ("gpt-5.6-luna-pro", "GPT-5.6 Luna Pro", "Fast GPT-5.6 Pro tier · served by OpenHack"),
+    ("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced GPT-5.6 tier · served by OpenHack"),
+    ("gpt-5.6-terra-pro", "GPT-5.6 Terra Pro", "Balanced GPT-5.6 Pro tier · served by OpenHack"),
+    ("gpt-5.6-sol", "GPT-5.6 Sol", "Frontier GPT-5.6 tier · served by OpenHack"),
+    ("gpt-5.6-sol-pro", "GPT-5.6 Sol Pro", "Highest-capability GPT-5.6 tier · served by OpenHack"),
 )
 
 

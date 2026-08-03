@@ -34,11 +34,11 @@ def _delta(*, content=None, tool_calls=None, reasoning_content=None):
     )
 
 
-def _chunk(delta, finish_reason=None):
+def _chunk(delta, finish_reason=None, usage=None):
     return SimpleNamespace(
         id="response-1",
         model="returned-model",
-        usage=None,
+        usage=usage,
         choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)],
     )
 
@@ -88,6 +88,43 @@ def test_model_response_logs_finish_reason_ids_and_timing(monkeypatch):
     assert completed["content"] == "hello"
 
 
+def test_openhack_uses_openrouter_reported_cost(monkeypatch):
+    monkeypatch.setattr(settings, "openhack_max_retries", 0)
+    usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=20,
+        model_extra={"cost": 0.0123},
+    )
+    stream = _Stream([
+        _chunk(_delta(content="ok"), finish_reason="stop", usage=usage),
+    ])
+    llm, _ = _client(stream)
+    llm.PRICING = {"requested-model": {"input": 999, "output": 999}}
+
+    response = asyncio.run(llm._chat([Message(role="user", content="hi")]))
+
+    assert response.cost == 0.0123
+    assert llm.total_cost == 0.0123
+
+
+def test_fast_mode_sends_inference_routing_header(monkeypatch):
+    monkeypatch.setattr(settings, "openhack_max_retries", 0)
+    monkeypatch.setattr(settings, "fast_mode", True)
+    stream = _Stream([_chunk(_delta(content="ok"), finish_reason="stop")])
+    llm, _ = _client(stream)
+    llm.provider = "openhack"
+    captured = {}
+
+    async def create(**kwargs):
+        captured.update(kwargs)
+        return stream
+
+    llm.client.chat.completions.create = create
+    asyncio.run(llm._chat([Message(role="user", content="hi")]))
+
+    assert captured["extra_headers"] == {"X-OpenHack-Mode": "fast"}
+
+
 def test_malformed_tool_arguments_are_preserved_with_parse_error(monkeypatch):
     monkeypatch.setattr(settings, "openhack_max_retries", 0)
     tc = SimpleNamespace(
@@ -122,4 +159,3 @@ def test_cancelled_stream_logs_partial_content(monkeypatch):
     failed = next(data for kind, data, _ in events if kind == "model_attempt_failed")
     assert failed["partial_content"] == "partial"
     assert any(kind == "model_call_cancelled" for kind, _, _ in events)
-

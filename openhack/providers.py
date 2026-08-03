@@ -21,6 +21,7 @@ from openhack.model_catalog import (
 from openhack.provider_auth import (
     OPENAI_CODEX_BASE_URL,
     OPENAI_SUBSCRIPTION_MODELS,
+    all_credentials,
     get_credential,
 )
 
@@ -248,9 +249,85 @@ def list_providers(*, refresh: bool = False) -> list[str]:
 def provider_models(name: str, live_ids: Optional[list[str]] = None) -> list[dict[str, str]]:
     if name == "openai":
         credential = get_credential("openai")
-        if credential and credential.get("type") == "oauth":
+        if (
+            not os.environ.get("OPENAI_API_KEY")
+            and credential
+            and credential.get("type") == "oauth"
+        ):
             return merge_models(name, list(OPENAI_SUBSCRIPTION_MODELS))
     return merge_models(name, live_ids)
+
+
+def is_connected(name: str) -> bool:
+    """Return whether *name* has enough persisted/runtime auth to be usable.
+
+    A provider merely being selected in config is not a connection. Keeping
+    that distinction here prevents stale selections from leaking unusable
+    models into `/models`.
+    """
+    from openhack.config import load_user_config
+
+    config = load_user_config()
+    if name == "openhack":
+        return bool(
+            os.environ.get("OPENHACK_API_KEY")
+            or config.get("openhack_api_key")
+        )
+
+    spec = get_spec(name)
+    if spec is None:
+        return False
+    if any(not os.environ.get(env_name) for env_name in spec.required_env):
+        return False
+    if os.environ.get(spec.api_key_env):
+        return True
+    credential = get_credential(name) or {}
+    if credential.get("type") == "api" and credential.get("key"):
+        return True
+    if (
+        name == "openai"
+        and credential.get("type") == "oauth"
+        and (credential.get("access") or credential.get("refresh"))
+    ):
+        return True
+    return bool(spec.keyless_default and config.get("provider") == name)
+
+
+def connected_provider_ids(
+    specs: Optional[list[ProviderSpec]] = None,
+) -> set[str]:
+    """Return connected provider IDs with one credential/config read.
+
+    Picker rendering calls this for many rows, so it must not reread the
+    credential store once per provider.
+    """
+    from openhack.config import load_user_config
+
+    config = load_user_config()
+    credentials = all_credentials()
+    connected: set[str] = set()
+    if os.environ.get("OPENHACK_API_KEY") or config.get("openhack_api_key"):
+        connected.add("openhack")
+    for spec in specs if specs is not None else list_provider_specs():
+        if any(not os.environ.get(env_name) for env_name in spec.required_env):
+            continue
+        credential = credentials.get(spec.name) or {}
+        has_oauth = (
+            spec.name == "openai"
+            and credential.get("type") == "oauth"
+            and (credential.get("access") or credential.get("refresh"))
+        )
+        has_api_key = (
+            credential.get("type") == "api" and credential.get("key")
+        )
+        if (
+            os.environ.get(spec.api_key_env)
+            or has_api_key
+            or has_oauth
+            or (spec.keyless_default and config.get("provider") == spec.name)
+        ):
+            connected.add(spec.name)
+    return connected
 
 
 def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider]:
@@ -262,7 +339,13 @@ def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider
         return None
 
     credential = get_credential(name)
-    if name == "openai" and credential and credential.get("type") == "oauth":
+    env_key = os.environ.get(spec.api_key_env)
+    if (
+        name == "openai"
+        and not env_key
+        and credential
+        and credential.get("type") == "oauth"
+    ):
         return ResolvedProvider(
             name=name,
             base_url=OPENAI_CODEX_BASE_URL,
@@ -276,7 +359,6 @@ def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider
             ),
         )
 
-    env_key = os.environ.get(spec.api_key_env)
     stored_key = (
         str(credential.get("key"))
         if credential and credential.get("type") == "api" and credential.get("key")

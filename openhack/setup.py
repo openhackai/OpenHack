@@ -400,9 +400,13 @@ def _setup_banner() -> None:
 
 
 async def _run_first_time_onboarding() -> bool:
-    """Short first-run path: connect, verify, choose a default, enter the TUI."""
+    """Short first-run path: connect, verify, then enter the TUI.
+
+    OpenHack starts on GLM 5.2. The complete live catalog belongs in `/models`,
+    where it stays searchable and can evolve without turning onboarding into a
+    long provider/model configuration flow.
+    """
     from openhack.agents.llm import fetch_available_models
-    from openhack.model_catalog import merge_models
 
     _banner()
     auth_idx: Optional[int] = None
@@ -489,19 +493,7 @@ async def _run_first_time_onboarding() -> bool:
     _html(f"  {GREEN}✓{EGREEN} Connected to OpenHack")
     _html(f"  {GREEN}✓{EGREEN} Inference verified")
 
-    catalog = merge_models("openhack", live_models)
-    curated = [
-        (entry["id"], entry["label"], entry.get("desc", ""))
-        for entry in catalog
-    ]
-    model_idx = await _select_menu_async(
-        "Choose your default model",
-        curated,
-        default_idx=next(
-            (i for i, item in enumerate(curated) if item[0] == "glm-5.2"), 0
-        ),
-    )
-    model_id = curated[model_idx if model_idx >= 0 else 0][0]
+    model_id = "glm-5.2"
 
     new_cfg = {
         "provider": "openhack",
@@ -721,8 +713,6 @@ async def run_provider_connect(
     history.
     """
     from openhack import providers as provider_registry
-    from openhack.agents.llm import fetch_available_models
-    from openhack.model_catalog import merge_models
     from openhack.provider_auth import (
         ProviderAuthError,
         get_credential,
@@ -748,7 +738,7 @@ async def run_provider_connect(
 
     provider_id = provider_id.lower().strip()
     if provider_id == "openhack":
-        return await run_setup_command()
+        return await _connect_openhack(auth_method=auth_method, allow_back=allow_back)
     spec = provider_registry.get_spec(provider_id)
     if spec is None:
         _html(f"  {YELLOW}⚠{EYELLOW} Unknown provider: {_esc(provider_id)}")
@@ -814,32 +804,91 @@ async def run_provider_connect(
         return False
 
     resolved = provider_registry.resolve(provider_id)
-    if resolved is None:
+    if resolved is None or resolved.missing_key_env:
         return False
-    live = None
-    if resolved.auth_type != "oauth":
-        live = fetch_available_models(
-            api_key=resolved.api_key,
-            base_url=resolved.base_url,
-            timeout=5,
-        )
-    models = merge_models(provider_id, live)
     model_id = resolved.model
-    if models:
-        items = [
-            (model["id"], model["label"], model.get("desc", ""))
-            for model in models
-        ]
-        default_idx = next(
-            (i for i, item in enumerate(items) if item[0] == model_id), 0
-        )
-        idx = await _select_menu_async("Choose a model", items, default_idx)
-        if idx >= 0:
-            model_id = items[idx][0]
 
     save_user_config({"provider": provider_id, "model": model_id})
     reload_settings()
     _html("")
     _html(f"  {GREEN}✓{EGREEN} Connected {_esc(spec.label)} · {_esc(model_id)}")
+    _html("")
+    return True
+
+
+async def _connect_openhack(
+    auth_method: Optional[str] = None,
+    *,
+    allow_back: bool = False,
+) -> bool:
+    """Connect hosted inference and activate its recommended model."""
+    from openhack.agents.llm import fetch_available_models
+
+    method = (auth_method or "").lower()
+    if method not in ("login", "api"):
+        idx = await _select_menu_async(
+            "Connect OpenHack",
+            [
+                ("login", "Login with OpenHack", "Recommended · opens your browser"),
+                ("api", "Use an API key", "Paste an existing OpenHack key"),
+            ],
+            cancel_label="go back" if allow_back else "cancel",
+        )
+        if idx < 0:
+            return False
+        method = ("login", "api")[idx]
+
+    cfg = load_user_config()
+    login_result = None
+    if method == "login":
+        try:
+            login_result = await device_login(
+                cfg.get("openhack_app_url") or settings.openhack_app_url
+            )
+            api_key = login_result.token
+        except (DeviceLoginCancelled, DeviceLoginExpired, DeviceLoginError) as exc:
+            _html(f"  {YELLOW}⚠{EYELLOW} Connection failed: {_esc(str(exc))}")
+            return False
+    else:
+        api_key = await _prompt_api_key(
+            PROVIDERS[0], cfg.get("openhack_api_key"), allow_back=allow_back
+        )
+        if not api_key:
+            return False
+
+    _html("")
+    _html(f"  {DIM}Verifying OpenHack inference…{EDIM}")
+    live_models = await asyncio.to_thread(
+        fetch_available_models,
+        api_key=api_key,
+        base_url=settings.openhack_base_url,
+        timeout=8,
+    )
+    if not live_models:
+        _html(f"  {YELLOW}⚠{EYELLOW} Could not verify this connection.")
+        return False
+
+    model_id = "glm-5.2"
+    new_cfg = {
+        "provider": "openhack",
+        "model": model_id,
+        "openhack_model_id": model_id,
+        "openhack_api_key": api_key,
+    }
+    if login_result:
+        for attr, key in (
+            ("org_id", "openhack_org_id"),
+            ("org_slug", "openhack_org_slug"),
+            ("org_name", "openhack_org_name"),
+            ("user_email", "openhack_user_email"),
+            ("user_first_name", "openhack_user_first_name"),
+            ("user_last_name", "openhack_user_last_name"),
+        ):
+            value = getattr(login_result, attr, None)
+            if value:
+                new_cfg[key] = value
+    save_user_config(new_cfg)
+    reload_settings()
+    _html(f"  {GREEN}✓{EGREEN} Connected OpenHack · {_esc(model_id)}")
     _html("")
     return True

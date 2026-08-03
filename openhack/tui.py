@@ -81,20 +81,37 @@ from openhack.setup import run_provider_connect, run_setup_command
 from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
 from openhack.prompts.project_context import build_project_context
-from openhack.updates import Announcement, UpdateInfo, fetch_updates, save_dismissed
+from openhack.updates import (
+    Announcement,
+    LatestRelease,
+    UpdateInfo,
+    fetch_updates,
+    install_update,
+    is_update_skipped,
+    save_dismissed,
+    save_skipped_update,
+)
 
 
 def _small_window_fallback() -> Window:
-    """Blank fallback for geometry that cannot fit; never block with a warning."""
+    """Keep undersized terminals informative instead of rendering a blank UI."""
     return Window(
-        content=FormattedTextControl(text=[]),
+        content=FormattedTextControl(
+            text=[
+                ("class:header.brand", "OpenHack"),
+                ("class:header.sep", "  ·  "),
+                ("class:header.meta", "window too small — enlarge your terminal"),
+            ]
+        ),
+        align=WindowAlign.CENTER,
+        wrap_lines=True,
         char=" ",
         style="class:body",
     )
 
 
 class HSplit(_PromptToolkitHSplit):
-    """HSplit without prompt_toolkit's intrusive size-warning replacement."""
+    """HSplit with a branded, useful undersized-terminal fallback."""
 
     def __init__(self, children, **kwargs):
         kwargs.setdefault("window_too_small", _small_window_fallback())
@@ -102,7 +119,7 @@ class HSplit(_PromptToolkitHSplit):
 
 
 class VSplit(_PromptToolkitVSplit):
-    """VSplit without prompt_toolkit's intrusive size-warning replacement."""
+    """VSplit with a branded, useful undersized-terminal fallback."""
 
     def __init__(self, children, **kwargs):
         kwargs.setdefault("window_too_small", _small_window_fallback())
@@ -345,6 +362,9 @@ _SLASH_COMMANDS = [
     ("/connect", "Connect a provider or ChatGPT Plus/Pro subscription"),
     ("/disconnect", "Remove saved credentials for a provider"),
     ("/models", "Choose a model from all connected providers"),
+    ("/fast", "Toggle throughput-first routing for OpenHack inference"),
+    ("/tips", "Toggle rotating status-bar tips"),
+    ("/update", "Check for updates (`/update test` previews the prompt safely)"),
     ("/config", "Show or set configuration"),
     ("/cost", "Show cost + tokens for the current session"),
     ("/mouse", "Toggle mouse capture (off = drag-to-select text)"),
@@ -361,7 +381,37 @@ _CONFIG_KEYS = [
     ("model", "Model ID override"),
     ("openhack_api_key", "OpenHack API key"),
     ("openhack_model_id", "OpenHack model ID"),
+    ("fast_mode", "Throughput-first OpenHack inference routing"),
+    ("tips_enabled", "Rotating status-bar guidance"),
 ]
+
+_GENERAL_TIPS = (
+    "Use /connect to add an inference provider.",
+    "Use /models to switch models from connected providers.",
+    "Enable /fast for throughput-first OpenHack inference.",
+    "Run /scan to review the current project for vulnerabilities.",
+    "Use /plan <objective> to draft a read-only attack plan.",
+    "Start a command with ! to enter local shell mode.",
+    "Append & to a shell command to run it in the background.",
+    "Use /bashes to inspect or stop background shells.",
+    "Use /findings to review confirmed vulnerabilities.",
+    "Use /verify sandbox to reproduce findings safely.",
+    "Use /verify browser to validate browser-exploitable findings.",
+    "Use /copy to copy a finding as a remediation prompt.",
+    "Use /sessions to reopen an earlier investigation.",
+    "Use /cost to inspect token usage and inference cost.",
+    "Use /cd <path> to change the active project.",
+    "Reference a project file with @path/to/file.",
+    "Press Ctrl+C once to pause, then use /resume to continue.",
+    "Use /cancel to permanently stop the current run.",
+    "Use /mouse to toggle mouse controls and native text selection.",
+    "Ask OpenHack to trace untrusted input to a dangerous sink.",
+    "Ask for exploitability and evidence, not only suspicious code.",
+    "Include the authorized target and desired outcome in your prompt.",
+    "Ask OpenHack to map authentication boundaries before testing them.",
+    "Ask OpenHack to chain smaller issues into demonstrated impact.",
+    "Ask OpenHack to record every confirmed issue as a finding.",
+)
 
 _CANCEL_PHRASES = {
     "cancel", "cancel scan", "cancel the scan",
@@ -1536,6 +1586,35 @@ class OpenHackApp:
         cfg = load_user_config()
         self.provider = resolve_provider(cfg.get("provider", settings.llm_provider))
         self.model = cfg.get("model") or PROVIDER_DEFAULTS.get(self.provider, settings.openhack_model_id)
+        # Older builds could save OAuth credentials without switching the
+        # active provider. Recover that state silently so a subscription-only
+        # user can relaunch directly into a usable security agent.
+        from openhack import providers as provider_registry
+        specs = provider_registry.list_provider_specs()
+        connected_ids = provider_registry.connected_provider_ids(specs)
+        if self.provider not in connected_ids and connected_ids:
+            priority = {
+                provider_id: index
+                for index, provider_id in enumerate(CURATED_PROVIDER_IDS)
+            }
+            replacement = min(
+                connected_ids,
+                key=lambda provider_id: (
+                    priority.get(provider_id, 999), provider_id
+                ),
+            )
+            if replacement == "openhack":
+                replacement_model = "glm-5.2"
+            else:
+                resolved = provider_registry.resolve(replacement)
+                replacement_model = resolved.model if resolved else ""
+            if replacement_model:
+                self.provider = replacement
+                self.model = replacement_model
+                save_user_config({
+                    "provider": replacement,
+                    "model": replacement_model,
+                })
         self.org_name: str = cfg.get("openhack_org_name") or ""
         self.user_email: str = ""  # populated lazily
 
@@ -1625,6 +1704,11 @@ class OpenHackApp:
         self._modal_title: str = ""
         self._modal_body: str = ""
         self._modal_on_yes: Optional[Any] = None  # callable invoked on 'y' / Enter
+        self._modal_on_no: Optional[Any] = None
+        self._modal_on_cancel: Optional[Any] = None
+        self._modal_yes_label: str = "confirm"
+        self._modal_no_label: str = "cancel"
+        self._modal_cancel_label: str = "dismiss"
         # Manual scroll offset for the details pane (in logical lines).
         # We bypass Window.vertical_scroll because prompt_toolkit's render
         # was clamping it back to 0 in our setup — instead we clip the
@@ -1646,6 +1730,10 @@ class OpenHackApp:
         # Knight-rider spinner frame index, advanced by the run() ticker while
         # a scan is active. Wraps over _SPINNER_FRAMES.
         self._spin_idx: int = 0
+        self._tip_index: int = -1
+        self._tip_text: str = ""
+        self._tip_next_at: float = 0.0
+        self._advance_tip()
 
         self.input_buffer = Buffer(
             multiline=False,
@@ -1752,10 +1840,27 @@ class OpenHackApp:
 
         @kb.add("n", filter=modal_open, eager=True)
         @kb.add("N", filter=modal_open, eager=True)
-        @kb.add("escape", filter=modal_open, eager=True)
         def _modal_no(event):
+            cb = self._modal_on_no
             self._close_modal()
-            self.last_status_line = "cancelled"
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as exc:
+                    self.last_status_line = f"action failed: {exc}"
+            else:
+                self.last_status_line = "cancelled"
+            self._invalidate()
+
+        @kb.add("escape", filter=modal_open, eager=True)
+        def _modal_cancel(event):
+            cb = self._modal_on_cancel
+            self._close_modal()
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as exc:
+                    self.last_status_line = f"action failed: {exc}"
             self._invalidate()
 
         def _completion_open() -> bool:
@@ -2366,11 +2471,11 @@ class OpenHackApp:
                 ("class:modal.body", self._modal_body),
                 ("", "\n\n"),
                 ("class:modal.key", "[Y]"),
-                ("class:modal.hint", " confirm   "),
+                ("class:modal.hint", f" {self._modal_yes_label}   "),
                 ("class:modal.key", "[N]"),
-                ("class:modal.hint", " cancel   "),
+                ("class:modal.hint", f" {self._modal_no_label}   "),
                 ("class:modal.key", "[Esc]"),
-                ("class:modal.hint", " dismiss"),
+                ("class:modal.hint", f" {self._modal_cancel_label}"),
             ]
 
         modal_body_window = Window(
@@ -2492,7 +2597,15 @@ class OpenHackApp:
             ("class:input.model.agent", cwd),
             ("class:input.model.sep", " · "),
             ("class:input.model.name", self.model or "glm-5.2"),
-            ("class:input.model.provider", f"  {self.provider}"),
+            (
+                "class:input.model.provider",
+                f"  {self.provider}"
+                + (
+                    "  ·  ⚡ fast"
+                    if self.provider == "openhack" and settings.fast_mode
+                    else ""
+                ),
+            ),
         ]
 
     def _is_shell_input(self) -> bool:
@@ -2606,24 +2719,11 @@ class OpenHackApp:
             return [("class:tagline", "The open-source security agent")]
 
         def tip():
-            cfg = load_user_config()
-            connected = bool(cfg.get("provider"))
-            if not connected:
-                return [
-                    ("class:tip.label", "● Tip  "),
-                    ("class:tip", "Run "),
-                    ("class:tip.key", "/connect"),
-                    ("class:tip", " to connect a model provider"),
-                ]
+            if not settings.tips_enabled:
+                return []
             return [
-                ("class:tip.label", "● Ready  "),
-                ("class:tip", "Type a security task  ·  "),
-                ("class:tip.key", "/connect"),
-                ("class:tip", " add provider  ·  "),
-                ("class:tip.key", "/models"),
-                ("class:tip", " switch model  ·  "),
-                ("class:tip.key", "?"),
-                ("class:tip", " help"),
+                ("class:tip.label", "● Tip  "),
+                ("class:tip", self._tip_text),
             ]
 
         def hints():
@@ -3416,6 +3516,15 @@ class OpenHackApp:
                    align=WindowAlign.RIGHT, style="class:body"),
         ], height=1, style="class:body")
 
+        queued_messages = ConditionalContainer(
+            Window(
+                FormattedTextControl(self._queued_message_fragments),
+                height=1,
+                style="class:body",
+            ),
+            filter=Condition(lambda: bool(self._pending_user_instructions())),
+        )
+
         # ── Keybar: shortcuts live here at the bottom, not crammed by the tabs.
         def keybar_frags():
             # Context-aware: a conversation doesn't need the findings/resize keys.
@@ -3452,6 +3561,7 @@ class OpenHackApp:
             main,
             Window(height=1, style="class:body"),
             bottom_status,
+            queued_messages,
             self._input_box(D(weight=1)),
             Window(height=1, style="class:body"),
             keybar,
@@ -4015,7 +4125,11 @@ class OpenHackApp:
         out: list[tuple[str, str]] = []
 
         # Update available notification.
-        if info.has_update and info.latest:
+        if (
+            info.has_update
+            and info.latest
+            and not is_update_skipped(info.latest.version)
+        ):
             from openhack import __version__ as cur
             out.append(("class:sev.medium", f"  ⬆ Update available: {cur} → {info.latest.version}"))
             out.append(("class:tip", "  ·  pipx upgrade openhack"))
@@ -4037,6 +4151,147 @@ class OpenHackApp:
             out.append(("", "\n"))
 
         return out
+
+    async def _cmd_update(self, arg: str = "") -> None:
+        """Force an update check or preview the complete flow safely."""
+        mode = arg.strip().lower()
+        if mode not in {"", "check", "test"}:
+            self.last_status_line = "usage: /update [check|test]"
+            return
+        if self.scan_task is not None and not self.scan_task.done():
+            self.last_status_line = "interrupt the active run before updating OpenHack"
+            return
+        if mode == "test":
+            parts = OPENHACK_VERSION.lstrip("v").split(".")
+            try:
+                test_version = f"{parts[0]}.{parts[1]}.{int(parts[2]) + 1}"
+            except (IndexError, ValueError):
+                test_version = "999.0.0"
+            self._show_update_prompt(
+                LatestRelease(
+                    version=test_version,
+                    release_notes=(
+                        "Test update: exercises confirmation, progress, and "
+                        "completion without changing any files."
+                    ),
+                ),
+                test=True,
+            )
+            return
+
+        self.last_status_line = "checking for updates…"
+        self._invalidate()
+        info = await fetch_updates(force=True)
+        if info is None:
+            self.last_status_line = "could not check for updates · try again later"
+            return
+        self._update_info = info
+        if not info.has_update or info.latest is None:
+            self.last_status_line = f"OpenHack {OPENHACK_VERSION} is up to date"
+            return
+        self._show_update_prompt(info.latest, test=False, ignore_skip=True)
+
+    def _show_update_prompt(
+        self,
+        release: LatestRelease,
+        *,
+        test: bool = False,
+        ignore_skip: bool = False,
+    ) -> None:
+        """OpenCode-style Update now / Skip version / Later prompt."""
+        if not test and not ignore_skip and is_update_skipped(release.version):
+            return
+
+        notes = (release.release_notes or "").strip()
+        body = (
+            f"A new release v{release.version} is available.\n"
+            f"You're currently running v{OPENHACK_VERSION}.\n\n"
+            "Would you like to update now?"
+        )
+        if notes:
+            body += "\n\n" + notes[:700]
+        if test:
+            body += "\n\nTEST MODE · no package or files will be changed."
+
+        def _update_now() -> None:
+            asyncio.create_task(self._perform_update(release.version, test=test))
+
+        def _skip() -> None:
+            if not test:
+                save_skipped_update(release.version)
+            self.last_status_line = (
+                f"test update v{release.version} skipped"
+                if test
+                else f"skipping update v{release.version}"
+            )
+
+        def _later() -> None:
+            self.last_status_line = f"update v{release.version} postponed"
+
+        self._open_modal(
+            f"update:{release.version}",
+            "Update Available",
+            body,
+            _update_now,
+            on_no=_skip,
+            on_cancel=_later,
+            yes_label="update now",
+            no_label="skip this version",
+            cancel_label="later",
+        )
+
+    async def _perform_update(self, version: str, *, test: bool) -> None:
+        self.last_status_line = f"updating OpenHack to v{version}…"
+        self._invalidate()
+        if test:
+            await asyncio.sleep(0.35)
+        result = await install_update(version, dry_run=test)
+        if not result.success:
+            detail = result.error or result.output or "unknown installer error"
+            self._open_modal(
+                f"update-failed:{version}",
+                "Update Failed",
+                f"OpenHack could not update with {result.method}.\n\n{detail[:1000]}",
+                lambda: None,
+                yes_label="close",
+                no_label="close",
+                cancel_label="close",
+            )
+            return
+
+        if test:
+            self._open_modal(
+                f"update-complete:{version}",
+                "Test Update Complete",
+                (
+                    "The complete update flow succeeded.\n\n"
+                    "✓ Prompt rendered\n"
+                    "✓ Update action ran\n"
+                    "✓ No files or packages were changed"
+                ),
+                lambda: setattr(self, "last_status_line", "test update passed"),
+                yes_label="done",
+                no_label="close",
+                cancel_label="close",
+            )
+            return
+
+        def _exit_for_restart() -> None:
+            self.last_status_line = f"updated to v{version} · restart OpenHack"
+            self.app.exit()
+
+        self._open_modal(
+            f"update-complete:{version}",
+            "Update Complete",
+            (
+                f"Successfully updated OpenHack to v{version}.\n\n"
+                "Restart OpenHack to use the new version."
+            ),
+            _exit_for_restart,
+            yes_label="exit now",
+            no_label="later",
+            cancel_label="later",
+        )
 
     # ── Invalidate / refresh ──────────────────────────────────────
 
@@ -4170,6 +4425,12 @@ class OpenHackApp:
             self._cmd_disconnect(arg)
         elif cmd == "/models":
             self._cmd_models(arg)
+        elif cmd == "/fast":
+            self._cmd_fast(arg)
+        elif cmd == "/tips":
+            self._cmd_tips(arg)
+        elif cmd == "/update":
+            await self._cmd_update(arg)
         elif cmd == "/sidebar":
             self._toggle_sidebar_visibility()
         elif cmd == "/scan":
@@ -4309,7 +4570,7 @@ class OpenHackApp:
             spec = provider_registry.get_spec(provider_id)
             if spec and spec.keyless_default:
                 set_api_key(provider_id, spec.keyless_default)
-                self.last_status_line = f"connected: {spec.label}"
+                self._activate_connected_provider(provider_id, spec.label)
                 return
             self._open_provider_key(provider_id)
             return
@@ -4326,6 +4587,38 @@ class OpenHackApp:
         )
         self.model = cfg.get("model") or settings.openhack_model_id
         self.last_status_line = f"connected: {self.provider} · {self.model}"
+
+    def _activate_connected_provider(
+        self, provider_id: str, label: Optional[str] = None
+    ) -> bool:
+        """Select a newly connected provider's recommended default model."""
+        from openhack import providers as provider_registry
+
+        reload_settings()
+        if not provider_registry.is_connected(provider_id):
+            self.last_status_line = f"connection failed: {provider_id} is not authenticated"
+            return False
+        if provider_id == "openhack":
+            model_id = "glm-5.2"
+            provider_label = label or "OpenHack"
+        else:
+            resolved = provider_registry.resolve(provider_id)
+            if resolved is None or resolved.missing_key_env:
+                missing = resolved.missing_key_env if resolved else "provider configuration"
+                self.last_status_line = f"connection failed: {missing} required"
+                return False
+            model_id = resolved.model
+            spec = provider_registry.get_spec(provider_id)
+            provider_label = label or (spec.label if spec else provider_id)
+        self.provider = provider_id
+        self.model = model_id
+        values = {"provider": provider_id, "model": model_id}
+        if provider_id == "openhack":
+            values["openhack_model_id"] = model_id
+        save_user_config(values)
+        reload_settings()
+        self.last_status_line = f"connected: {provider_label} · {model_id}"
+        return True
 
     def _remember_auth_origin(self) -> None:
         if self.mode not in (
@@ -4381,7 +4674,9 @@ class OpenHackApp:
         self.mode = origin
         self.previous_mode = None
         self._focus_main_input()
-        self.last_status_line = f"connected: {self._provider_auth_label}"
+        self._activate_connected_provider(
+            provider_id, self._provider_auth_label
+        )
         self._invalidate()
 
     def _start_openai_oauth(self, method: str) -> None:
@@ -4432,7 +4727,7 @@ class OpenHackApp:
         self.mode = origin
         self.previous_mode = None
         self._focus_main_input()
-        self.last_status_line = "connected: OpenAI"
+        self._activate_connected_provider("openai", "OpenAI")
         if was_waiting:
             self._invalidate()
         self._invalidate()
@@ -4462,6 +4757,86 @@ class OpenHackApp:
         if arg.strip():
             self.input_buffer.text = arg.strip()
             self.input_buffer.cursor_position = len(self.input_buffer.text)
+
+    def _cmd_fast(self, arg: str = "") -> None:
+        """Toggle OpenRouter throughput-first routing on hosted inference."""
+        action = arg.strip().lower()
+        if action in ("status", "show"):
+            state = "on" if settings.fast_mode else "off"
+            self.last_status_line = f"fast mode: {state}"
+            return
+        if action not in ("", "on", "off"):
+            self.last_status_line = "usage: /fast [on|off|status]"
+            return
+        desired = not settings.fast_mode if not action else action == "on"
+        if desired and self.provider != "openhack":
+            self.last_status_line = (
+                "fast mode uses OpenHack inference · switch to an OpenHack model first"
+            )
+            return
+        save_user_config({"fast_mode": desired})
+        reload_settings()
+        self.last_status_line = (
+            "⚡ fast mode on · routing for highest throughput"
+            if desired
+            else "fast mode off · standard routing restored"
+        )
+        self._invalidate()
+
+    def _tip_candidates(self) -> tuple[str, ...]:
+        """Build a small contextual prefix followed by the general rotation."""
+        from openhack import providers as provider_registry
+
+        contextual: list[str] = []
+        if not provider_registry.is_connected(self.provider):
+            contextual.append("Connect a provider with /connect to begin.")
+        if self.provider == "openhack" and settings.fast_mode:
+            contextual.append("Fast mode is active and prioritizing throughput.")
+        if self.last_findings:
+            contextual.append("Review findings with /findings or reproduce them with /verify.")
+        if self.session is not None and self.session.paused:
+            contextual.append("This run is paused; use /resume or /cancel.")
+        if any(shell.is_running() for shell in self.shells.list()):
+            contextual.append("A background shell is running; inspect it with /bashes.")
+        if self.provider != "openhack":
+            contextual.append("Your active provider bills inference directly.")
+        return tuple(contextual) + _GENERAL_TIPS
+
+    def _advance_tip(self) -> None:
+        candidates = self._tip_candidates()
+        if not candidates:
+            self._tip_text = ""
+            return
+        previous = self._tip_text
+        for _ in range(len(candidates)):
+            self._tip_index = (self._tip_index + 1) % len(candidates)
+            candidate = candidates[self._tip_index]
+            if candidate != previous or len(candidates) == 1:
+                self._tip_text = candidate
+                break
+        self._tip_next_at = time.monotonic() + 10.0
+
+    def _cmd_tips(self, arg: str = "") -> None:
+        """Toggle persistent rotating guidance on the landing status line."""
+        action = arg.strip().lower()
+        if action in ("status", "show"):
+            state = "on" if settings.tips_enabled else "off"
+            self.last_status_line = f"tips: {state}"
+            return
+        if action not in ("", "on", "off"):
+            self.last_status_line = "usage: /tips [on|off|status]"
+            return
+        desired = not settings.tips_enabled if not action else action == "on"
+        save_user_config({"tips_enabled": desired})
+        reload_settings()
+        if desired:
+            self._advance_tip()
+        self.last_status_line = (
+            "tips on · rotating every 10 seconds"
+            if desired
+            else "tips off · use /tips to restore them"
+        )
+        self._invalidate()
 
     # ── Copy finding for AI agent ─────────────────────────────────
 
@@ -4642,16 +5017,16 @@ class OpenHackApp:
 
     def _provider_entries(self, specs) -> list[dict]:
         """Build the curated or long-tail picker without resolving providers."""
-        from openhack.provider_auth import all_credentials
+        from openhack import providers as provider_registry
 
-        credentials = all_credentials()
+        connected_ids = provider_registry.connected_provider_ids(specs)
         entries = [
             {
                 "id": "openhack",
                 "label": "OpenHack",
                 "hint": "Hosted inference",
                 "picker_hint": self._PROVIDER_PICKER_HINTS["openhack"],
-                "connected": True,
+                "connected": "openhack" in connected_ids,
                 "category": "Popular",
             }
         ]
@@ -4664,11 +5039,7 @@ class OpenHackApp:
                     "picker_hint": self._PROVIDER_PICKER_HINTS.get(
                         spec.name, ""
                     ),
-                    "connected": bool(
-                        os.environ.get(spec.api_key_env)
-                        or credentials.get(spec.name)
-                        or spec.name == self.provider
-                    ),
+                    "connected": spec.name in connected_ids,
                     "category": "Popular",
                 }
             )
@@ -4898,6 +5269,9 @@ class OpenHackApp:
         """Show all models from all connected providers in one grouped popup."""
         self._model_query = ""
         self._model_all = self._connected_model_entries()
+        if not self._model_all:
+            self.last_status_line = "no connected providers · use /connect"
+            return
         self.model_index = list(self._model_all)
         self.model_selected = next(
             (
@@ -4917,21 +5291,16 @@ class OpenHackApp:
 
     def _connected_model_entries(self) -> list[dict]:
         from openhack import providers as provider_registry
-        from openhack.provider_auth import all_credentials
+        from openhack.model_catalog import OPENHACK_OPENAI_MODEL_IDS
 
         specs = provider_registry.list_provider_specs()
-        credentials = all_credentials()
         by_id = {spec.name: spec for spec in specs}
-        connected_ids = ["openhack"]
-        connected_ids.extend(
-            spec.name
-            for spec in specs
-            if (
-                spec.name == self.provider
-                or os.environ.get(spec.api_key_env)
-                or credentials.get(spec.name)
-            )
-        )
+        actual_connections = provider_registry.connected_provider_ids(specs)
+        connected_ids = [
+            provider_id
+            for provider_id in ("openhack", *(spec.name for spec in specs))
+            if provider_id in actual_connections
+        ]
         priority = {
             provider_id: index
             for index, provider_id in enumerate(self._CURATED_PROVIDERS)
@@ -4972,7 +5341,12 @@ class OpenHackApp:
                     **model,
                     "provider": provider_id,
                     "provider_label": label,
-                    "section": label,
+                    "section": (
+                        "OpenAI models served by OpenHack"
+                        if provider_id == "openhack"
+                        and model["id"] in OPENHACK_OPENAI_MODEL_IDS
+                        else label
+                    ),
                     "recent": False,
                 }
                 for model in models
@@ -5509,7 +5883,7 @@ class OpenHackApp:
         parts = arg.strip().split(None, 1)
         key = parts[0].lower()
         value = parts[1] if len(parts) > 1 else ""
-        valid = {"provider", "model", "openhack_api_key", "openhack_model_id", "openhack_base_url", "prompt_caching"}
+        valid = {"provider", "model", "openhack_api_key", "openhack_model_id", "openhack_base_url", "prompt_caching", "fast_mode", "tips_enabled"}
         if key not in valid:
             self.last_status_line = f"unknown config key: {key}"
             return
@@ -5651,12 +6025,28 @@ class OpenHackApp:
 
     # ── Modal helpers ─────────────────────────────────────────────
 
-    def _open_modal(self, kind: str, title: str, body: str,
-                    on_yes: Callable[[], None]) -> None:
+    def _open_modal(
+        self,
+        kind: str,
+        title: str,
+        body: str,
+        on_yes: Callable[[], None],
+        *,
+        on_no: Optional[Callable[[], None]] = None,
+        on_cancel: Optional[Callable[[], None]] = None,
+        yes_label: str = "confirm",
+        no_label: str = "cancel",
+        cancel_label: str = "dismiss",
+    ) -> None:
         self._modal_kind = kind
         self._modal_title = title
         self._modal_body = body
         self._modal_on_yes = on_yes
+        self._modal_on_no = on_no
+        self._modal_on_cancel = on_cancel
+        self._modal_yes_label = yes_label
+        self._modal_no_label = no_label
+        self._modal_cancel_label = cancel_label
         self._invalidate()
 
     def _close_modal(self) -> None:
@@ -5664,6 +6054,11 @@ class OpenHackApp:
         self._modal_title = ""
         self._modal_body = ""
         self._modal_on_yes = None
+        self._modal_on_no = None
+        self._modal_on_cancel = None
+        self._modal_yes_label = "confirm"
+        self._modal_no_label = "cancel"
+        self._modal_cancel_label = "dismiss"
 
     def _show_announcement_modal(self, ann: Announcement) -> None:
         """Display an announcement as a modal dialog. On dismiss, persist
@@ -5948,6 +6343,11 @@ class OpenHackApp:
         if self.mode == "scanning":
             self.last_status_line = "a scan is already in progress"
             return
+        from openhack import providers as provider_registry
+        active_provider = getattr(self, "provider", settings.llm_provider)
+        if not provider_registry.is_connected(active_provider):
+            self.last_status_line = "connect a provider first with /connect"
+            return
         # Allocate the durable identity before entering the scan view. Project
         # context construction can take a while on a large repo; creating the
         # Session afterward left the footer blank throughout that first phase.
@@ -5984,6 +6384,11 @@ class OpenHackApp:
             if self.session is not None:
                 self.session.add_user_instruction(task)
                 self.last_status_line = "queued — the agent will pick this up mid-run"
+            return
+        from openhack import providers as provider_registry
+        active_provider = getattr(self, "provider", settings.llm_provider)
+        if not provider_registry.is_connected(active_provider):
+            self.last_status_line = "connect a provider first with /connect"
             return
         target_dir = os.getcwd()
         label = "planning" if plan else "agent"
@@ -6035,6 +6440,7 @@ class OpenHackApp:
             result = await agent.run(task, context={"target_dir": target_dir})
             self._finalize_agent_turn(session, agent, result, plan)
         except asyncio.CancelledError:
+            self._commit_interrupted_stream(session, self.agent)
             self.last_status_line = (
                 "interrupted · type a follow-up to continue"
                 if self._interrupting
@@ -6211,6 +6617,7 @@ class OpenHackApp:
             result = await agent.continue_run(task)
             self._finalize_agent_turn(session, agent, result, plan=False)
         except asyncio.CancelledError:
+            self._commit_interrupted_stream(session, agent)
             self.last_status_line = (
                 "interrupted · type a follow-up to continue"
                 if self._interrupting
@@ -6233,6 +6640,29 @@ class OpenHackApp:
             self._interrupting = False
             self._llm_status = ""
             self._invalidate()
+
+    def _commit_interrupted_stream(self, session, agent) -> None:
+        """Make visible streamed prose durable before an interrupted redraw.
+
+        The live response normally becomes a trace entry after the provider
+        returns.  Esc cancels that provider call first, so without this bridge
+        the finally block clears the only copy the transcript can render.
+        """
+        text = self._stream_buf.strip()
+        if not text or session is None or agent is None:
+            return
+        if any(
+            entry.event_type == "thinking"
+            and (entry.content or "").strip() == text
+            for entry in session.trace[-3:]
+        ):
+            return
+        session.add_trace(
+            agent=agent.name,
+            event_type="thinking",
+            content=text,
+            metadata={"partial": True, "interrupted": True},
+        )
 
     def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
         # Surface the final answer in the transcript if the model ended on a
@@ -6318,6 +6748,35 @@ class OpenHackApp:
         if not self.is_agent_session:
             return "scanning"
         return "working"
+
+    def _pending_user_instructions(self) -> list[str]:
+        """Queued operator messages not yet injected into the active agent."""
+        if self.session is None or self.agent is None:
+            return []
+        running = self.scan_task is not None and not self.scan_task.done()
+        if not running:
+            return []
+        seen = getattr(self.agent, "_instructions_watermark", 0)
+        pending, _ = self.session.get_new_instructions(seen)
+        return pending
+
+    def _queued_message_fragments(self) -> list[tuple[str, str]]:
+        pending = self._pending_user_instructions()
+        if not pending:
+            return []
+        shown = pending[-3:]
+        messages = []
+        for message in shown:
+            compact = " ".join(message.split())
+            messages.append(compact[:72] + ("…" if len(compact) > 72 else ""))
+        hidden = len(pending) - len(shown)
+        out: list[tuple[str, str]] = [
+            ("class:sev.medium", f"  queued {len(pending)}  "),
+            ("class:trace.dim", "  ·  ".join(messages)),
+        ]
+        if hidden:
+            out.append(("class:trace.dim", f"  ·  +{hidden} earlier"))
+        return out
 
     def _on_agent_stream(self, kind: str, delta: str) -> None:
         """Accumulate streamed tokens (answer + reasoning) and repaint the tail."""
@@ -6758,6 +7217,13 @@ class OpenHackApp:
                         if frame % 3 == 0 or (self._shells_were_running and not running):
                             self._invalidate()
                     self._shells_were_running = running
+                elif (
+                    self.mode == "landing"
+                    and settings.tips_enabled
+                    and time.monotonic() >= self._tip_next_at
+                ):
+                    self._advance_tip()
+                    self._invalidate()
 
         async def _check_updates():
             info = await fetch_updates()
@@ -6765,6 +7231,14 @@ class OpenHackApp:
                 return
             self._update_info = info
             self._invalidate()
+            if (
+                info.has_update
+                and info.latest is not None
+                and not is_update_skipped(info.latest.version)
+            ):
+                await asyncio.sleep(0.5)
+                self._show_update_prompt(info.latest)
+                return
             # If there are modal-placement announcements, queue the first one
             # as a modal dialog after a short delay (so it doesn't fight the
             # landing screen initial render).

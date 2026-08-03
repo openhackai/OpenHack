@@ -20,6 +20,12 @@ MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "glm-5.2": 128_000,
     "gemma-4-31b": 128_000,
     "mistral-large-2512": 128_000,
+    "gpt-5.6-luna": 1_050_000,
+    "gpt-5.6-luna-pro": 1_050_000,
+    "gpt-5.6-terra": 1_050_000,
+    "gpt-5.6-terra-pro": 1_050_000,
+    "gpt-5.6-sol": 1_050_000,
+    "gpt-5.6-sol-pro": 1_050_000,
 }
 
 DEFAULT_CONTEXT_LIMIT = 128_000

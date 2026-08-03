@@ -10,6 +10,8 @@ def test_command_surface_uses_connect_and_models_without_provider():
     commands = {command for command, _ in _SLASH_COMMANDS}
     assert "/connect" in commands
     assert "/models" in commands
+    assert "/fast" in commands
+    assert "/tips" in commands
     assert "/provider" not in commands
     assert "/providers" not in commands
     assert "/model" not in commands
@@ -31,6 +33,11 @@ def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
     ]
     monkeypatch.setattr(providers, "list_provider_specs", lambda: specs)
     monkeypatch.setattr(
+        providers,
+        "connected_provider_ids",
+        lambda specs: {"openhack", "openai"},
+    )
+    monkeypatch.setattr(
         "openhack.provider_auth.all_credentials",
         lambda: {"openai": {"type": "api", "key": "saved"}},
     )
@@ -48,6 +55,7 @@ def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
         lambda name: {
             "openhack": [
                 {"id": "grok-4.5", "label": "Grok 4.5", "desc": ""},
+                {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": ""},
             ],
             "openai": [
                 {"id": "gpt-a", "label": "GPT A", "desc": ""},
@@ -64,6 +72,7 @@ def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
         ("Recent", "gpt-a"),
         ("Recent", "grok-4.5"),
         ("OpenHack", "grok-4.5"),
+        ("OpenAI models served by OpenHack", "gpt-5.6-luna"),
         ("OpenAI", "gpt-a"),
         ("OpenAI", "gpt-b"),
     ]
@@ -199,6 +208,72 @@ def test_connect_without_provider_opens_searchable_connect_picker():
     assert opened == [True]
 
 
+def test_fast_mode_persists_for_openhack_inference(monkeypatch):
+    app = _searchable_app()
+    saved = []
+    monkeypatch.setattr("openhack.tui.settings.fast_mode", False)
+    monkeypatch.setattr(
+        "openhack.tui.save_user_config", lambda values: saved.append(values)
+    )
+    monkeypatch.setattr("openhack.tui.reload_settings", lambda: None)
+
+    app._cmd_fast("on")
+
+    assert saved == [{"fast_mode": True}]
+    assert "fast mode on" in app.last_status_line
+
+
+def test_fast_mode_rejects_direct_provider(monkeypatch):
+    app = _searchable_app()
+    app.provider = "openai"
+    saved = []
+    monkeypatch.setattr("openhack.tui.settings.fast_mode", False)
+    monkeypatch.setattr(
+        "openhack.tui.save_user_config", lambda values: saved.append(values)
+    )
+
+    app._cmd_fast("on")
+
+    assert saved == []
+    assert "uses OpenHack inference" in app.last_status_line
+
+
+def test_tips_toggle_persists_and_refreshes_rotation(monkeypatch):
+    app = _searchable_app()
+    saved = []
+    refreshed = []
+    monkeypatch.setattr("openhack.tui.settings.tips_enabled", False)
+    monkeypatch.setattr(
+        "openhack.tui.save_user_config", lambda values: saved.append(values)
+    )
+    monkeypatch.setattr("openhack.tui.reload_settings", lambda: None)
+    app._advance_tip = lambda: refreshed.append(True)
+
+    app._cmd_tips("on")
+
+    assert saved == [{"tips_enabled": True}]
+    assert refreshed == [True]
+    assert app.last_status_line == "tips on · rotating every 10 seconds"
+
+
+def test_tip_rotation_includes_context_and_avoids_immediate_repeat(monkeypatch):
+    app = _searchable_app()
+    app.last_findings = [object()]
+    app.session = None
+    app.shells = type("Shells", (), {"list": lambda self: []})()
+    app._tip_index = -1
+    app._tip_text = ""
+    monkeypatch.setattr(providers, "is_connected", lambda name: True)
+
+    candidates = app._tip_candidates()
+    assert candidates[0].startswith("Review findings")
+
+    app._advance_tip()
+    first = app._tip_text
+    app._advance_tip()
+    assert app._tip_text != first
+
+
 def test_model_search_filters_large_provider_catalog():
     app = _searchable_app()
     app._model_all = [
@@ -226,22 +301,71 @@ def test_model_search_filters_large_provider_catalog():
     assert [model["id"] for model in app.model_index] == ["claude-sonnet-5"]
 
 
-def test_api_key_entry_connects_without_switching_active_model(monkeypatch):
+def test_api_key_entry_activates_provider_default_model(monkeypatch):
     app = _searchable_app()
     app._provider_auth_id = "openrouter"
     app._provider_auth_label = "OpenRouter"
     app.mode = "provider_key"
     stored = []
-    original = (app.provider, app.model)
+    saved = []
     monkeypatch.setattr(
         "openhack.provider_auth.set_api_key",
         lambda provider_id, secret: stored.append((provider_id, secret)),
     )
+    monkeypatch.setattr(providers, "is_connected", lambda name: name == "openrouter")
+    monkeypatch.setattr(
+        providers,
+        "resolve",
+        lambda name: providers.ResolvedProvider(
+            name=name,
+            base_url="https://openrouter.ai/api/v1",
+            api_key="secret-value",
+            model="anthropic/claude-sonnet-5",
+            supports_prompt_cache=True,
+            pricing={},
+        ),
+    )
+    monkeypatch.setattr(
+        "openhack.tui.save_user_config", lambda values: saved.append(values)
+    )
+    monkeypatch.setattr("openhack.tui.reload_settings", lambda: None)
     app._save_provider_api_key("secret-value")
 
     assert stored == [("openrouter", "secret-value")]
-    assert (app.provider, app.model) == original
-    assert app.last_status_line == "connected: OpenRouter"
+    assert (app.provider, app.model) == (
+        "openrouter",
+        "anthropic/claude-sonnet-5",
+    )
+    assert saved == [{
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5",
+    }]
+    assert app.last_status_line == (
+        "connected: OpenRouter · anthropic/claude-sonnet-5"
+    )
+
+
+def test_model_picker_hides_openhack_without_openhack_credentials(monkeypatch):
+    app = _searchable_app()
+    app.provider = "openai"
+    app.model = "gpt-5.6-sol"
+    spec = providers.get_spec("openai")
+    monkeypatch.setattr(providers, "list_provider_specs", lambda: [spec])
+    monkeypatch.setattr(
+        providers, "connected_provider_ids", lambda specs: {"openai"}
+    )
+    monkeypatch.setattr(
+        providers,
+        "provider_models",
+        lambda name: [{"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": ""}],
+    )
+    monkeypatch.setattr("openhack.tui.load_user_config", lambda: {})
+
+    entries = app._connected_model_entries()
+
+    assert entries
+    assert {entry["provider"] for entry in entries} == {"openai"}
+    assert not any(entry["section"].startswith("OpenAI models served") for entry in entries)
 
 
 def test_selecting_model_switches_provider_and_model(monkeypatch):

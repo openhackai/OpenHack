@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     openhack_base_url: str = ""
     openhack_app_url: str = ""
     openhack_model_id: str = "glm-5.2"
+    # Throughput-first OpenRouter routing for hosted OpenHack inference.
+    fast_mode: bool = False
+    # Rotating contextual guidance on the TUI landing screen.
+    tips_enabled: bool = True
 
     openhack_org_id: Optional[str] = None
     openhack_org_slug: Optional[str] = None
@@ -247,6 +251,7 @@ settings = _build_settings()
 
 
 def reload_settings() -> None:
-    """Reload settings from ~/.openhack/config and environment."""
-    global settings
-    settings = _build_settings()
+    """Reload settings in place so existing module imports see new values."""
+    fresh = _build_settings()
+    for field_name in Settings.model_fields:
+        setattr(settings, field_name, getattr(fresh, field_name))

@@ -331,14 +331,7 @@ def _launch_tui(target=None, resume_session_id=None):
             return
         os.chdir(p.resolve())
 
-    from openhack.setup import needs_first_time_setup, run_first_time_setup
     try:
-        if needs_first_time_setup():
-            completed = run_first_time_setup()
-            if not completed:
-                print("\nSetup skipped. Run 'openhack' again to retry.\n")
-                return
-
         from openhack.tui import main as tui_main
         tui_main(resume_session_id=resume_session_id)
     except KeyboardInterrupt:

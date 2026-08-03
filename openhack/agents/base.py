@@ -128,7 +128,12 @@ class BaseAgent(ABC):
     def _looks_like_unfinished_promise(text: str) -> bool:
         """Whether the tail says work will happen after this response."""
         tail = " ".join((text or "").lower().split())[-280:]
-        return any(marker in tail for marker in (
+        # "Let me know" is an invitation to the operator, not a promise that
+        # more agent work is still pending.  Treating it as unfinished made a
+        # complete streamed answer disappear in favour of finish_task's short
+        # lifecycle recap (session f7a7aab7).
+        promise_tail = tail.replace("let me know", "")
+        return any(marker in promise_tail for marker in (
             "let me ",
             "i'll ",
             "i will ",
@@ -532,7 +537,12 @@ class BaseAgent(ABC):
                     )
 
                 key = self._call_key(tool_call.name, tool_call.arguments)
-                if key in self._call_cache:
+                # finish_task is a lifecycle acknowledgement, not an external
+                # action.  Its payload can legitimately repeat on later turns
+                # (for example, two identical greetings).  Caching it across
+                # turns rejects a valid completion and makes the continuation
+                # guard ask the model for a second response.
+                if not is_finish_task and key in self._call_cache:
                     # Anti-repetition: this exact call already ran — don't
                     # re-execute (saves tokens) and nudge the agent to move on.
                     prev_turn, prev_summ = self._call_cache[key]
@@ -617,10 +627,11 @@ class BaseAgent(ABC):
                     # Record this genuine attempt into the durable ledger + cache
                     # (survives compaction, so the agent never forgets it tried it).
                     summary = self._result_summary(result)
-                    self._call_cache[key] = (iteration, summary)
-                    self._ledger.append(
-                        f"t{iteration} · {tool_call.name} {self._arg_hint(tool_call.arguments)} → {summary}"
-                    )
+                    if not is_finish_task:
+                        self._call_cache[key] = (iteration, summary)
+                        self._ledger.append(
+                            f"t{iteration} · {tool_call.name} {self._arg_hint(tool_call.arguments)} → {summary}"
+                        )
                     # Novelty = a result summary we haven't seen before. Near-dup
                     # thrash (same endpoint, tweaked payload, same "not injectable"
                     # response) produces no new summary, so it never counts as signal.

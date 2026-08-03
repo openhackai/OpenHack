@@ -88,3 +88,16 @@ def test_launch_tui_rejects_nondir_path():
     with contextlib.redirect_stdout(out):
         m._launch_tui("/definitely/not/a/dir")
     assert "is not a directory" in out.getvalue()
+
+
+def test_launch_tui_never_runs_first_time_setup(monkeypatch):
+    calls = []
+    monkeypatch.setattr("openhack.tui.main", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(
+        "openhack.setup.run_first_time_setup",
+        lambda: (_ for _ in ()).throw(AssertionError("startup wizard must not run")),
+    )
+
+    m._launch_tui()
+
+    assert calls == [{"resume_session_id": None}]

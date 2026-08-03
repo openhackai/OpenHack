@@ -7,13 +7,12 @@ from openhack import setup
 
 @pytest.mark.asyncio
 async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
-    choices = iter([0, 0, 0])  # OpenHack, browser login, GLM 5.2
+    choices = iter([0, 0])  # OpenHack, browser login
     saved = []
-    model_items = []
+    titles = []
 
     async def select(title, items, *args, **kwargs):
-        if title == "Choose your default model":
-            model_items.extend(items)
+        titles.append(title)
         return next(choices)
 
     async def login(_url):
@@ -44,13 +43,9 @@ async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
     assert await setup._run_first_time_onboarding() is True
     assert saved[-1]["provider"] == "openhack"
     assert saved[-1]["model"] == "glm-5.2"
+    assert saved[-1]["openhack_model_id"] == "glm-5.2"
     assert saved[-1]["onboarding_version"] == 1
-    assert [item[0] for item in model_items] == [
-        "glm-5.2",
-        "grok-4.5",
-        "kimi-k2.5",
-        "new-hosted-model",
-    ]
+    assert titles == ["Connect a provider", "Connect OpenHack"]
 
 
 @pytest.mark.asyncio
@@ -135,3 +130,45 @@ async def test_back_from_openhack_auth_returns_to_provider_menu(monkeypatch):
         ("Connect OpenHack", "go back"),
         ("Connect a provider", None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_connect_external_activates_default_without_model_prompt(monkeypatch):
+    from openhack import providers
+
+    saved = []
+    stored = []
+
+    async def input_key(*args, **kwargs):
+        return "provider-key"
+
+    async def unexpected_menu(title, *args, **kwargs):
+        raise AssertionError(f"unexpected menu: {title}")
+
+    monkeypatch.setattr(setup, "_input_async", input_key)
+    monkeypatch.setattr(setup, "_select_menu_async", unexpected_menu)
+    monkeypatch.setattr(
+        "openhack.provider_auth.set_api_key",
+        lambda provider_id, key: stored.append((provider_id, key)),
+    )
+    monkeypatch.setattr(
+        providers,
+        "resolve",
+        lambda name: providers.ResolvedProvider(
+            name=name,
+            base_url="https://openrouter.ai/api/v1",
+            api_key="provider-key",
+            model="anthropic/claude-sonnet-5",
+            supports_prompt_cache=True,
+            pricing={},
+        ),
+    )
+    monkeypatch.setattr(setup, "save_user_config", lambda value: saved.append(value))
+    monkeypatch.setattr(setup, "reload_settings", lambda: None)
+
+    assert await setup.run_provider_connect("openrouter", "api") is True
+    assert stored == [("openrouter", "provider-key")]
+    assert saved == [{
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5",
+    }]

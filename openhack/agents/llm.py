@@ -28,6 +28,18 @@ MAX_RETRY_BACKOFF = 20
 MIN_STALL_TIMEOUT = 10
 
 
+def _reported_usage_cost(usage: Any) -> Optional[float]:
+    """Read OpenRouter's measured cost from an OpenAI-style usage object."""
+    value = getattr(usage, "cost", None)
+    if value is None:
+        extra = getattr(usage, "model_extra", None)
+        if isinstance(extra, dict):
+            value = extra.get("cost")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    return None
+
+
 class StreamStalled(Exception):
     """A stream returned 200 and then stopped making progress.
 
@@ -401,7 +413,6 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "input": self._convert_messages_to_responses(messages),
-            "max_output_tokens": self.max_tokens,
             "stream": True,
             "store": False,
             "include": ["reasoning.encrypted_content"],
@@ -615,11 +626,16 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        # OpenHack inference translates this trusted product hint into
+        # OpenRouter's provider.sort="throughput" routing. It is deliberately
+        # a header so it never leaks as an unsupported model parameter.
+        from openhack import config as _config
+        if self._resolved is None and _config.settings.fast_mode:
+            kwargs["extra_headers"] = {"X-OpenHack-Mode": "fast"}
         if tools:
             kwargs["tools"] = self._convert_tools_to_openai_format(tools)
             kwargs["tool_choice"] = tool_choice or "auto"
         # Re-read settings via the module so /config changes apply mid-session.
-        from openhack import config as _config
         # OpenHack and OpenAI accept prompt_cache_key; other OpenAI-compatible
         # endpoints often reject unknown params, so only send it when supported.
         provider_supports_cache = self._resolved is None or self._resolved.supports_prompt_cache
@@ -732,6 +748,7 @@ class LLMClient:
 
                 input_tokens = 0
                 output_tokens = 0
+                reported_cost: Optional[float] = None
                 finish_reason: Optional[str] = None
                 response_id: Optional[str] = None
                 returned_model: Optional[str] = None
@@ -769,6 +786,9 @@ class LLMClient:
                     if chunk.usage:
                         input_tokens = chunk.usage.prompt_tokens or 0
                         output_tokens = chunk.usage.completion_tokens or 0
+                        measured = _reported_usage_cost(chunk.usage)
+                        if measured is not None:
+                            reported_cost = measured
                         progressed = True
 
                     if not chunk.choices:
@@ -900,7 +920,16 @@ class LLMClient:
                 if input_tokens == 0 and output_tokens == 0:
                     logger.debug("No usage data in stream — cost will be zero for this call")
 
-                cost = self._calculate_cost(input_tokens, output_tokens)
+                # Hosted inference is routed exclusively through OpenRouter;
+                # trust its measured usage.cost rather than maintaining a
+                # second pricing table in the scanner. BYOK providers retain
+                # their local catalog estimate because OpenRouter is not in
+                # that request path.
+                cost = (
+                    reported_cost or 0.0
+                    if self._resolved is None
+                    else self._calculate_cost(input_tokens, output_tokens)
+                )
                 self.total_cost += cost
                 self.total_tokens += input_tokens + output_tokens
                 self.total_input_tokens += input_tokens
