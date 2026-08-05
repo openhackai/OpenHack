@@ -94,6 +94,7 @@ def test_opencode_plans_are_not_available():
 
 def test_resolve_openai_reads_key_and_base(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
     r = providers.resolve("openai")
     assert r.name == "openai"
     assert r.base_url == "https://api.openai.com/v1"
@@ -111,6 +112,7 @@ def test_resolve_reports_missing_key(monkeypatch):
 
 def test_model_override_and_base_override(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.internal/v1")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
     r = providers.resolve("openai")
@@ -185,6 +187,28 @@ def test_openai_oauth_resolves_to_codex_responses_endpoint(monkeypatch):
     assert resolved.model == "gpt-5.6-sol"
 
 
+def test_explicit_openai_oauth_beats_ambient_api_key(monkeypatch):
+    """Connecting ChatGPT must not silently fall back to metered API billing."""
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-metered-key")
+    monkeypatch.setattr(
+        providers,
+        "get_credential",
+        lambda name: {
+            "type": "oauth",
+            "access": "subscription-access",
+            "refresh": "subscription-refresh",
+            "expires": 9999999999999,
+            "accountId": "account",
+        },
+    )
+
+    resolved = providers.resolve("openai")
+
+    assert resolved.auth_type == "oauth"
+    assert resolved.api_key == "subscription-access"
+    assert resolved.base_url == "https://chatgpt.com/backend-api/codex"
+
+
 def test_provider_models_for_openai_oauth_match_subscription_catalog(monkeypatch):
     monkeypatch.setattr(
         providers,
@@ -199,6 +223,7 @@ def test_provider_models_for_openai_oauth_match_subscription_catalog(monkeypatch
 
 def test_llmclient_uses_provider_base_url(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
     from openhack.agents.llm import LLMClient
 
     client = LLMClient(provider="openai")

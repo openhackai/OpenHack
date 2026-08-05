@@ -211,6 +211,85 @@ class LLMClient:
         except Exception:
             pass
 
+    def _permission_denied_message(self, detail: str) -> str:
+        """Explain a 403 in terms of the provider that actually returned it.
+
+        OpenAI subscriptions and BYOK providers can use the same OpenAI SDK
+        exception types as OpenHack inference.  Treating every ``insufficient``
+        response as an OpenHack credit failure sends users to the wrong billing
+        page and makes a correctly routed subscription look like it crossed
+        provider boundaries.
+        """
+        detail = str(detail or "permission denied")
+        if self.provider == "openhack":
+            if "credits" in detail.lower() or "insufficient" in detail.lower():
+                return (
+                    "Insufficient OpenHack credits. Purchase more at: "
+                    f"{settings.openhack_app_url}/settings/billing"
+                )
+            return (
+                f"Access denied by OpenHack API: {detail}\n"
+                f"Check your API key at: {settings.openhack_app_url}/settings/api-keys"
+            )
+
+        if self.provider == "openai" and self._resolved is not None:
+            if self._resolved.auth_type == "oauth":
+                return (
+                    f"OpenAI subscription denied the request: {detail}\n"
+                    "Check your ChatGPT plan or reconnect OpenAI with /connect."
+                )
+            return (
+                f"OpenAI API denied the request: {detail}\n"
+                "Check your OpenAI API key, project permissions, and quota."
+            )
+
+        provider_name = (
+            self._resolved.name if self._resolved is not None else self.provider
+        )
+        return (
+            f"Access denied by {provider_name}: {detail}\n"
+            "Check that provider's credentials, permissions, and quota."
+        )
+
+    def _authentication_error_message(self, detail: str) -> str:
+        """Attribute authentication failures to the selected provider."""
+        detail = str(detail or "authentication failed")
+        if self.provider == "openhack":
+            return (
+                f"Authentication failed with OpenHack (401): {detail}\n"
+                "Reconnect OpenHack with /connect or check your API key."
+            )
+        if (
+            self.provider == "openai"
+            and self._resolved is not None
+            and self._resolved.auth_type == "oauth"
+        ):
+            return (
+                f"OpenAI subscription authentication failed (401): {detail}\n"
+                "Reconnect OpenAI with /connect."
+            )
+        provider_name = (
+            self._resolved.name if self._resolved is not None else self.provider
+        )
+        return (
+            f"Authentication failed with {provider_name} (401): {detail}\n"
+            "Reconnect that provider with /connect or check its API key."
+        )
+
+    @staticmethod
+    def _is_exhausted_quota_error(error: Exception) -> bool:
+        """Return whether retrying this 429 can never succeed without billing."""
+        detail = str(getattr(error, "message", error)).lower()
+        return any(
+            marker in detail
+            for marker in (
+                "insufficient_quota",
+                "credit_balance_exhausted",
+                "no credits remaining",
+                "insufficient credits",
+            )
+        )
+
     def _event(self, event_type: str, data: Any, **correlation: Any) -> None:
         cb = getattr(self, "event_callback", None)
         if cb is None:
@@ -984,32 +1063,25 @@ class LLMClient:
                 return llm_response
 
             except openai.RateLimitError as e:
-                record_failure(e, True)
-                last_exception = e
                 if stream:
                     try: await stream.close()
                     except Exception: pass
+                if self._is_exhausted_quota_error(e):
+                    record_failure(e, False)
+                    detail = getattr(e, "message", str(e))
+                    raise ValueError(self._permission_denied_message(detail)) from e
+                record_failure(e, True)
+                last_exception = e
                 if attempt == max_retries:
                     raise
             except openai.AuthenticationError as e:
                 record_failure(e, False)
                 detail = getattr(e, "message", str(e))
-                raise ValueError(
-                    f"Authentication failed (401): {detail}\n"
-                    f"If this is your OpenHack token, run: openhack /login\n"
-                    f"Check that your API key is valid and has not expired."
-                ) from e
+                raise ValueError(self._authentication_error_message(detail)) from e
             except openai.PermissionDeniedError as e:
                 record_failure(e, False)
                 detail = getattr(e, "message", str(e))
-                if "credits" in detail.lower() or "insufficient" in detail.lower():
-                    raise ValueError(
-                        f"Insufficient credits. Purchase more at: {settings.openhack_app_url}/settings/billing"
-                    ) from e
-                raise ValueError(
-                    f"Access denied by OpenHack API: {detail}\n"
-                    f"Check your API key at: {settings.openhack_app_url}/settings/api-keys"
-                ) from e
+                raise ValueError(self._permission_denied_message(detail)) from e
             except openai.APIStatusError as e:
                 record_failure(e, e.status_code >= 500)
                 if stream:

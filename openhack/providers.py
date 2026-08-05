@@ -342,10 +342,13 @@ def resolve(name: str, model: Optional[str] = None) -> Optional[ResolvedProvider
     env_key = os.environ.get(spec.api_key_env)
     if (
         name == "openai"
-        and not env_key
         and credential
         and credential.get("type") == "oauth"
     ):
+        # An explicit `/connect` to ChatGPT is a provider-method choice, not a
+        # fallback for machines without OPENAI_API_KEY. Developer shells often
+        # carry an unrelated API key; letting that ambient variable win silently
+        # moves subscription traffic onto metered platform.openai.com billing.
         return ResolvedProvider(
             name=name,
             base_url=OPENAI_CODEX_BASE_URL,
