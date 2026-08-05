@@ -2842,6 +2842,32 @@ class OpenHackApp:
             pass
         return default
 
+    @staticmethod
+    def _mark_formatted_text_end(fragments: list) -> list:
+        """Place prompt_toolkit's hidden cursor at the last content character.
+
+        Trace entries deliberately end in a newline. Putting the cursor after
+        that newline makes prompt_toolkit follow an empty logical line and can
+        skip a long wrapped final paragraph wholesale. Inserting the marker
+        before trailing newlines lets it scroll within that paragraph instead.
+        """
+        out = list(fragments)
+        for index in range(len(out) - 1, -1, -1):
+            fragment = out[index]
+            text = fragment[1]
+            content_end = len(text.rstrip("\n"))
+            if not content_end:
+                continue
+            prefix = (fragment[0], text[:content_end], *fragment[2:])
+            suffix = (fragment[0], text[content_end:], *fragment[2:])
+            replacement = [prefix, ("[SetCursorPosition]", "")]
+            if suffix[1]:
+                replacement.append(suffix)
+            out[index:index + 1] = replacement
+            return out
+        out.append(("[SetCursorPosition]", ""))
+        return out
+
     def _build_scan_container(self) -> HSplit:
         # No header bar: the TUI deliberately has no top chrome. Target/cwd,
         # model, run state, findings + cost and shortcuts all live at the bottom
@@ -2992,6 +3018,13 @@ class OpenHackApp:
             max_scroll = max(0, len(lines) - window_height)
             if self._trace_follow:
                 self._trace_scroll = max_scroll
+                # Let prompt_toolkit perform the followed viewport scroll. It
+                # knows the *rendered* height of every wrapped line, whereas our
+                # manual offset only counts newline-delimited logical lines.
+                # Keeping the cursor at the transcript tail makes the final
+                # wrapped rows visible and lets a terminal resize reflow them
+                # correctly. (The cursor itself remains hidden by the Window.)
+                return self._mark_formatted_text_end(raw)
             elif self._trace_scroll > max_scroll:
                 self._trace_scroll = max_scroll
             visible = lines[self._trace_scroll:]

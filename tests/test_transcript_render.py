@@ -2,6 +2,8 @@
 
 import time
 
+from prompt_toolkit.layout.screen import Screen, WritePosition
+
 from openhack.agents.session import TraceEntry
 from openhack.tui import OpenHackApp, ScanState
 
@@ -258,6 +260,49 @@ def test_long_interactive_answer_is_rendered_in_full():
     assert answer in rendered
     assert "final marker" in rendered
     assert not rendered.endswith("…")
+
+
+def _render_trace_viewport(app, width, height):
+    window = app._trace_window
+    content = window.content.create_content(width=width, height=height)
+    window._scroll_when_linewrapping(content, width, height)
+    screen = Screen()
+    window._copy_body(
+        content,
+        screen,
+        WritePosition(xpos=0, ypos=0, width=width, height=height),
+        move_x=0,
+        width=width,
+        vertical_scroll=window.vertical_scroll,
+        horizontal_scroll=0,
+        wrap_lines=True,
+        vertical_scroll_2=window.vertical_scroll_2,
+        always_hide_cursor=True,
+        has_focus=False,
+        align=window.align,
+        get_line_prefix=window.get_line_prefix,
+    )
+    return "\n".join(
+        "".join(screen.data_buffer[y][x].char or " " for x in range(width))
+        for y in range(height)
+    )
+
+
+def test_followed_transcript_keeps_wrapped_answer_tail_visible_after_resize():
+    app = OpenHackApp()
+    state = _state()
+    answer = "\n".join(
+        [f"Earlier result {i}: " + "wrapped detail " * 8 for i in range(30)]
+        + ["Bottom line", "The response is complete.", "FINAL MARKER"]
+    )
+    _add(state, "openhack", "thinking", answer)
+    app.scan = state
+    app.mode = "scanning"
+    app.is_agent_session = True
+    app._trace_follow = True
+
+    assert "FINAL MARKER" in _render_trace_viewport(app, width=52, height=9)
+    assert "FINAL MARKER" in _render_trace_viewport(app, width=31, height=9)
 
 
 def test_long_pipeline_progress_remains_bounded():
