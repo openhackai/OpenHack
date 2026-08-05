@@ -122,3 +122,53 @@ def test_scan_id_exists_as_soon_as_scan_view_opens(tmp_path, monkeypatch):
         assert started_with == [(str(tmp_path), "01234567-89ab-cdef")]
 
     asyncio.run(scenario())
+
+
+def test_completed_scan_screen_does_not_block_a_new_scan(tmp_path, monkeypatch):
+    """`mode=scanning` names the screen, not proof that a task is running."""
+    import asyncio
+    import openhack.tui as tui_mod
+    from openhack.tui import ScanState
+
+    class _ImmediateSession:
+        def __init__(self, target_dir, on_trace):
+            self.id = "newscan0-0000"
+            self.target_dir = target_dir
+            self.paused = False
+
+    async def scenario():
+        app = OpenHackApp.__new__(OpenHackApp)
+        app.mode = "scanning"
+        app.session = None
+        app.scan = ScanState("old")
+        app.scan.finish()
+        app.scan.outcome = "failed"
+        app.scan_task = None
+        app.agent = None
+        app.is_agent_session = False
+        app.active_tab = "findings"
+        app.viewing_target = ""
+        app.viewing_scan_id = ""
+        app._cancel_armed = False
+        app._interrupting = False
+        app.provider = "openai"
+        app.model = "gpt-5.6-sol"
+        app.last_status_line = "a scan is already in progress"
+        app._on_trace = lambda _: None
+
+        started = []
+
+        async def fake_run_scan(target_dir, session):
+            started.append((target_dir, session.id))
+
+        app._run_scan = fake_run_scan
+        monkeypatch.setattr(tui_mod, "Session", _ImmediateSession)
+        monkeypatch.setattr("openhack.providers.is_connected", lambda _: True)
+
+        app._start_scan(str(tmp_path))
+        await app.scan_task
+
+        assert started == [(str(tmp_path), "newscan0-0000")]
+        assert app.last_status_line == "starting scan…"
+
+    asyncio.run(scenario())

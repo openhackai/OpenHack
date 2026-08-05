@@ -681,6 +681,7 @@ class ScanState:
         self.target = target
         self.start_time = time.time()
         self.end_time: Optional[float] = None  # set when the scan terminates
+        self.outcome: Optional[str] = None  # completed | failed | cancelled
         self.cost: float = 0.0
         self.current_step: Optional[str] = None
         self.agents: dict[str, _AgentRow] = {}
@@ -3357,7 +3358,10 @@ class OpenHackApp:
             if self.mode == "viewing":
                 title = "Viewing session"
             elif self.scan is not None and self.scan.end_time is not None:
-                title = "Scan complete"
+                title = {
+                    "failed": "Scan failed",
+                    "cancelled": "Scan cancelled",
+                }.get(self.scan.outcome, "Scan complete")
             elif self.scan is not None:
                 title = "Scanning…"
             else:
@@ -3479,7 +3483,10 @@ class OpenHackApp:
             elif self.session is not None and self.session.paused:
                 label = "⏸ paused"
             elif self.scan is not None and self.scan.end_time is not None:
-                label = "complete"
+                label = {
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                }.get(self.scan.outcome, "complete")
             # Findings + cost only for a scan. ScanState.cost is fed by
             # step_complete / swarm_complete, which only the scan pipeline
             # emits — in an agent conversation it can never be anything but
@@ -5557,6 +5564,7 @@ class OpenHackApp:
         # then set end_time = start_time + duration so the header shows the
         # actual duration (not start-epoch arithmetic).
         scan = ScanState(target=row.get("target") or "")
+        scan.outcome = (data.get("status") or "completed").lower()
         scan.cost = float((data.get("cost") or {}).get("total_cost") or 0.0)
         duration = float(data.get("duration_seconds") or 0)
 
@@ -5628,6 +5636,7 @@ class OpenHackApp:
         # Hydrate the transcript (ScanState) from the saved trace.
         findings = self._findings_from_report(data)
         scan = ScanState(target=target)
+        scan.outcome = (data.get("status") or "completed").lower()
         scan.cost = float((data.get("cost") or {}).get("total_cost") or 0.0)
         duration = float(data.get("duration_seconds") or 0)
         first_ts: Optional[float] = None
@@ -6340,7 +6349,7 @@ class OpenHackApp:
     # ── Scan kickoff ──────────────────────────────────────────────
 
     def _start_scan(self, target_dir: str) -> None:
-        if self.mode == "scanning":
+        if self.scan_task is not None and not self.scan_task.done():
             self.last_status_line = "a scan is already in progress"
             return
         from openhack import providers as provider_registry
@@ -6362,10 +6371,11 @@ class OpenHackApp:
         self.viewing_scan_id = ""
         self._cancel_armed = False
         self._interrupting = False
+        self.last_status_line = "starting scan…"
         self.scan_task = asyncio.create_task(self._run_scan(target_dir, session))
 
     def _start_test_scan(self) -> None:
-        if self.mode == "scanning":
+        if self.scan_task is not None and not self.scan_task.done():
             self.last_status_line = "a scan is already in progress"
             return
         self.scan = ScanState(target=os.getcwd() + " (test)")
@@ -6900,6 +6910,8 @@ class OpenHackApp:
             coordinator = CoordinatorAgent(llm, tools, session)
             await coordinator.run_full_scan()
 
+            if self.scan is not None:
+                self.scan.outcome = "completed"
             self.last_session = session
             self.last_findings = list(session.findings)
             self._write_report(session, target_dir, status="completed")
@@ -6909,6 +6921,8 @@ class OpenHackApp:
             )
 
         except asyncio.CancelledError:
+            if self.scan is not None:
+                self.scan.outcome = "cancelled"
             if session is not None:
                 self._write_report(session, target_dir, status="cancelled")
                 if self._interrupting:
@@ -6919,7 +6933,8 @@ class OpenHackApp:
                     )
                 else:
                     self.last_status_line = (
-                        f"scan cancelled · resume with: openhack --resume {session.id}"
+                        f"scan cancelled · inspect with: openhack --resume {session.id} · "
+                        "use /scan to retry"
                     )
             else:
                 self.last_status_line = (
@@ -6927,10 +6942,13 @@ class OpenHackApp:
                 )
             raise
         except Exception as exc:
+            if self.scan is not None:
+                self.scan.outcome = "failed"
             if session is not None:
                 self._write_report(session, target_dir, status="failed")
                 self.last_status_line = (
-                    f"scan failed: {exc} · retry with: openhack --resume {session.id}"
+                    f"scan failed: {exc} · inspect with: "
+                    f"openhack --resume {session.id} · use /scan to retry"
                 )
             else:
                 self.last_status_line = f"scan failed: {exc}"
