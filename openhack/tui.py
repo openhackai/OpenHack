@@ -360,7 +360,7 @@ _SLASH_COMMANDS = [
     ("/sessions", "Browse and re-load past scan results"),
     ("/bashes", "Watch and kill background shells (started with !cmd &)"),
     ("/connect", "Connect a provider or ChatGPT Plus/Pro subscription"),
-    ("/disconnect", "Remove saved credentials for a provider"),
+    ("/disconnect", "Remove credentials — /disconnect <provider>"),
     ("/models", "Choose a model from all connected providers"),
     ("/fast", "Toggle throughput-first routing for OpenHack inference"),
     ("/tips", "Toggle rotating status-bar tips"),
@@ -4773,9 +4773,26 @@ class OpenHackApp:
         self._invalidate()
 
     def _cmd_disconnect(self, arg: str) -> None:
-        from openhack.provider_auth import get_credential, remove_credential
+        from openhack.provider_auth import (
+            all_credentials,
+            get_credential,
+            remove_credential,
+        )
 
-        provider_id = arg.strip().lower() or self.provider
+        provider_id = arg.strip().lower()
+        if not provider_id:
+            saved_provider_ids = sorted(all_credentials())
+            if saved_provider_ids:
+                examples = " · ".join(
+                    f"/disconnect {saved_provider_id}"
+                    for saved_provider_id in saved_provider_ids
+                )
+                self.last_status_line = f"choose a provider: {examples}"
+            else:
+                self.last_status_line = (
+                    "usage: /disconnect <provider> · no saved provider credentials"
+                )
+            return
         if provider_id == "openhack":
             self.last_status_line = "use /logout to disconnect your OpenHack account"
             return

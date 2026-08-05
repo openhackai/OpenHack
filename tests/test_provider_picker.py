@@ -208,6 +208,23 @@ def test_connect_without_provider_opens_searchable_connect_picker():
     assert opened == [True]
 
 
+def test_disconnect_without_provider_shows_saved_provider_commands(monkeypatch):
+    app = _searchable_app()
+    monkeypatch.setattr(
+        "openhack.provider_auth.all_credentials",
+        lambda: {
+            "openai": {"type": "oauth", "refresh": "saved"},
+            "anthropic": {"type": "api", "key": "saved"},
+        },
+    )
+
+    app._cmd_disconnect("")
+
+    assert app.last_status_line == (
+        "choose a provider: /disconnect anthropic · /disconnect openai"
+    )
+
+
 def test_fast_mode_persists_for_openhack_inference(monkeypatch):
     app = _searchable_app()
     saved = []
