@@ -4496,9 +4496,18 @@ class OpenHackApp:
 
             # An agent conversation is open but idle → continue it (remembering
             # everything so far) rather than starting from scratch.
-            if self.is_agent_session and self.agent is not None:
+            if self.is_agent_session:
                 self.active_tab = "trace"  # return from a /findings view to the chat
-                self._continue_agent(text)
+                if self.agent is not None:
+                    self._continue_agent(text)
+                else:
+                    # A foreground `!cmd` creates a durable transcript but no
+                    # InteractiveAgent.  Sending prose afterward used to fall
+                    # through to `_chat`, whose user/reply lived only in a
+                    # one-line status area and were never persisted.  Start a
+                    # real agent instead; `_start_agent` reads os.getcwd(), so
+                    # an intervening `/cd` becomes the new agent root.
+                    self._start_agent(text)
                 return
 
             # A finished scan is on screen → chat about its findings.

@@ -1,6 +1,7 @@
 """Foreground `!` bang mode: dispatch routing + streaming/interrupt of _run_shell."""
 
 import asyncio
+import os
 import time
 
 from prompt_toolkit.buffer import Buffer
@@ -93,6 +94,41 @@ def test_bang_after_leading_whitespace_matches_submit_dispatch():
 def test_bang_does_not_activate_inside_picker_input():
     app = _composer_app("!openai", mode="providers")
     assert app._is_shell_input() is False
+
+
+def test_prompt_after_shell_and_cd_starts_real_agent(tmp_path, monkeypatch):
+    """Regression for 21aa1bd1: never route this through status-only _chat."""
+    target = tmp_path / "xss2shellwp"
+    target.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    app = OpenHackApp.__new__(OpenHackApp)
+    app._logout_armed = False
+    app._verify_arm_subject = None
+    app.scan_task = None
+    app.session = object()  # the durable transcript created by !mkdir
+    app.agent = None
+    app.is_agent_session = True
+    app.mode = "scanning"
+    app.active_tab = "trace"
+    app.last_status_line = ""
+    app._at_index = object()
+
+    started = []
+    chatted = []
+    app._start_agent = lambda task: started.append((task, os.getcwd()))
+
+    async def status_only_chat(message):
+        chatted.append(message)
+
+    app._chat = status_only_chat
+
+    app._cmd_cd("xss2shellwp")
+    asyncio.run(app._handle_input("reproduce WP2Shell safely"))
+
+    assert started == [("reproduce WP2Shell safely", str(target))]
+    assert chatted == []
+    assert app.active_tab == "trace"
 
 
 def test_run_shell_streams_output_and_exit_code():
