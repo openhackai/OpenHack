@@ -26,11 +26,14 @@ class _Stream:
         return None
 
 
-def _delta(*, content=None, tool_calls=None, reasoning_content=None):
+def _delta(
+    *, content=None, tool_calls=None, reasoning_content=None, reasoning_details=None
+):
     return SimpleNamespace(
         content=content,
         tool_calls=tool_calls,
         reasoning_content=reasoning_content,
+        reasoning_details=reasoning_details,
     )
 
 
@@ -86,6 +89,37 @@ def test_model_response_logs_finish_reason_ids_and_timing(monkeypatch):
     completed = next(data for kind, data, _ in events if kind == "model_call_completed")
     assert completed["finish_reason"] == "stop"
     assert completed["content"] == "hello"
+
+
+def test_openrouter_reasoning_details_are_concatenated_for_replay(monkeypatch):
+    monkeypatch.setattr(settings, "openhack_max_retries", 0)
+    first = {
+        "type": "reasoning.text",
+        "text": "inspect ",
+        "id": "reasoning-1",
+        "format": "openrouter-v1",
+        "index": 0,
+    }
+    second = SimpleNamespace(
+        type="reasoning.text",
+        text="the result",
+        id="reasoning-2",
+        format="openrouter-v1",
+        index=1,
+    )
+    stream = _Stream([
+        _chunk(_delta(reasoning_details=[first])),
+        _chunk(_delta(reasoning_details=[second]), finish_reason="stop"),
+    ])
+    llm, _ = _client(stream)
+
+    response = asyncio.run(llm._chat([Message(role="user", content="hi")]))
+
+    assert response.reasoning_details == [first, vars(second)]
+    replay = Message(
+        role="assistant", reasoning_details=response.reasoning_details
+    ).to_dict()
+    assert replay["reasoning_details"] == [first, vars(second)]
 
 
 def test_openhack_uses_openrouter_reported_cost(monkeypatch):

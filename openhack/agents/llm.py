@@ -40,6 +40,21 @@ def _reported_usage_cost(usage: Any) -> Optional[float]:
     return None
 
 
+def _messages_for_event(messages: list[dict]) -> list[dict]:
+    """Copy request messages while omitting private reasoning payloads."""
+    sanitized = []
+    for message in messages:
+        logged = dict(message)
+        reasoning = logged.pop("reasoning_content", None)
+        if reasoning:
+            logged["reasoning_characters"] = len(reasoning)
+        details = logged.pop("reasoning_details", None)
+        if details:
+            logged["reasoning_detail_count"] = len(details)
+        sanitized.append(logged)
+    return sanitized
+
+
 class StreamStalled(Exception):
     """A stream returned 200 and then stopped making progress.
 
@@ -54,16 +69,16 @@ class StreamStalled(Exception):
     """
 
 
-def fetch_available_models(
+def fetch_available_model_catalog(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     timeout: float = 10.0,
-) -> Optional[list[str]]:
-    """Fetch the model IDs the inference API currently serves.
+) -> Optional[list[dict[str, Any]]]:
+    """Fetch the authoritative model catalog served by OpenHack inference.
 
-    Calls GET <base_url>/models with the bearer key. Returns the list of model
-    IDs, or None on any failure (no key, network error, bad response) so callers
-    can fall back to a hardcoded list.
+    The response metadata drives terminal tabs, family sections, labels, and
+    release ordering. Returning ``None`` distinguishes a failed refresh from a
+    valid empty catalog so callers never substitute speculative local models.
     """
     key = api_key or settings.openhack_api_key
     base = (base_url or settings.openhack_base_url).rstrip("/")
@@ -77,10 +92,33 @@ def fetch_available_models(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except Exception as e:
-        logger.debug(f"fetch_available_models failed: {e}")
+        logger.debug(f"fetch_available_model_catalog failed: {e}")
         return None
-    models = [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
-    return models or None
+    raw_models = data.get("data", []) if isinstance(data, dict) else []
+    models: list[dict[str, Any]] = []
+    for raw in raw_models:
+        if not isinstance(raw, dict) or not isinstance(raw.get("id"), str):
+            continue
+        model = {
+            "id": raw["id"],
+            "label": str(raw.get("label") or raw.get("name") or raw["id"]),
+            "desc": str(raw.get("description") or raw.get("desc") or ""),
+            "family": str(raw.get("family") or "OpenHack"),
+            "created_at": str(raw.get("created_at") or ""),
+            "tab": str(raw.get("tab") or "openhack"),
+        }
+        models.append(model)
+    return models
+
+
+def fetch_available_models(
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Optional[list[str]]:
+    """Compatibility wrapper returning IDs from the live inference catalog."""
+    models = fetch_available_model_catalog(api_key, base_url, timeout)
+    return [model["id"] for model in models] if models else None
 
 
 @dataclass
@@ -91,6 +129,9 @@ class Message:
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
     reasoning_content: Optional[str] = None
+    # OpenRouter's normalized reasoning blocks must be replayed unchanged for
+    # reasoning models to continue correctly after tool calls.
+    reasoning_details: Optional[list[dict]] = None
     # Opaque Responses API output items. Required to continue reasoning/tool
     # turns when store=false; ignored by Chat Completions providers.
     response_items: Optional[list[dict]] = None
@@ -107,6 +148,8 @@ class Message:
             d["name"] = self.name
         if self.reasoning_content is not None:
             d["reasoning_content"] = self.reasoning_content
+        if self.reasoning_details is not None:
+            d["reasoning_details"] = self.reasoning_details
         if self.response_items is not None:
             d["response_items"] = self.response_items
         return d
@@ -137,6 +180,7 @@ class LLMResponse:
     usage: Optional[dict] = None
     cost: float = 0.0
     reasoning_content: Optional[str] = None
+    reasoning_details: list[dict] = field(default_factory=list)
     response_items: list[dict] = field(default_factory=list)
     finish_reason: Optional[str] = None
     response_id: Optional[str] = None
@@ -737,7 +781,7 @@ class LLMClient:
                 "max_tokens": self.max_tokens,
                 "stream": True,
                 "tool_choice": tool_choice or ("auto" if tools else None),
-                "messages": openai_messages,
+                "messages": _messages_for_event(openai_messages),
                 "tools": self._convert_tools_to_openai_format(tools) if tools else [],
             },
             model_call_id=model_call_id,
@@ -747,6 +791,7 @@ class LLMClient:
             stream = None
             content_parts: list[str] = []
             reasoning_parts: list[str] = []
+            reasoning_details: list[dict] = []
             tool_call_acc: dict[int, dict] = {}
 
             def record_failure(exc: BaseException, retryable: bool) -> None:
@@ -916,6 +961,22 @@ class LLMClient:
                         if on_chunk:
                             on_chunk("reasoning", rc)
 
+                    # OpenRouter emits one or more normalized reasoning blocks
+                    # per streaming chunk. Its contract is to concatenate the
+                    # blocks in order and replay the complete sequence on the
+                    # assistant message in the next request.
+                    detail_chunks = getattr(delta, "reasoning_details", None)
+                    if detail_chunks:
+                        for detail in detail_chunks:
+                            if isinstance(detail, dict):
+                                dumped = detail
+                            elif hasattr(detail, "model_dump"):
+                                dumped = detail.model_dump(exclude_none=True)
+                            else:
+                                dumped = dict(vars(detail))
+                            reasoning_details.append(dumped)
+                        progressed = True
+
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
                             idx = tc_delta.index
@@ -1033,6 +1094,7 @@ class LLMClient:
                         if self._resolved and self._resolved.auth_type == "oauth"
                         else []
                     ),
+                    reasoning_details=reasoning_details,
                 )
                 llm_response.reasoning_content = reasoning_content
                 self._event(

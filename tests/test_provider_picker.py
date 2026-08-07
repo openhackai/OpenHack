@@ -2,7 +2,7 @@ import asyncio
 
 from prompt_toolkit.buffer import Buffer
 
-from openhack import providers
+from openhack import model_catalog, providers
 from openhack.tui import OpenHackApp, _SLASH_COMMANDS
 
 
@@ -52,10 +52,10 @@ def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
     monkeypatch.setattr(
         providers,
         "provider_models",
-        lambda name: {
+        lambda name, live_models=None: {
             "openhack": [
-                {"id": "grok-4.5", "label": "Grok 4.5", "desc": ""},
-                {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": ""},
+                {"id": "grok-4.5", "label": "Grok 4.5", "desc": "", "family": "Grok", "tab": "openhack"},
+                {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": "", "family": "GPT-5.6", "tab": "openai"},
             ],
             "openai": [
                 {"id": "gpt-a", "label": "GPT A", "desc": ""},
@@ -68,14 +68,94 @@ def test_model_picker_groups_all_connected_provider_catalogs(monkeypatch):
 
     assert app.mode == "models"
     assert app.previous_mode == "landing"
+    assert app._model_tabs == [
+        {"id": "openhack", "label": "OpenHack"},
+        {"id": "openai", "label": "OpenAI"},
+    ]
+    assert app._model_tab == "openai"
     assert [(model["section"], model["id"]) for model in app.model_index] == [
-        ("Recent", "gpt-a"),
-        ("Recent", "grok-4.5"),
-        ("OpenHack", "grok-4.5"),
-        ("OpenAI models served by OpenHack", "gpt-5.6-luna"),
+        ("GPT-5.6", "gpt-5.6-luna"),
         ("OpenAI", "gpt-a"),
         ("OpenAI", "gpt-b"),
     ]
+    assert app.model_selected == 1
+
+    app._cycle_model_tab(-1)
+    assert app._model_tab == "openhack"
+    assert [(model["section"], model["id"]) for model in app.model_index] == [
+        ("Grok", "grok-4.5"),
+    ]
+
+
+def test_hosted_tabs_group_families_with_newest_models_first(monkeypatch):
+    app = _searchable_app()
+    app.provider = "openhack"
+    app.model = "deepseek-v4-pro"
+    app._hosted_model_catalog = [
+        {"id": "deepseek-v4-flash-0731", "label": "DeepSeek V4 Flash 0731", "desc": "", "family": "DeepSeek", "created_at": "2026-07-31T00:00:00Z", "tab": "openhack"},
+        {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "desc": "", "family": "DeepSeek", "created_at": "2026-04-24T00:00:00Z", "tab": "openhack"},
+        {"id": "kimi-k3", "label": "Kimi K3", "desc": "", "family": "Kimi", "created_at": "2026-07-16T00:00:00Z", "tab": "openhack"},
+        {"id": "kimi-k2.5", "label": "Kimi K2.5", "desc": "", "family": "Kimi", "created_at": "2026-01-27T00:00:00Z", "tab": "openhack"},
+        {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": "", "family": "GPT", "created_at": "2026-07-09T00:00:00Z", "tab": "openai"},
+        {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "", "family": "GPT", "created_at": "2026-07-08T00:00:00Z", "tab": "openai"},
+    ]
+    monkeypatch.setattr(providers, "list_provider_specs", lambda: [])
+    monkeypatch.setattr(
+        providers, "connected_provider_ids", lambda specs: {"openhack"}
+    )
+    monkeypatch.setattr(
+        providers,
+        "provider_models",
+        lambda name, live_models=None: model_catalog.merge_models(
+            name, live_models
+        ),
+    )
+
+    app._open_model_picker()
+
+    assert [tab["id"] for tab in app._model_tabs] == ["openhack", "openai"]
+    assert app._model_tab == "openhack"
+    assert [
+        (model["section"], model["id"])
+        for model in app.model_index
+    ] == [
+        ("DeepSeek", "deepseek-v4-flash-0731"),
+        ("DeepSeek", "deepseek-v4-pro"),
+        ("Kimi", "kimi-k3"),
+        ("Kimi", "kimi-k2.5"),
+    ]
+    assert app.model_selected == 1
+
+    app._cycle_model_tab(+1)
+    assert {model["section"] for model in app.model_index} == {"GPT"}
+    assert [model["id"] for model in app.model_index] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+    ]
+
+
+def test_models_command_refreshes_hosted_catalog_from_inference(monkeypatch):
+    app = _searchable_app()
+    opened = []
+    live = [{
+        "id": "deployed-only",
+        "label": "Deployed Only",
+        "desc": "",
+        "family": "Test",
+        "created_at": "2026-08-06T00:00:00Z",
+        "tab": "openhack",
+    }]
+    monkeypatch.setattr(providers, "is_connected", lambda name: name == "openhack")
+    monkeypatch.setattr(
+        "openhack.agents.llm.fetch_available_model_catalog",
+        lambda *args: live,
+    )
+    app._open_model_picker = lambda: opened.append(True)
+
+    asyncio.run(app._cmd_models())
+
+    assert app._hosted_model_catalog == live
+    assert opened == [True]
 
 
 def _searchable_app():
@@ -94,6 +174,9 @@ def _searchable_app():
     app.provider_selected = 0
     app._model_query = ""
     app._model_all = []
+    app._model_tabs = []
+    app._model_tab = "openhack"
+    app._hosted_model_catalog = None
     app.model_index = []
     app.model_selected = 0
     app.input_buffer = Buffer(multiline=False)
@@ -280,6 +363,7 @@ def test_tip_rotation_includes_context_and_avoids_immediate_repeat(monkeypatch):
     app.shells = type("Shells", (), {"list": lambda self: []})()
     app._tip_index = -1
     app._tip_text = ""
+    monkeypatch.setattr("openhack.tui.settings.fast_mode", False)
     monkeypatch.setattr(providers, "is_connected", lambda name: True)
 
     candidates = app._tip_candidates()
@@ -311,6 +395,7 @@ def test_model_search_filters_large_provider_catalog():
         },
     ]
     app.model_index = list(app._model_all)
+    app._model_tab = "anthropic"
     app._model_query = "sonet"
 
     app._filter_model_index()
@@ -374,7 +459,9 @@ def test_model_picker_hides_openhack_without_openhack_credentials(monkeypatch):
     monkeypatch.setattr(
         providers,
         "provider_models",
-        lambda name: [{"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": ""}],
+        lambda name, live_models=None: [
+            {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": ""}
+        ],
     )
     monkeypatch.setattr("openhack.tui.load_user_config", lambda: {})
 

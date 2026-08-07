@@ -15,7 +15,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,52 +26,15 @@ _MEMORY_CATALOG: Optional[dict[str, Any]] = None
 _MEMORY_CACHE_PATH: Optional[Path] = None
 _MEMORY_LOCK = threading.Lock()
 
-# Preserve the product's existing ranking.  These models always float to the
-# top when a provider offers them.
-PREFERRED_MODEL_IDS = (
-    "glm-5.2",
-    "grok-4.5",
-    "kimi-k2.5",
-    "gemma-4-31b",
-    "gpt-oss-120b",
-    "deepseek-v3.2",
-    "minimax-m2.5",
-    "gemini-3-flash",
-    "nemotron-3-super",
-)
-
-OPENHACK_OPENAI_MODEL_IDS = frozenset({
-    "gpt-5.6-luna",
-    "gpt-5.6-luna-pro",
-    "gpt-5.6-terra",
-    "gpt-5.6-terra-pro",
-    "gpt-5.6-sol",
-    "gpt-5.6-sol-pro",
-})
+# Hosted OpenHack models deliberately are not bundled in the CLI. The deployed
+# inference service owns that catalog and returns its metadata from /v1/models.
+# This prevents a newer terminal from advertising routes that have not actually
+# been deployed to inference yet.
 
 # These third-party plans are intentionally not OpenHack providers. Keep the
 # exclusion at the catalog boundary so cached or refreshed Models.dev data
 # cannot silently add them back.
 EXCLUDED_PROVIDER_IDS = frozenset({"opencode", "opencode-go"})
-
-OPENHACK_MODELS = (
-    ("glm-5.2", "GLM 5.2", "Recommended · best balance for agentic security work"),
-    ("grok-4.5", "Grok 4.5", "Deep exploitation · strongest for difficult attack chains"),
-    ("kimi-k2.5", "Kimi K2.5", "Multimodal security analysis by Moonshot AI"),
-    ("gemma-4-31b", "Gemma 4 31B", "Open-weight model by Google"),
-    ("gpt-oss-120b", "GPT-OSS 120B", "Open-weight reasoning model by OpenAI"),
-    ("deepseek-v3.2", "DeepSeek V3.2", "Long-context reasoning and tool use"),
-    ("minimax-m2.5", "MiniMax M2.5", "Efficient agentic reasoning and coding"),
-    ("gemini-3-flash", "Gemini 3 Flash", "Fast, long-context model by Google"),
-    ("nemotron-3-super", "Nemotron 3 Super", "Open agentic model by NVIDIA"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna", "Fastest GPT-5.6 tier · served by OpenHack"),
-    ("gpt-5.6-luna-pro", "GPT-5.6 Luna Pro", "Fast GPT-5.6 Pro tier · served by OpenHack"),
-    ("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced GPT-5.6 tier · served by OpenHack"),
-    ("gpt-5.6-terra-pro", "GPT-5.6 Terra Pro", "Balanced GPT-5.6 Pro tier · served by OpenHack"),
-    ("gpt-5.6-sol", "GPT-5.6 Sol", "Frontier GPT-5.6 tier · served by OpenHack"),
-    ("gpt-5.6-sol-pro", "GPT-5.6 Sol Pro", "Highest-capability GPT-5.6 tier · served by OpenHack"),
-)
-
 
 @dataclass(frozen=True)
 class CatalogProvider:
@@ -243,39 +206,48 @@ def discover_compatible_providers(
 
 
 def rank_model_ids(ids: Iterable[str]) -> list[str]:
-    """Deduplicate model IDs while keeping OpenHack's established top ranking."""
-    unique = list(dict.fromkeys(str(model_id) for model_id in ids if model_id))
-    rank = {model_id: index for index, model_id in enumerate(PREFERRED_MODEL_IDS)}
-    original = {model_id: index for index, model_id in enumerate(unique)}
-    return sorted(
-        unique,
-        key=lambda model_id: (
-            0 if model_id in rank else 1,
-            rank.get(model_id, original[model_id]),
-        ),
-    )
+    """Deduplicate IDs while preserving the provider's authoritative order."""
+    return list(dict.fromkeys(str(model_id) for model_id in ids if model_id))
 
 
 def bundled_models(provider_id: str) -> list[dict[str, str]]:
     if provider_id == "openhack":
-        return [
-            {"id": model_id, "label": label, "desc": desc}
-            for model_id, label, desc in OPENHACK_MODELS
-        ]
+        return []
     return models_from_models_dev(provider_id)
 
 
 def merge_models(
     provider_id: str,
-    live_ids: Optional[Iterable[str]] = None,
+    live_models: Optional[Iterable[str | Mapping[str, Any]]] = None,
 ) -> list[dict[str, str]]:
-    """Merge live model IDs with catalog metadata and rank the result."""
+    """Merge provider results without inventing hosted OpenHack entries."""
     bundled = bundled_models(provider_id)
     metadata = {entry["id"]: entry for entry in bundled}
-    ids = list(live_ids or []) or list(metadata)
-    if not ids:
+    raw_models = list(live_models or [])
+    if not raw_models:
+        return bundled
+
+    merged: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_models:
+        if isinstance(raw, Mapping):
+            model_id = str(raw.get("id") or "")
+            live = {
+                str(key): str(value)
+                for key, value in raw.items()
+                if value is not None
+            }
+        else:
+            model_id = str(raw)
+            live = {"id": model_id}
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        base = metadata.get(
+            model_id,
+            {"id": model_id, "label": model_id, "desc": ""},
+        )
+        merged.append({**base, **live, "id": model_id})
+    if not merged:
         return []
-    return [
-        metadata.get(model_id, {"id": model_id, "label": model_id, "desc": ""})
-        for model_id in rank_model_ids(ids)
-    ]
+    return merged

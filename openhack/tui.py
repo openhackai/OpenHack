@@ -1667,6 +1667,9 @@ class OpenHackApp:
         self.model_selected: int = 0
         self._model_all: list[dict] = []
         self._model_query: str = ""
+        self._model_tabs: list[dict] = []
+        self._model_tab: str = "openhack"
+        self._hosted_model_catalog: Optional[list[dict]] = None
         self.provider_index: list[dict] = []
         self.provider_selected: int = 0
         self._provider_all: list[dict] = []
@@ -2198,6 +2201,16 @@ class OpenHackApp:
                 self.model_selected = min(len(self.model_index) - 1, self.model_selected + 1)
                 self._invalidate()
 
+        @kb.add("tab", filter=Condition(_in_models), eager=True)
+        @kb.add("right", filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_next_tab(event):
+            self._cycle_model_tab(+1)
+
+        @kb.add("s-tab", filter=Condition(_in_models), eager=True)
+        @kb.add("left", filter=Condition(lambda: _in_models() and _input_empty()))
+        def _m_previous_tab(event):
+            self._cycle_model_tab(-1)
+
         @kb.add("enter", filter=Condition(_in_models))
         def _m_enter(event):
             self._select_model_from_picker()
@@ -2466,6 +2479,8 @@ class OpenHackApp:
             "picker.title": f"bg:{OH_ELEM} bold {OH_TEXT}",
             "picker.meta": f"bg:{OH_ELEM} {OH_MUTED}",
             "picker.section": f"bg:{OH_ELEM} bold {OH_CYAN}",
+            "picker.tab": f"bg:{OH_ELEM} {OH_MUTED}",
+            "picker.tab.selected": f"bg:{OH_ELEM} bold {OH_PRIMARY}",
             "picker.row": f"bg:{OH_ELEM} {OH_TEXT}",
             "picker.row.selected": f"bg:{OH_ORANGE} {OH_BG}",
             "picker.search": f"bg:{OH_ELEM} {OH_TEXT}",
@@ -3730,7 +3745,19 @@ class OpenHackApp:
         ])
 
     def _build_model_container(self) -> HSplit:
-        """Centered, grouped model picker for every connected provider."""
+        """Centered, tabbed model picker grouped by model family."""
+
+        def tabs_text():
+            out: list[tuple[str, str]] = [("class:picker.frame", "  ")]
+            for tab in self._model_tabs:
+                style = (
+                    "class:picker.tab.selected"
+                    if tab["id"] == self._model_tab
+                    else "class:picker.tab"
+                )
+                out.append((style, f"[{tab['label']}]"))
+                out.append(("class:picker.frame", "  "))
+            return out
 
         def models_text():
             out: list[tuple[str, str]] = []
@@ -3814,7 +3841,7 @@ class OpenHackApp:
                 lambda: [
                     ("class:picker.row", "  Connect provider"),
                     ("class:picker.meta", "  ctrl+a"),
-                    ("class:picker.meta", "    ↑↓ navigate · enter select"),
+                    ("class:picker.meta", "    tab switch · ↑↓ navigate · enter"),
                 ]
             ),
             height=1,
@@ -3823,6 +3850,7 @@ class OpenHackApp:
             [
                 Window(height=1, style="class:picker.frame"),
                 header,
+                Window(FormattedTextControl(tabs_text), height=1),
                 Window(height=1, style="class:picker.frame"),
                 VSplit([
                     Window(width=2, style="class:picker.frame"),
@@ -4518,7 +4546,7 @@ class OpenHackApp:
         elif cmd == "/disconnect":
             self._cmd_disconnect(arg)
         elif cmd == "/models":
-            self._cmd_models(arg)
+            await self._cmd_models(arg)
         elif cmd == "/fast":
             self._cmd_fast(arg)
         elif cmd == "/tips":
@@ -4863,7 +4891,25 @@ class OpenHackApp:
             save_user_config({"provider": self.provider, "model": self.model})
         self.last_status_line = f"disconnected {provider_id}"
 
-    def _cmd_models(self, arg: str = "") -> None:
+    async def _cmd_models(self, arg: str = "") -> None:
+        from openhack import providers as provider_registry
+        from openhack.agents.llm import fetch_available_model_catalog
+
+        if provider_registry.is_connected("openhack"):
+            self.last_status_line = "refreshing models from OpenHack inference…"
+            self._invalidate()
+            catalog = await asyncio.to_thread(
+                fetch_available_model_catalog,
+                settings.openhack_api_key,
+                settings.openhack_base_url,
+            )
+            if catalog is None:
+                if self._hosted_model_catalog is None:
+                    self.last_status_line = "could not load models from OpenHack inference"
+                    self._invalidate()
+                    return
+            else:
+                self._hosted_model_catalog = catalog
         self._open_model_picker()
         if arg.strip():
             self.input_buffer.text = arg.strip()
@@ -5377,21 +5423,36 @@ class OpenHackApp:
         asyncio.create_task(self._cmd_connect(provider_id))
 
     def _open_model_picker(self) -> None:
-        """Show all models from all connected providers in one grouped popup."""
+        """Show connected models in provider tabs and family sections."""
         self._model_query = ""
         self._model_all = self._connected_model_entries()
         if not self._model_all:
             self.last_status_line = "no connected providers · use /connect"
             return
-        self.model_index = list(self._model_all)
-        self.model_selected = next(
+        self._model_tabs = []
+        seen_tabs = set()
+        for model in self._model_all:
+            if model["tab"] in seen_tabs:
+                continue
+            seen_tabs.add(model["tab"])
+            self._model_tabs.append({
+                "id": model["tab"],
+                "label": model["tab_label"],
+            })
+        current = next(
             (
-                index
-                for index, model in enumerate(self.model_index)
-                if model.get("recent")
+                model for model in self._model_all
+                if (model["provider"], model["id"])
+                == (self.provider, self.model)
             ),
-            0,
+            None,
         )
+        self._model_tab = (
+            current["tab"] if current else self._model_tabs[0]["id"]
+        )
+        self.model_index = []
+        self.model_selected = 0
+        self._filter_model_index()
         if self.mode not in ("models", "providers"):
             self.previous_mode = self.mode
         self.mode = "models"
@@ -5402,7 +5463,6 @@ class OpenHackApp:
 
     def _connected_model_entries(self) -> list[dict]:
         from openhack import providers as provider_registry
-        from openhack.model_catalog import OPENHACK_OPENAI_MODEL_IDS
 
         specs = provider_registry.list_provider_specs()
         by_id = {spec.name: spec for spec in specs}
@@ -5433,9 +5493,13 @@ class OpenHackApp:
                 if by_id.get(provider_id)
                 else provider_id
             )
-            models = provider_registry.provider_models(provider_id)
+            models = provider_registry.provider_models(
+                provider_id,
+                self._hosted_model_catalog if provider_id == "openhack" else None,
+            )
             if (
-                provider_id == self.provider
+                provider_id != "openhack"
+                and provider_id == self.provider
                 and self.model
                 and not any(model["id"] == self.model for model in models)
             ):
@@ -5447,47 +5511,70 @@ class OpenHackApp:
                         "desc": "Current model",
                     },
                 )
-            entries.extend(
-                {
+            for model in models:
+                model_tab = (
+                    model.get("tab", "openhack")
+                    if provider_id == "openhack"
+                    else provider_id
+                )
+                entries.append({
                     **model,
                     "provider": provider_id,
                     "provider_label": label,
-                    "section": (
-                        "OpenAI models served by OpenHack"
-                        if provider_id == "openhack"
-                        and model["id"] in OPENHACK_OPENAI_MODEL_IDS
+                    "tab": model_tab,
+                    "tab_label": (
+                        "OpenAI" if model_tab == "openai"
+                        else "OpenHack" if provider_id == "openhack"
                         else label
                     ),
+                    "section": model.get("family") or label,
                     "recent": False,
-                }
-                for model in models
-            )
+                })
 
-        lookup = {
-            (entry["provider"], entry["id"]): entry
-            for entry in entries
-        }
-        configured_recents = load_user_config().get("recent_models") or []
-        recent_keys = [(self.provider, self.model)]
-        recent_keys.extend(
-            (str(item.get("provider") or ""), str(item.get("model") or ""))
-            for item in configured_recents
-            if isinstance(item, dict)
+        # Order family sections by their newest release. Model order inside a
+        # family is already newest-first from the catalog and remains stable.
+        tab_order = {"openhack": 0, "openai": 1}
+        family_latest: dict[tuple[str, str], str] = {}
+        for entry in entries:
+            key = (entry["tab"], entry["section"])
+            family_latest[key] = max(
+                family_latest.get(key, ""), entry.get("created_at", "")
+            )
+        family_rank: dict[tuple[str, str], int] = {}
+        for tab in dict.fromkeys(entry["tab"] for entry in entries):
+            families = sorted(
+                (
+                    key for key in family_latest
+                    if key[0] == tab
+                ),
+                key=lambda key: family_latest[key],
+                reverse=True,
+            )
+            family_rank.update({key: index for index, key in enumerate(families)})
+        return sorted(
+            entries,
+            key=lambda entry: (
+                tab_order.get(entry["tab"], 2 + priority.get(entry["provider"], 999)),
+                family_rank[(entry["tab"], entry["section"])],
+            ),
         )
-        recent_rows = []
-        seen = set()
-        for key in recent_keys:
-            if key in seen or key not in lookup:
-                continue
-            seen.add(key)
-            recent_rows.append({
-                **lookup[key],
-                "section": "Recent",
-                "recent": True,
-            })
-            if len(recent_rows) == 5:
-                break
-        return [*recent_rows, *entries]
+
+    def _cycle_model_tab(self, direction: int) -> None:
+        if not self._model_tabs:
+            return
+        current = next(
+            (
+                index for index, tab in enumerate(self._model_tabs)
+                if tab["id"] == self._model_tab
+            ),
+            0,
+        )
+        self._model_tab = self._model_tabs[
+            (current + direction) % len(self._model_tabs)
+        ]["id"]
+        self.model_selected = 0
+        self._filter_model_index()
+        self._invalidate()
 
     def _filter_model_index(self) -> None:
         selected_key = (
@@ -5500,17 +5587,22 @@ class OpenHackApp:
             else (self.provider, self.model)
         )
         query = self._model_query.strip()
+        candidates = [
+            model for model in self._model_all
+            if model.get("tab", model["provider"]) == self._model_tab
+        ]
         if not query:
-            filtered = list(self._model_all)
+            filtered = candidates
         else:
             scored = []
-            for model in self._model_all:
-                if model.get("recent"):
-                    continue
+            for model in candidates:
                 entry = {
                     "id": model["id"],
                     "label": model.get("label", model["id"]),
-                    "hint": model.get("provider_label", ""),
+                    "hint": " ".join((
+                        model.get("provider_label", ""),
+                        model.get("section", ""),
+                    )),
                 }
                 score = self._provider_match_score(entry, query)
                 if score is not None:
@@ -7137,7 +7229,7 @@ class OpenHackApp:
                     {
                         k: v
                         for k, v in redact(m.to_dict()).items()
-                        if k != "reasoning_content"
+                    if k not in {"reasoning_content", "reasoning_details"}
                     }
                     for m in (
                         self.agent.messages

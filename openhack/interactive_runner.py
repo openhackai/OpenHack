@@ -200,7 +200,7 @@ def _persist_run(session, task: str, target: str, status: str, agent=None) -> No
                 {
                     k: v
                     for k, v in redact(m.to_dict()).items()
-                    if k != "reasoning_content"
+                    if k not in {"reasoning_content", "reasoning_details"}
                 }
                 for m in (getattr(agent, "messages", None) or [])
             ],
