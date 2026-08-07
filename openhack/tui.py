@@ -1737,7 +1737,10 @@ class OpenHackApp:
         self._advance_tip()
 
         self.input_buffer = Buffer(
-            multiline=False,
+            # The main composer is an auto-growing, multi-line editor.  Enter
+            # is still bound to submit below; newlines can come from a paste or
+            # be inserted explicitly with Alt/Option+Enter or Ctrl+J.
+            multiline=True,
             completer=OpenHackCompleter(),
             complete_while_typing=True,
             accept_handler=self._on_buffer_accept,
@@ -1866,6 +1869,52 @@ class OpenHackApp:
 
         def _completion_open() -> bool:
             return self.input_buffer.complete_state is not None
+
+        def _main_composer_active() -> bool:
+            return self.mode in {"landing", "scanning", "viewing"}
+
+        def _composer_submit_active() -> bool:
+            # API-key entry also submits through the Buffer accept handler.
+            # Sessions/shells retain their empty-input navigation bindings but
+            # can still dispatch a prompt once the operator starts typing.
+            return (
+                _main_composer_active()
+                or self.mode == "provider_key"
+                or (
+                    self.mode in {"sessions", "shells"}
+                    and bool(self.input_buffer.text)
+                )
+            )
+
+        main_composer_active = Condition(_main_composer_active)
+        composer_submit_active = Condition(_composer_submit_active)
+
+        # A multiline Buffer changes prompt_toolkit's default Enter behavior to
+        # insert a newline.  Keep OpenHack's existing Enter-to-submit contract
+        # and expose deliberate newline keys instead.  Alt/Option+Enter works
+        # in legacy terminals as Escape+Enter; Ctrl+J is the portable fallback.
+        @kb.add(
+            "enter",
+            eager=True,
+            filter=composer_submit_active
+            & ~modal_open
+            & ~Condition(_completion_open),
+        )
+        def _submit_composer(event):
+            event.current_buffer.validate_and_handle()
+
+        @kb.add(
+            "escape",
+            "enter",
+            filter=main_composer_active & ~modal_open,
+        )
+        @kb.add(
+            "c-j",
+            eager=True,
+            filter=main_composer_active & ~modal_open,
+        )
+        def _composer_newline(event):
+            event.current_buffer.insert_text("\n")
 
         @kb.add("escape", eager=True, filter=Condition(_completion_open))
         def _escape_completion(event):
@@ -2626,7 +2675,7 @@ class OpenHackApp:
         return [(self._input_box_style(), "  ")]
 
     def _make_input_window(self) -> Window:
-        """Create the shared buffer window (blue prompt, dim placeholder)."""
+        """Create the shared, auto-growing prompt composer."""
         return Window(
             content=BufferControl(
                 buffer=self.input_buffer,
@@ -2639,7 +2688,11 @@ class OpenHackApp:
                     _PlaceholderProcessor(lambda: "  " + self._placeholder_text()),
                 ],
             ),
-            height=1,
+            # Let BufferControl's preferred height follow both explicit
+            # newlines and wrapped display lines, but cap the composer so a
+            # large paste cannot consume the whole terminal.
+            height=D(min=1, max=6),
+            wrap_lines=True,
             style=self._input_box_style,
         )
 
@@ -2731,6 +2784,7 @@ class OpenHackApp:
             return [
                 ("class:hint.key", "tab"), ("class:hint", " complete    "),
                 ("class:hint.key", "enter"), ("class:hint", " submit    "),
+                ("class:hint.key", "alt+enter"), ("class:hint", " newline    "),
                 ("class:hint.key", "?"), ("class:hint", " help"),
             ]
 
@@ -3570,7 +3624,7 @@ class OpenHackApp:
             # Context-aware: a conversation doesn't need the findings/resize keys.
             if self.is_agent_session:
                 items = [
-                    ("⏎", "send"), ("↑↓", "scroll"),
+                    ("⏎", "send"), ("alt+⏎", "newline"), ("↑↓", "scroll"),
                     ("/clear", "reset"), ("?", "help"),
                 ]
             else:
