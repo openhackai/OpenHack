@@ -246,7 +246,10 @@ def list_providers(*, refresh: bool = False) -> list[str]:
     return ["openhack", *(spec.name for spec in list_provider_specs(refresh=refresh))]
 
 
-def provider_models(name: str, live_ids: Optional[list[str]] = None) -> list[dict[str, str]]:
+def provider_models(
+    name: str,
+    live_models: Optional[list[str | dict[str, str]]] = None,
+) -> list[dict[str, str]]:
     if name == "openai":
         credential = get_credential("openai")
         if (
@@ -255,7 +258,7 @@ def provider_models(name: str, live_ids: Optional[list[str]] = None) -> list[dic
             and credential.get("type") == "oauth"
         ):
             return merge_models(name, list(OPENAI_SUBSCRIPTION_MODELS))
-    return merge_models(name, live_ids)
+    return merge_models(name, live_models)
 
 
 def is_connected(name: str) -> bool:

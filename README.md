@@ -180,8 +180,10 @@ The provider list and model metadata are synchronized from Models.dev and
 cached for one day. OpenHack also has a bundled offline model catalog.
 `/connect` and `/models` use centered, searchable, scrollable pickers;
 provider refresh happens in the background so opening them never waits on the
-network. OpenHack's existing `grok-4.5`, `glm-5.2`, `kimi-k2.5`, and
-`gemma-4-31b` ranking stays at the top whenever those models are available.
+network. The model picker has separate **OpenHack** and **OpenAI** tabs. The
+OpenHack tab groups hosted models by family (DeepSeek, Kimi, GLM, Qwen,
+MiniMax, and others), with at most the five newest routable releases in each
+section. Old selections do not jump above newer releases.
 The first provider screen is curated; choose **Other…** to search the complete
 Models.dev-backed catalog.
 

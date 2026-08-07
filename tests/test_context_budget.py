@@ -12,7 +12,8 @@ import json
 
 import pytest
 
-from openhack.agents.context_manager import ContextWindowManager
+from openhack.model_catalog import bundled_models
+from openhack.agents.context_manager import ContextWindowManager, MODEL_CONTEXT_LIMITS
 from openhack.tools.web import (
     _CONTENT_RESULTS,
     _DEFAULT_RESULTS,
@@ -26,6 +27,24 @@ def _cm():
     return ContextWindowManager(
         context_window_limit=200_000, compaction_threshold=0.8, tool_result_max_lines=200
     )
+
+
+def test_latest_hosted_models_use_their_real_context_tiers():
+    assert MODEL_CONTEXT_LIMITS["kimi-k3"] == 1_000_000
+    assert MODEL_CONTEXT_LIMITS["deepseek-v4-pro"] == 1_000_000
+    assert MODEL_CONTEXT_LIMITS["deepseek-v4-flash-0731"] == 1_000_000
+    assert MODEL_CONTEXT_LIMITS["minimax-m3"] == 524_288
+    assert MODEL_CONTEXT_LIMITS["hy3"] == 262_144
+    assert MODEL_CONTEXT_LIMITS["step-3.7-flash"] == 262_144
+    assert MODEL_CONTEXT_LIMITS["mimo-v2.5-pro"] == 1_048_576
+
+
+def test_every_openhack_family_model_has_an_explicit_context_limit():
+    ids = {
+        model["id"] for model in bundled_models("openhack")
+        if model["tab"] == "openhack"
+    }
+    assert ids - MODEL_CONTEXT_LIMITS.keys() == set()
 
 
 # ------------------------------------------------------------ truncation

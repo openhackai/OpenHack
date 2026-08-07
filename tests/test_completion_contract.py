@@ -48,9 +48,17 @@ def test_text_only_completion_is_kept_in_message_history(tmp_path):
 
 
 def test_interactive_agent_continues_until_finish_task(tmp_path):
+    reasoning_details = [{
+        "type": "reasoning.text",
+        "text": "Need to write the exploit.",
+        "id": "reasoning-1",
+        "format": "openrouter-v1",
+        "index": 0,
+    }]
     llm = _ScriptedLLM([
         LLMResponse(
             content="I understand the exploit. Let me write it.",
+            reasoning_details=reasoning_details,
             finish_reason="stop",
             model_call_id="m1",
         ),
@@ -78,6 +86,7 @@ def test_interactive_agent_continues_until_finish_task(tmp_path):
 
     assert llm.calls == 2
     assert result["response"] == "Exploit written and verified."
+    assert agent.messages[1].reasoning_details == reasoning_details
     assert result["finish_reason"] == "completed"
     assert any(
         e.event_type == "continuation_guard_triggered"

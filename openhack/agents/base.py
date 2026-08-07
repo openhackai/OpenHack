@@ -101,13 +101,7 @@ class BaseAgent(ABC):
 
     def _append_message(self, message: Message, *, source: str) -> None:
         self.messages.append(message)
-        logged_message = message.to_dict()
-        reasoning = logged_message.pop("reasoning_content", None)
-        if reasoning:
-            logged_message["reasoning_characters"] = len(reasoning)
-        response_items = logged_message.pop("response_items", None)
-        if response_items:
-            logged_message["response_item_count"] = len(response_items)
+        logged_message = self._message_for_event(message)
         self.session.record_event(
             "message_appended",
             {
@@ -117,6 +111,21 @@ class BaseAgent(ABC):
             },
             agent=self.name,
         )
+
+    @staticmethod
+    def _message_for_event(message: Message) -> dict:
+        """Describe a message without persisting private reasoning payloads."""
+        logged_message = message.to_dict()
+        reasoning = logged_message.pop("reasoning_content", None)
+        if reasoning:
+            logged_message["reasoning_characters"] = len(reasoning)
+        reasoning_details = logged_message.pop("reasoning_details", None)
+        if reasoning_details:
+            logged_message["reasoning_detail_count"] = len(reasoning_details)
+        response_items = logged_message.pop("response_items", None)
+        if response_items:
+            logged_message["response_item_count"] = len(response_items)
+        return logged_message
 
     def _last_assistant_content(self) -> str:
         for message in reversed(self.messages):
@@ -183,8 +192,12 @@ class BaseAgent(ABC):
         for msg in messages:
             if msg.content:
                 total_chars += len(msg.content)
+            if msg.reasoning_content:
+                total_chars += len(msg.reasoning_content)
             if msg.tool_calls:
                 total_chars += len(json.dumps(msg.tool_calls))
+            if msg.reasoning_details:
+                total_chars += len(json.dumps(msg.reasoning_details))
         return total_chars // 4
 
     def _preflight_compact(self, system_prompt: str) -> None:
@@ -196,7 +209,7 @@ class BaseAgent(ABC):
             logger.warning(
                 f"[{self.name}] Pre-flight: estimated {estimated} tokens vs {limit} limit — compacting"
             )
-            before = [m.to_dict() for m in self.messages]
+            before = [self._message_for_event(m) for m in self.messages]
             self.messages = self.context_manager.compact_messages(self.messages, keep_recent_turns=3)
             self.session.record_event(
                 "context_compacted",
@@ -205,7 +218,7 @@ class BaseAgent(ABC):
                     "estimated_tokens_before": estimated,
                     "limit": limit,
                     "messages_before": before,
-                    "messages_after": [m.to_dict() for m in self.messages],
+                    "messages_after": [self._message_for_event(m) for m in self.messages],
                 },
                 agent=self.name,
             )
@@ -215,7 +228,7 @@ class BaseAgent(ABC):
                 logger.warning(
                     f"[{self.name}] Still {estimated} tokens after normal compaction — emergency compaction"
                 )
-                before = [m.to_dict() for m in self.messages]
+                before = [self._message_for_event(m) for m in self.messages]
                 self.messages = self.context_manager.emergency_compact(self.messages)
                 self.session.record_event(
                     "context_compacted",
@@ -224,7 +237,7 @@ class BaseAgent(ABC):
                         "estimated_tokens_before": estimated,
                         "limit": limit,
                         "messages_before": before,
-                        "messages_after": [m.to_dict() for m in self.messages],
+                        "messages_after": [self._message_for_event(m) for m in self.messages],
                     },
                     agent=self.name,
                 )
@@ -440,6 +453,8 @@ class BaseAgent(ABC):
                 assistant_msg = Message(
                     role="assistant",
                     content=response.content,
+                    reasoning_content=response.reasoning_content,
+                    reasoning_details=response.reasoning_details or None,
                     response_items=response.response_items,
                 )
                 self._append_message(assistant_msg, source="model_text_response")
@@ -505,6 +520,8 @@ class BaseAgent(ABC):
             assistant_msg = Message(
                 role="assistant",
                 content=response.content,
+                reasoning_content=response.reasoning_content,
+                reasoning_details=response.reasoning_details or None,
                 response_items=response.response_items,
                 tool_calls=[
                     {
@@ -708,7 +725,7 @@ class BaseAgent(ABC):
                     return result
 
             if self.context_manager.needs_compaction():
-                before = [m.to_dict() for m in self.messages]
+                before = [self._message_for_event(m) for m in self.messages]
                 self.messages = self.context_manager.compact_messages(self.messages)
                 self.session.record_event(
                     "context_compacted",
@@ -716,7 +733,7 @@ class BaseAgent(ABC):
                         "mode": "usage_threshold",
                         "input_tokens": self.context_manager.last_input_tokens,
                         "messages_before": before,
-                        "messages_after": [m.to_dict() for m in self.messages],
+                        "messages_after": [self._message_for_event(m) for m in self.messages],
                     },
                     agent=self.name,
                 )

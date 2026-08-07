@@ -8,44 +8,34 @@ def test_excluded_plans_have_no_bundled_models():
     assert model_catalog.bundled_models("opencode-go") == []
 
 
-def test_openhack_bundles_all_hosted_model_metadata():
-    models = model_catalog.bundled_models("openhack")
-    assert [model["id"] for model in models] == [
-        "glm-5.2",
-        "grok-4.5",
-        "kimi-k2.5",
-        "gemma-4-31b",
-        "gpt-oss-120b",
-        "deepseek-v3.2",
-        "minimax-m2.5",
-        "gemini-3-flash",
-        "nemotron-3-super",
-        "gpt-5.6-luna",
-        "gpt-5.6-luna-pro",
-        "gpt-5.6-terra",
-        "gpt-5.6-terra-pro",
-        "gpt-5.6-sol",
-        "gpt-5.6-sol-pro",
-    ]
+def test_openhack_models_are_not_hardcoded_in_terminal():
+    assert model_catalog.bundled_models("openhack") == []
 
 
-def test_existing_openhack_models_keep_top_rank():
-    ranked = model_catalog.rank_model_ids(
-        ["other", "kimi-k2.5", "grok-4.5", "glm-5.2", "last"]
-    )
-    assert ranked == ["glm-5.2", "grok-4.5", "kimi-k2.5", "other", "last"]
-
-
-def test_merge_uses_live_ids_but_catalog_labels():
+def test_merge_uses_live_catalog_metadata_and_order():
     merged = model_catalog.merge_models(
-        "openhack", ["unknown-live", "glm-5.2", "grok-4.5"]
+        "openhack",
+        [
+            {
+                "id": "deepseek-live",
+                "label": "DeepSeek Live",
+                "desc": "Deployed now",
+                "family": "DeepSeek",
+                "created_at": "2026-08-06T00:00:00Z",
+                "tab": "openhack",
+            },
+            {
+                "id": "gpt-live",
+                "label": "GPT Live",
+                "family": "GPT",
+                "tab": "openai",
+            },
+        ],
     )
-    assert [row["id"] for row in merged] == [
-        "glm-5.2",
-        "grok-4.5",
-        "unknown-live",
-    ]
-    assert merged[0]["label"] == "GLM 5.2"
+    assert [row["id"] for row in merged] == ["deepseek-live", "gpt-live"]
+    assert merged[0]["family"] == "DeepSeek"
+    assert merged[0]["desc"] == "Deployed now"
+    assert merged[1]["tab"] == "openai"
 
 
 def test_models_dev_cache_and_compatible_provider_discovery(monkeypatch, tmp_path):

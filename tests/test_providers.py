@@ -255,6 +255,35 @@ def test_fetch_available_models_parses(monkeypatch):
     assert models == ["glm-5.2", "kimi-k2.5", "gemma-4-31b"]
 
 
+def test_fetch_available_model_catalog_preserves_server_metadata(monkeypatch):
+    import openhack.agents.llm as llm
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return b'''{"object":"list","data":[{
+                "id":"deepseek-v4-flash",
+                "label":"DeepSeek V4 Flash",
+                "description":"Fast agent model",
+                "family":"DeepSeek",
+                "created_at":"2026-04-24T03:17:46Z",
+                "tab":"openhack"
+            }]}'''
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+    models = llm.fetch_available_model_catalog(api_key="sk-test")
+
+    assert models == [{
+        "id": "deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "desc": "Fast agent model",
+        "family": "DeepSeek",
+        "created_at": "2026-04-24T03:17:46Z",
+        "tab": "openhack",
+    }]
+
+
 def test_fetch_available_models_none_without_key(monkeypatch):
     import openhack.agents.llm as llm
     # No explicit key and no configured key -> None (don't hit the network).

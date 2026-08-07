@@ -71,14 +71,7 @@ PROVIDERS = [
         "key_field": "openhack_api_key",
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
-        "models": [
-            ("glm-5.2", "GLM 5.2", "Recommended · best balance for agentic security work"),
-            ("grok-4.5", "Grok 4.5", "Deep exploitation · difficult attack chains"),
-            ("gemma-4-31b", "Gemma 4 31B", "Fast and open-weight"),
-            ("kimi-k2.5", "Kimi K2.5", "Alternative · multimodal security analysis"),
-            # mistral-large-2512 removed: no permitted inference provider
-            # currently serves it, so it cannot be routed.
-        ],
+        "models": [],
         "default_model": "glm-5.2",
     },
 ]
@@ -313,14 +306,21 @@ async def _pick_model_async(
 ) -> str:
     """Let the user pick from the models the API actually serves.
 
-    Fetches the live model list from GET /v1/models; falls back to the
-    provider's hardcoded list if the call fails. Returns the chosen model id.
+    Fetches the live model catalog from GET /v1/models. Returns the selected
+    model ID, or the configured default if inference cannot be reached.
     """
-    from openhack.agents.llm import fetch_available_models
+    from openhack.agents.llm import fetch_available_model_catalog
 
     described = {mid: (label, desc) for mid, label, desc in provider["models"]}
-    fetched = fetch_available_models(api_key=api_key, base_url=base_url)
-    model_ids = fetched or [m[0] for m in provider["models"]]
+    fetched = fetch_available_model_catalog(api_key=api_key, base_url=base_url)
+    model_ids = [model["id"] for model in fetched] if fetched else [
+        m[0] for m in provider["models"]
+    ]
+    if fetched:
+        described.update({
+            model["id"]: (model["label"], model["desc"])
+            for model in fetched
+        })
 
     items: list[tuple[str, str, str]] = []
     for mid in model_ids:
