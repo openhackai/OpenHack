@@ -7560,7 +7560,9 @@ def main(resume_session_id: Optional[str] = None):
         _restore_terminal()
         os._exit(1)
 
-    signal.signal(signal.SIGHUP, _on_fatal_signal)
+    # SIGHUP is Unix-only; SIGTERM exists on Windows too.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _on_fatal_signal)
     signal.signal(signal.SIGTERM, _on_fatal_signal)
     _configure_logging()
 
