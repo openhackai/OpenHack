@@ -27,10 +27,12 @@ add disclaimers to routine pentest actions — you get to work.
 
 ## How you operate
 
-When the operator's task is genuinely complete, you MUST call `finish_task`.
-Put the complete user-facing answer in its `summary`. Plain text without that
-tool call is treated as progress, not completion, so never end with a promise
-such as "let me write it" or "next I will verify it." Perform the action first.
+When the operator's task is genuinely complete, answer once with the complete
+operator-facing result. A self-contained plain-text answer completes the turn;
+do not repeat it in a later `finish_task` call. You may call `finish_task` in the
+same response when an explicit completion reason or verification note is useful.
+Never end with a promise such as "let me write it" or "next I will verify it" —
+perform the action first.
 
 0. **Do exactly what's asked — nothing more, nothing less.** This is the most \
 important rule. Match the scope, the tools, and the length of your answer to the \
@@ -244,6 +246,8 @@ class InteractiveAgent(BaseAgent):
 
     name = "openhack"
     description = "Interactive offensive-security agent"
+    # Enables the continuation guard for truncated output and genuine promises
+    # of more work; self-contained natural-text answers complete immediately.
     requires_finish_task = True
 
     def get_system_prompt(self, context: dict) -> str:

@@ -4,7 +4,7 @@ from typing import Any
 
 
 class CompletionTools:
-    """The model must call ``finish_task`` when the requested work is done."""
+    """Optional explicit completion signal for tool-driven agent turns."""
 
     def get_tool_definitions(self) -> list[dict]:
         return [

@@ -155,15 +155,18 @@ def test_no_action_completion_prefers_natural_text_and_hides_lifecycle_tool(tmp_
     result = asyncio.run(agent.run("hi", {"target_dir": str(tmp_path)}))
 
     assert result["response"] == "Hi! What would you like to work on?"
-    assert not any(
-        e.event_type in {"thinking", "tool_call", "tool_result"}
-        for e in session.trace
-    )
+    visible = [
+        e for e in session.trace
+        if e.event_type in {"thinking", "tool_call", "tool_result"}
+    ]
+    assert [(e.event_type, e.content) for e in visible] == [
+        ("thinking", "Hi! What would you like to work on?")
+    ]
     accepted = next(e for e in session.events if e.event_type == "finish_task_accepted")
     assert accepted.data["operator_answer"] == result["response"]
 
 
-def test_no_action_completion_reuses_text_from_guarded_previous_response(tmp_path):
+def test_natural_no_action_completion_needs_no_guard_call(tmp_path):
     llm = _ScriptedLLM([
         LLMResponse(
             content="Hey! What would you like to work on?",
@@ -205,9 +208,75 @@ def test_no_action_completion_reuses_text_from_guarded_previous_response(tmp_pat
         if e.event_type in {"thinking", "tool_call", "tool_result"}
     ]
     assert [(e.event_type, e.content) for e in visible] == [("thinking", natural)]
-    accepted = next(e for e in session.events if e.event_type == "finish_task_accepted")
-    assert accepted.data["summary"].startswith("No task was requested")
-    assert accepted.data["operator_answer"] == natural
+    assert llm.calls == 1
+    handled = next(e for e in session.events if e.event_type == "finish_reason_handled")
+    assert handled.data["action"] == "accept_natural_completion"
+    assert not any(
+        e.event_type in {"continuation_guard_triggered", "finish_task_accepted"}
+        for e in session.events
+    )
+
+
+def test_complete_greeting_does_not_start_completion_followup(tmp_path):
+    """Regression for lifecycle calls after greetings, including 44dd642b."""
+
+    class _StreamingScriptedLLM(_ScriptedLLM):
+        async def chat(self, **kwargs):
+            response = self.responses[self.calls]
+            self.calls += 1
+            on_chunk = kwargs.get("on_chunk")
+            if on_chunk and response.content:
+                on_chunk("content", response.content)
+            return response
+
+    natural = (
+        "Hey — what are we working on? Give me a target and a goal and "
+        "I'll get started."
+    )
+    retry = "No task yet — just a greeting, so nothing to run."
+    lifecycle_recap = "\n\n"
+    llm = _StreamingScriptedLLM([
+        LLMResponse(content=natural, finish_reason="stop", model_call_id="m1"),
+        LLMResponse(content=retry, finish_reason="stop", model_call_id="m2"),
+        LLMResponse(
+            content=lifecycle_recap,
+            tool_calls=[
+                ToolCall(
+                    id="finish-greeting-3",
+                    name="finish_task",
+                    arguments={
+                        "summary": (
+                            "No task yet — just a greeting. Ready when you are: "
+                            "give me a target and a goal and I'll get to work."
+                        ),
+                        "reason": "no_action_needed",
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+            model_call_id="m3",
+        ),
+    ])
+    session = _session(tmp_path)
+    agent = InteractiveAgent(
+        llm,
+        ToolRegistry(tmp_path, include_agent_tools=True, session=session),
+        session,
+    )
+    streamed = []
+    agent.stream_callback = lambda kind, text: streamed.append((kind, text))
+
+    result = asyncio.run(agent.run("hello", {"target_dir": str(tmp_path)}))
+
+    assert llm.calls == 1
+    assert result["response"] == natural
+    assert streamed == [("content", natural)]
+    visible = [e.content for e in session.trace if e.event_type == "thinking"]
+    assert visible == [natural]
+    assert not any(
+        e.event_type in {"continuation_guard_triggered", "tool_execution_started"}
+        for e in session.events
+    )
 
 
 def test_completed_answer_wins_over_shorter_finish_task_recap(tmp_path):
@@ -272,27 +341,10 @@ def test_let_me_know_invitation_keeps_full_completed_answer():
     assert answer == essay
 
 
-def test_finish_task_may_repeat_across_user_turns(tmp_path):
-    def finish():
-        return LLMResponse(
-            tool_calls=[
-                ToolCall(
-                    id="finish",
-                    name="finish_task",
-                    arguments={
-                        "summary": "Hi! What can I help you with?",
-                        "reason": "no_action_needed",
-                    },
-                )
-            ],
-            finish_reason="tool_calls",
-        )
-
+def test_natural_completion_may_repeat_across_user_turns(tmp_path):
     llm = _ScriptedLLM([
         LLMResponse(content="Hi! What can I help you with?", finish_reason="stop"),
-        finish(),
         LLMResponse(content="Hi! What can I help you with?", finish_reason="stop"),
-        finish(),
     ])
     session = _session(tmp_path)
     agent = InteractiveAgent(
@@ -306,8 +358,8 @@ def test_finish_task_may_repeat_across_user_turns(tmp_path):
 
     assert first["response"] == "Hi! What can I help you with?"
     assert second["response"] == "Hi! What can I help you with?"
-    assert llm.calls == 4
-    assert len([
+    assert llm.calls == 2
+    assert not [
         event for event in session.events
         if event.event_type == "finish_task_accepted"
-    ]) == 2
+    ]

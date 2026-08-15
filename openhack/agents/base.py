@@ -72,6 +72,18 @@ class BaseAgent(ABC):
             except Exception:
                 pass
 
+    def _stream_guard_chunk(self, kind: str, delta: str) -> None:
+        """Hide prose generated only in response to the completion guard.
+
+        A provider may ignore the guard more than once and emit another prose
+        answer before it finally calls ``finish_task``. Those retries are part
+        of one logical assistant turn, not additional operator-facing messages.
+        Keep reasoning/tool activity live, but do not stream the guard-generated
+        prose itself; the initial response or selected final answer remains.
+        """
+        if kind != "content":
+            self._stream_chunk(kind, delta)
+
     def _inject_pending_instructions(self) -> None:
         """Pull any new user instructions from the session and append them to messages."""
         new, version = self.session.get_new_instructions(self._instructions_watermark)
@@ -137,11 +149,22 @@ class BaseAgent(ABC):
     def _looks_like_unfinished_promise(text: str) -> bool:
         """Whether the tail says work will happen after this response."""
         tail = " ".join((text or "").lower().split())[-280:]
-        # "Let me know" is an invitation to the operator, not a promise that
-        # more agent work is still pending.  Treating it as unfinished made a
-        # complete streamed answer disappear in favour of finish_task's short
-        # lifecycle recap (session f7a7aab7).
-        promise_tail = tail.replace("let me know", "")
+        # A conditional handoff is complete: the agent is waiting on the
+        # operator, not promising autonomous work after this response. Treating
+        # "give me a target and I'll get started" as unfinished caused a second
+        # completion-only model call after greetings (session 44dd642b).
+        if any(marker in tail for marker in (
+            "let me know",
+            "give me a target",
+            "give me the target",
+            "tell me what",
+            "tell me which",
+            "send me the",
+            "when you're ready",
+            "when you are ready",
+        )):
+            return False
+        promise_tail = tail
         return any(marker in promise_tail for marker in (
             "let me ",
             "i'll ",
@@ -168,11 +191,28 @@ class BaseAgent(ABC):
         substantive completed answer, but never let a forward-looking promise
         masquerade as completion.
         """
-        natural = (response_content or "").strip() or (guarded_content or "").strip()
-        if not natural or cls._looks_like_unfinished_promise(natural):
+        response = (response_content or "").strip()
+        guarded = (guarded_content or "").strip()
+        # For greetings and clarifying questions, the first natural response is
+        # normally the useful answer; later guard retries tend to be robotic
+        # lifecycle recaps. For completed work, prefer prose deliberately sent
+        # alongside finish_task, then fall back to the pre-guard answer.
+        natural = (
+            guarded or response
+            if reason in {"no_action_needed", "needs_user_input"}
+            else response or guarded
+        )
+        if not natural:
             return summary
+        # These reasons explicitly hand control back to the operator. Phrases
+        # such as "give me a target and I'll get started" are conditional
+        # invitations, not promises of autonomous follow-up work. Applying the
+        # generic promise heuristic here caused the finish_task recap to render
+        # as a second reply after an otherwise complete greeting (30c7d2cf).
         if reason in {"no_action_needed", "needs_user_input"}:
             return natural
+        if cls._looks_like_unfinished_promise(natural):
+            return summary
         if len(natural) > len(summary) * 1.2:
             return natural
         return summary
@@ -356,6 +396,9 @@ class BaseAgent(ABC):
         # response; retain the prose so a no-op greeting does not acquire a
         # second, robotic lifecycle summary.
         guarded_text_completion: Optional[str] = None
+        # Content from a model call made solely because of the hidden completion
+        # guard must not look like a second assistant response in the TUI.
+        guard_followup = False
 
         while iteration < max_iterations:
             if self.session.cancelled:
@@ -387,13 +430,20 @@ class BaseAgent(ABC):
             # Pin the durable action-ledger into the system prompt every turn so
             # the agent always sees what it already tried, even after compaction.
             effective_system = system_prompt + self._ledger_block()
+            is_guard_followup = guard_followup
+            guard_followup = False
+            stream_chunk = (
+                self._stream_guard_chunk
+                if is_guard_followup
+                else self._stream_chunk
+            )
 
             try:
                 response = await self.llm.chat(
                     messages=self.messages,
                     tools=self.get_tools(),
                     system=effective_system,
-                    on_chunk=self._stream_chunk,
+                    on_chunk=stream_chunk,
                 )
             except openai.BadRequestError as e:
                 err_msg = str(e)
@@ -436,7 +486,7 @@ class BaseAgent(ABC):
                 tool_call.name == "finish_task"
                 for tool_call in response.tool_calls
             )
-            if response.content and not has_finish_task:
+            if response.content and not has_finish_task and not is_guard_followup:
                 self.session.add_trace(
                     agent=self.name,
                     event_type="thinking",
@@ -459,7 +509,6 @@ class BaseAgent(ABC):
                 )
                 self._append_message(assistant_msg, source="model_text_response")
                 if self.requires_finish_task:
-                    guarded_text_completion = (response.content or "").strip() or None
                     finish_reason = (response.finish_reason or "unknown").lower()
                     if finish_reason in {"content_filter", "safety"}:
                         result = {
@@ -475,9 +524,38 @@ class BaseAgent(ABC):
                         )
                         self.session.finish_turn("failed", result, agent=self.name)
                         return result
+                    natural_completion = (response.content or "").strip()
+                    output_limited = finish_reason in {"length", "max_tokens"}
+                    if (
+                        natural_completion
+                        and not output_limited
+                        and not self._looks_like_unfinished_promise(
+                            natural_completion
+                        )
+                    ):
+                        # A normal stop with a self-contained answer is already
+                        # completion. Requiring a second LLM call merely to emit
+                        # finish_task wasted time/tokens and exposed lifecycle
+                        # spinner/tool noise after the answer (44dd642b).
+                        result = self._parse_final_response(natural_completion)
+                        self.session.record_event(
+                            "finish_reason_handled",
+                            {
+                                "finish_reason": response.finish_reason,
+                                "action": "accept_natural_completion",
+                            },
+                            agent=self.name,
+                            model_call_id=response.model_call_id,
+                        )
+                        self.session.finish_turn(
+                            "completed", result, agent=self.name
+                        )
+                        return result
+                    if guarded_text_completion is None:
+                        guarded_text_completion = natural_completion or None
                     guard_reason = (
                         "output_limit"
-                        if finish_reason in {"length", "max_tokens"}
+                        if output_limited
                         else "missing_finish_task"
                     )
                     guard = (
@@ -486,7 +564,9 @@ class BaseAgent(ABC):
                         "promised. If all requested work is genuinely complete, call "
                         "finish_task with the complete operator-facing answer. If your "
                         "preceding response was already the complete answer, copy it "
-                        "verbatim into summary; do not replace it with a recap."
+                        "verbatim into summary; do not replace it with a recap. Your "
+                        "next response must include finish_task; do not send another "
+                        "prose-only response."
                     )
                     self._append_message(
                         Message(role="user", content=guard),
@@ -503,6 +583,7 @@ class BaseAgent(ABC):
                         agent=self.name,
                         model_call_id=response.model_call_id,
                     )
+                    guard_followup = True
                     continue
                 result = self._parse_final_response(response.content or "")
                 self.session.record_event(
@@ -689,6 +770,24 @@ class BaseAgent(ABC):
                     final["finish_reason"] = result["reason"]
                     if result.get("verification"):
                         final["verification"] = result["verification"]
+                    # The model responses leading up to finish_task are one
+                    # logical turn. Persist the chosen answer once; frontends
+                    # can safely render the trace without reproducing each
+                    # completion-guard retry.
+                    already_traced = any(
+                        entry.event_type == "thinking"
+                        and entry.turn_id == self.session.current_turn_id
+                        and (entry.content or "").strip() == operator_answer
+                        for entry in self.session.trace
+                    )
+                    if operator_answer and not already_traced:
+                        self.session.add_trace(
+                            agent=self.name,
+                            event_type="thinking",
+                            content=operator_answer,
+                            model_call_id=response.model_call_id,
+                            metadata={"final": True},
+                        )
                     self.session.record_event(
                         "finish_task_accepted",
                         {**result, "operator_answer": operator_answer},
