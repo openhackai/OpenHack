@@ -385,10 +385,11 @@ class BaseAgent(ABC):
 
     async def _agent_loop(self) -> dict:
         system_prompt = self._system_prompt
-        # Raised from 50: the real governor is now the progress-aware stop below,
-        # which bails when the agent thrashes and lets it keep going when it's
-        # still gaining signal. Configurable via settings.agent_max_iterations.
-        max_iterations = getattr(settings, "agent_max_iterations", 120)
+        # No iteration cutoff by default. The only governor is the progress-aware
+        # stop below, which bails when the agent thrashes and lets it keep going
+        # while it's still gaining signal. settings.agent_max_iterations is an
+        # opt-in backstop; 0 (the default) means unlimited.
+        max_iterations = getattr(settings, "agent_max_iterations", 0) or 0
         stale_limit = getattr(settings, "agent_stale_turn_limit", 8)
         iteration = 0
         # Natural prose returned immediately before the continuation guard.
@@ -400,7 +401,7 @@ class BaseAgent(ABC):
         # guard must not look like a second assistant response in the TUI.
         guard_followup = False
 
-        while iteration < max_iterations:
+        while max_iterations <= 0 or iteration < max_iterations:
             if self.session.cancelled:
                 break
             # Block here while the session is paused (no-op when running).
@@ -412,7 +413,7 @@ class BaseAgent(ABC):
                 "agent_iteration_started",
                 {
                     "iteration": iteration,
-                    "max_iterations": max_iterations,
+                    "max_iterations": max_iterations if max_iterations > 0 else None,
                     "stale_turns": self._stale_turns,
                     "message_count": len(self.messages),
                     "estimated_input_tokens": self._estimate_tokens(

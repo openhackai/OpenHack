@@ -147,12 +147,14 @@ class Settings(BaseSettings):
     tool_result_max_lines: int = 200
     checkpoint_enabled: bool = True
 
-    # Agentic loop governor. The hard cap is a backstop; the real control is the
-    # progress-aware stop (bail after N consecutive turns with no *novel signal*).
-    # Cap kept modest: solves in the XBOW run all landed well under 50 turns, while
-    # raising it to 120 let near-dup thrash balloon to 2-5M tokens before the stop
-    # (which keys on result novelty, not exact-call repeats) caught it.
-    agent_max_iterations: int = 60
+    # Agentic loop governor. There is no iteration cutoff: a run ends when the
+    # agent calls finish_task, the user cancels, a real error occurs, or the
+    # progress-aware stop fires (N consecutive turns with no *novel signal*).
+    # Counting turns was the wrong governor — it killed productive runs mid-work
+    # (a successful write_file on turn 60) while doing nothing about near-dup
+    # thrash, which is what the novelty-keyed stale stop actually catches.
+    # 0 = unlimited. Set a positive value only to opt into a hard backstop.
+    agent_max_iterations: int = 0
     agent_stale_turn_limit: int = 8
 
     # Scan scoping — exclude paths that are never production web attack surface

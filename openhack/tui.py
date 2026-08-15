@@ -5129,8 +5129,8 @@ class OpenHackApp:
             self.last_status_line = f"target no longer exists: {target}"
             return
         status = (row.get("status") or "").lower()
-        if status not in ("aborted", "failed", "cancelled"):
-            self.last_status_line = f"can only resume aborted/failed scans (this one is {status})"
+        if status not in ("aborted", "failed", "cancelled", "incomplete"):
+            self.last_status_line = f"can only resume interrupted scans (this one is {status})"
             return
         self._close_sessions_overlay()
         self._start_scan(target)
@@ -6653,6 +6653,7 @@ class OpenHackApp:
             self._write_report(session, target_dir, status="running")
             status = "completed"
             result = await agent.run(task, context={"target_dir": target_dir})
+            status = self._agent_result_status(result)
             self._finalize_agent_turn(session, agent, result, plan)
         except asyncio.CancelledError:
             self._commit_interrupted_stream(session, self.agent)
@@ -6830,6 +6831,7 @@ class OpenHackApp:
         try:
             session.add_trace(agent="you", event_type="user", content=task)
             result = await agent.continue_run(task)
+            status = self._agent_result_status(result)
             self._finalize_agent_turn(session, agent, result, plan=False)
         except asyncio.CancelledError:
             self._commit_interrupted_stream(session, agent)
@@ -6878,6 +6880,24 @@ class OpenHackApp:
             content=text,
             metadata={"partial": True, "interrupted": True},
         )
+
+    @staticmethod
+    def _agent_result_status(result: dict) -> str:
+        """Map an agent's returned result onto a report status.
+
+        A loop that stopped on the thrash guard, a cancel, or the opt-in
+        iteration backstop returns {"error": ..., "partial_result": ...} — it did
+        not finish the task. Defaulting those to "completed" is what made session
+        19fb4d79 look like a clean finish when it had actually been cut off.
+        """
+        if not isinstance(result, dict):
+            return "completed"
+        error = str(result.get("error") or "").strip()
+        if not error:
+            return "completed"
+        if error.lower() == "cancelled":
+            return "cancelled"
+        return "incomplete"
 
     def _finalize_agent_turn(self, session, agent, result: dict, plan: bool) -> None:
         # Surface the final answer in the transcript if the model ended on a
