@@ -15,6 +15,7 @@ from pathlib import Path
 from contextvars import ContextVar
 
 from .eventlog import EventJournal
+from openhack.tools.process import kill_process_group
 
 
 class SessionStatus(str, Enum):
@@ -379,22 +380,21 @@ class Session:
         """
         with self._proc_lock:
             procs = list(self._active_procs)
-        survivors: list[tuple[Any, int]] = []
+        survivors: list[Any] = []
         for p in procs:
             try:
                 if p.poll() is not None:
                     continue  # already exited & reaped — its PID may be recycled
-                pgid = os.getpgid(p.pid)
-                os.killpg(pgid, signal.SIGTERM)
-                survivors.append((p, pgid))
+                kill_process_group(p, signal.SIGTERM)
+                survivors.append(p)
             except (ProcessLookupError, PermissionError, OSError):
                 pass  # already gone / not ours
         if survivors:
             def _sigkill() -> None:
-                for p, pgid in survivors:
+                for p in survivors:
                     try:
                         if p.poll() is None:  # still alive → force it
-                            os.killpg(pgid, signal.SIGKILL)
+                            kill_process_group(p)
                     except OSError:
                         pass
             t = threading.Timer(0.4, _sigkill)

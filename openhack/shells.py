@@ -4,10 +4,10 @@ Powers both the user-facing `!cmd &` / `/bashes` view and the agent's
 `run_in_background` / `bash_output` / `kill_shell` tools. One ShellManager is
 shared between the TUI and the agent so `/bashes` lists both.
 
-Each shell runs as a Popen in its own process group (``start_new_session=True``)
-with a daemon reader thread draining stdout+stderr into a bounded, lock-guarded
-line buffer. Killing signals the whole group (SIGTERM, then SIGKILL on
-survivors), reusing the same primitive as the foreground kill path.
+Each shell runs as a Popen in its own platform-specific process group with a
+daemon reader thread draining stdout+stderr into a bounded, lock-guarded line
+buffer. Killing terminates the whole tree, reusing the same primitive as the
+foreground kill path.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import threading
 import time
 from typing import Optional
 
-from openhack.tools.process import kill_process_group
+from openhack.tools.process import kill_process_group, process_group_kwargs
 
 __all__ = ["BackgroundShell", "ShellManager"]
 
@@ -99,7 +99,7 @@ class ShellManager:
             bufsize=1,
             cwd=cwd or os.getcwd(),
             env=env,
-            start_new_session=True,   # own process group → group-kill takes the tree
+            **process_group_kwargs(),
         )
         sh = BackgroundShell(sid, command, proc)
         with self._lock:
@@ -141,7 +141,7 @@ class ShellManager:
             def _hard() -> None:
                 try:
                     if sh.proc.poll() is None:
-                        kill_process_group(sh.proc, signal.SIGKILL)
+                        kill_process_group(sh.proc)
                 except OSError:
                     pass
 
@@ -173,6 +173,6 @@ class ShellManager:
         for sh in procs:
             try:
                 if sh.proc.poll() is None:
-                    kill_process_group(sh.proc, signal.SIGKILL)
+                    kill_process_group(sh.proc)
             except OSError:
                 pass

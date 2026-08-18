@@ -19,7 +19,7 @@ import signal
 import subprocess
 from typing import Optional, Sequence, Union
 
-__all__ = ["run_killable", "kill_process_group"]
+__all__ = ["run_killable", "kill_process_group", "process_group_kwargs"]
 
 # Never let a command's byte stream inherit the host's locale codec. On
 # Windows that is commonly cp1252, whose undefined bytes (including 0x81)
@@ -30,13 +30,54 @@ _OUTPUT_ENCODING = "utf-8"
 _OUTPUT_ERRORS = "replace"
 
 
-def kill_process_group(proc: "subprocess.Popen", sig: int = signal.SIGKILL) -> None:
-    """Send *sig* to the child's whole process group; fall back to the pid."""
+def process_group_kwargs() -> dict:
+    """Return the Popen options that isolate a child tree on this platform."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _is_running(proc) -> bool:
+    poll = getattr(proc, "poll", None)
+    if callable(poll):
+        return poll() is None
+    return getattr(proc, "returncode", None) is None
+
+
+def kill_process_group(proc: "subprocess.Popen", sig: Optional[int] = None) -> None:
+    """Terminate the child's whole process tree on Windows or POSIX."""
+    if not _is_running(proc):
+        return
+
+    if os.name == "nt":
+        # Windows has no killpg/SIGKILL. taskkill /T is the native tree-kill
+        # primitive; /F makes cancellation immediate for console tools that do
+        # not have a cooperative close path. Fall back to the process handle if
+        # taskkill is unavailable or blocked by policy.
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if _is_running(proc):
+            try:
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        return
+
+    effective_signal = sig if sig is not None else signal.SIGKILL
     try:
-        os.killpg(os.getpgid(proc.pid), sig)
+        os.killpg(os.getpgid(proc.pid), effective_signal)
     except (ProcessLookupError, PermissionError, OSError):
         try:
-            proc.send_signal(sig)
+            proc.send_signal(effective_signal)
         except OSError:
             pass
 
@@ -79,10 +120,9 @@ def run_killable(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         **text_options,
-        # New session => the child is its own process-group leader, so killing
-        # the group takes down anything it spawned (a shell pipeline, a wrapped
-        # scanner) rather than orphaning grandchildren.
-        start_new_session=True,
+        # Put the child in an isolated process group so cancellation can take
+        # down a shell pipeline or wrapped scanner without orphaning children.
+        **process_group_kwargs(),
     )
     if session is not None:
         session.register_process(proc)

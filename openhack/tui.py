@@ -6741,7 +6741,7 @@ class OpenHackApp:
         """Stream a shell command's output into the transcript. Esc-interruptible."""
         import codecs
 
-        from openhack.tools.process import kill_process_group
+        from openhack.tools.process import kill_process_group, process_group_kwargs
 
         session = self.session
         proc = None
@@ -6761,7 +6761,7 @@ class OpenHackApp:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=os.getcwd(),
-                start_new_session=True,  # own process group → killable as a tree
+                **process_group_kwargs(),
             )
             self._shell_proc = proc
             # Chunked reads (not readline): asyncio's readline caps a single line
@@ -7580,8 +7580,12 @@ def main(resume_session_id: Optional[str] = None):
         _restore_terminal()
         os._exit(1)
 
-    signal.signal(signal.SIGHUP, _on_fatal_signal)
-    signal.signal(signal.SIGTERM, _on_fatal_signal)
+    # SIGHUP is POSIX-only. Register only the signals exposed by this Python
+    # build so the native Windows TUI can start.
+    for signal_name in ("SIGHUP", "SIGTERM"):
+        fatal_signal = getattr(signal, signal_name, None)
+        if fatal_signal is not None:
+            signal.signal(fatal_signal, _on_fatal_signal)
     _configure_logging()
 
     app = OpenHackApp(resume_session_id=resume_session_id)

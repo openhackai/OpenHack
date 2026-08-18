@@ -18,9 +18,14 @@ def _wait(pred, timeout=4.0):
     return pred()
 
 
+def _python_command(code):
+    argv = [sys.executable, "-c", code]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+
+
 def test_spawn_buffers_output_and_exits():
     mgr = ShellManager()
-    sid = mgr.spawn("printf 'alpha\\nbeta\\n'")
+    sid = mgr.spawn(_python_command("print('alpha'); print('beta')"))
     sh = mgr.get(sid)
     assert sh is not None and sid == "sh1"
     assert _wait(lambda: sh.status == "exited"), "shell never exited"
@@ -31,11 +36,9 @@ def test_spawn_buffers_output_and_exits():
 
 def test_spawn_keeps_reading_after_undecodable_output():
     code = "import os; os.write(1, b'before' + bytes([0x81]) + b'after\\n')"
-    argv = [sys.executable, "-c", code]
-    command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
     mgr = ShellManager()
 
-    sid = mgr.spawn(command)
+    sid = mgr.spawn(_python_command(code))
     sh = mgr.get(sid)
 
     assert _wait(lambda: sh.status == "exited"), "shell reader stopped"
@@ -45,7 +48,7 @@ def test_spawn_keeps_reading_after_undecodable_output():
 
 def test_since_cursor_polling_returns_only_new_lines():
     mgr = ShellManager()
-    sid = mgr.spawn("printf 'one\\ntwo\\nthree\\n'")
+    sid = mgr.spawn(_python_command("print('one'); print('two'); print('three')"))
     sh = mgr.get(sid)
     assert _wait(lambda: sh.status == "exited")
     first, cursor = sh.since(0)
@@ -56,7 +59,7 @@ def test_since_cursor_polling_returns_only_new_lines():
 
 def test_kill_terminates_a_running_shell():
     mgr = ShellManager()
-    sid = mgr.spawn("sleep 30")
+    sid = mgr.spawn(_python_command("import time; time.sleep(30)"))
     sh = mgr.get(sid)
     assert _wait(lambda: sh.is_running(), timeout=1.0)
     assert mgr.kill(sid) is True
@@ -66,8 +69,8 @@ def test_kill_terminates_a_running_shell():
 
 def test_kill_all():
     mgr = ShellManager()
-    a = mgr.spawn("sleep 30")
-    b = mgr.spawn("sleep 30")
+    a = mgr.spawn(_python_command("import time; time.sleep(30)"))
+    b = mgr.spawn(_python_command("import time; time.sleep(30)"))
     for sid in (a, b):
         assert _wait(lambda s=sid: mgr.get(s).is_running(), timeout=1.0)
     mgr.kill_all()
@@ -76,7 +79,7 @@ def test_kill_all():
 
 def test_shutdown_kills_running_shells_synchronously():
     mgr = ShellManager()
-    sid = mgr.spawn("sleep 30")
+    sid = mgr.spawn(_python_command("import time; time.sleep(30)"))
     assert _wait(lambda: mgr.get(sid).is_running(), timeout=1.0)
     mgr.shutdown()  # blocking: must not return until the child is dead
     assert mgr.get(sid).proc.poll() is not None
@@ -84,6 +87,6 @@ def test_shutdown_kills_running_shells_synchronously():
 
 def test_ids_are_sequential_and_listed():
     mgr = ShellManager()
-    ids = [mgr.spawn("true") for _ in range(3)]
+    ids = [mgr.spawn(_python_command("pass")) for _ in range(3)]
     assert ids == ["sh1", "sh2", "sh3"]
     assert {s.id for s in mgr.list()} == {"sh1", "sh2", "sh3"}
