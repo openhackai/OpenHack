@@ -34,7 +34,7 @@ class ShellTools:
     # window. Kept deliberately tight: a verbose tool (sqlmap, nmap, a big curl)
     # re-sends its output on every subsequent agent turn, so an oversized result
     # inflates cost super-linearly. The agent is told when output was truncated
-    # and can re-run with its own filtering (grep/head/-v0) for more.
+    # and can re-run with narrower filtering for more.
     MAX_OUTPUT_CHARS = 20_000
 
     # The DEFAULT is what an agent gets when it wasn't thinking about timeouts,
@@ -251,10 +251,16 @@ class ShellTools:
             result["full_output_artifact"] = self._persist_full_output(
                 command, cwd, raw_stdout, raw_stderr
             )
-            result["note"] = (
-                "Output was truncated. Re-run piping through grep/head/tail, "
-                "or write to a file and read it in slices."
-            )
+            if os.name == "nt":
+                result["note"] = (
+                    "Output was truncated. Re-run with narrower output or filter "
+                    "through findstr/PowerShell, or write to a file and read it in slices."
+                )
+            else:
+                result["note"] = (
+                    "Output was truncated. Re-run piping through grep/head/tail, "
+                    "or write to a file and read it in slices."
+                )
         return result
 
     def which(self, tool: str) -> dict:
@@ -318,6 +324,11 @@ class ShellTools:
     # -------------------------------------------------------------- tool specs
 
     def get_tool_definitions(self) -> list[dict]:
+        shell_description = (
+            "cmd.exe on native Windows; use Windows command syntax"
+            if os.name == "nt"
+            else "the platform shell; pipes, redirects, and globs are available"
+        )
         return [
             {
                 "name": "run_command",
@@ -325,8 +336,8 @@ class ShellTools:
                     "Run a shell command and get its stdout, stderr and exit code. "
                     "Use this to drive any installed CLI security tool (nmap, curl, "
                     "httpx, subfinder, nuclei, ffuf, sqlmap, osv-scanner, git, etc.), "
-                    "inspect the system, or chain tools with pipes. Runs through the "
-                    "system shell, so pipes, redirects and globs work. Always prefer "
+                    "inspect the system, or chain tools with pipes. Runs through "
+                    f"{shell_description}. Always prefer "
                     "fast, non-interactive flags and avoid commands that block on input."
                 ),
                 "parameters": {
