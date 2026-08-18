@@ -36,7 +36,7 @@ class CheckpointManager:
             "data": data,
         }
         path = self.checkpoint_dir / f"{step_name}.json"
-        path.write_text(json.dumps(checkpoint, indent=2, default=str))
+        path.write_text(json.dumps(checkpoint, indent=2, default=str), encoding="utf-8")
         # Logged, not printed: a print() here lands inside the TUI's
         # full-screen buffer and tears the layout.
         logger.info(
@@ -50,7 +50,7 @@ class CheckpointManager:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to load checkpoint {path}: {e}")
             return None

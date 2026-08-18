@@ -270,7 +270,7 @@ def _git_branch(path: str) -> str:
         for _ in range(8):
             h = cur / ".git" / "HEAD"
             if h.exists():
-                ref = h.read_text().strip()
+                ref = h.read_text(encoding="utf-8", errors="replace").strip()
                 if ref.startswith("ref:"):
                     return ref.rsplit("/", 1)[-1]
                 return ref[:7]
@@ -5680,7 +5680,7 @@ class OpenHackApp:
         rows: list[tuple[float, dict]] = []
         for p in scans_dir.glob("*.json"):
             try:
-                with open(p) as fp:
+                with open(p, encoding="utf-8") as fp:
                     data = json.load(fp)
             except (OSError, json.JSONDecodeError):
                 continue
@@ -5828,7 +5828,7 @@ class OpenHackApp:
                 self.last_status_line = f"session {sid[:8]} not found"
                 return
             report = matches[0]
-        data = json.loads(report.read_text())
+        data = json.loads(report.read_text(encoding="utf-8"))
         sid = report.stem
 
         target = data.get("target_dir") or os.getcwd()
@@ -6214,7 +6214,7 @@ class OpenHackApp:
                 existing.pop(k, None)
             from openhack.config import CONFIG_PATH
             import json as _json, os as _os
-            with open(CONFIG_PATH, "w") as fp:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as fp:
                 _json.dump(existing, fp, indent=2)
                 fp.write("\n")
             try:
@@ -7276,7 +7276,7 @@ class OpenHackApp:
             }
             # Atomic write: temp file + rename to avoid corrupting on crash.
             tmp_path = report_path.with_suffix(".json.tmp")
-            with open(tmp_path, "w") as fp:
+            with open(tmp_path, "w", encoding="utf-8") as fp:
                 json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
             os.replace(tmp_path, report_path)
             session.record_event(

@@ -48,7 +48,7 @@ class CatalogProvider:
 
 def _read_cache(path: Path = CATALOG_CACHE_PATH) -> Optional[dict[str, Any]]:
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         return raw if isinstance(raw, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
@@ -59,7 +59,7 @@ def _write_cache(data: dict[str, Any], path: Path = CATALOG_CACHE_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(path.parent, 0o700)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, separators=(",", ":")))
+        tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(path)
     except OSError as exc:

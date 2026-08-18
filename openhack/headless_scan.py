@@ -95,7 +95,7 @@ def _write_report(
     }
 
     tmp_path = report_path.with_suffix(".json.tmp")
-    with open(tmp_path, "w") as fp:
+    with open(tmp_path, "w", encoding="utf-8") as fp:
         json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
     tmp_path.rename(report_path)
     session.record_event(

@@ -30,7 +30,7 @@ def _dotenv_nonempty_keys(path: Path) -> set[str]:
     if not path.exists():
         return keys
     try:
-        for raw_line in path.read_text().splitlines():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -52,7 +52,7 @@ def load_user_config() -> dict:
     """Load persistent config from ~/.openhack/config."""
     if CONFIG_PATH.exists():
         try:
-            loaded = json.loads(CONFIG_PATH.read_text())
+            loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             return _normalize_user_config(loaded) if isinstance(loaded, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
@@ -68,7 +68,7 @@ def save_user_config(data: dict) -> None:
         pass
     existing = load_user_config()
     existing.update(data)
-    CONFIG_PATH.write_text(json.dumps(existing, indent=2) + "\n")
+    CONFIG_PATH.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     # Config now holds long-lived bearer tokens; restrict to owner-only read/write.
     try:
         os.chmod(CONFIG_PATH, 0o600)

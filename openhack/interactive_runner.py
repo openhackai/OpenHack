@@ -207,7 +207,7 @@ def _persist_run(session, task: str, target: str, status: str, agent=None) -> No
         }
         path = report_dir / f"{session.id}.json"
         tmp = path.with_suffix(".json.tmp")
-        with open(tmp, "w") as fp:
+        with open(tmp, "w", encoding="utf-8") as fp:
             json.dump(report, fp, indent=2, default=str, ensure_ascii=False)
         import os as _os
         _os.replace(tmp, path)

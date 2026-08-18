@@ -97,7 +97,7 @@ def _is_expired(expires_at: Optional[str]) -> bool:
 
 def _load_dismissed() -> set[str]:
     try:
-        data = json.loads(_DISMISSED_FILE.read_text())
+        data = json.loads(_DISMISSED_FILE.read_text(encoding="utf-8"))
         return set(data) if isinstance(data, list) else set()
     except Exception:
         return set()
@@ -109,14 +109,14 @@ def save_dismissed(ann_id: str) -> None:
     dismissed.add(ann_id)
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _DISMISSED_FILE.write_text(json.dumps(sorted(dismissed)))
+        _DISMISSED_FILE.write_text(json.dumps(sorted(dismissed)), encoding="utf-8")
     except Exception:
         pass
 
 
 def skipped_update_version() -> str:
     try:
-        return _SKIPPED_UPDATE_FILE.read_text().strip()
+        return _SKIPPED_UPDATE_FILE.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
 
@@ -125,7 +125,7 @@ def save_skipped_update(version: str) -> None:
     """Suppress this release until a strictly newer release is available."""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _SKIPPED_UPDATE_FILE.write_text(version.strip())
+        _SKIPPED_UPDATE_FILE.write_text(version.strip(), encoding="utf-8")
     except Exception:
         pass
 
@@ -230,7 +230,7 @@ async def install_update(version: str, *, dry_run: bool = False) -> InstallResul
 def _should_check() -> bool:
     """Don't re-check if we already checked within this hour."""
     try:
-        ts = float(_LAST_CHECK_FILE.read_text().strip())
+        ts = float(_LAST_CHECK_FILE.read_text(encoding="utf-8").strip())
         return (time.time() - ts) > _RECHECK_INTERVAL
     except Exception:
         return True
@@ -239,14 +239,14 @@ def _should_check() -> bool:
 def _mark_checked() -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _LAST_CHECK_FILE.write_text(str(time.time()))
+        _LAST_CHECK_FILE.write_text(str(time.time()), encoding="utf-8")
     except Exception:
         pass
 
 
 def _load_cached_manifest() -> Optional[dict]:
     try:
-        data = json.loads(_UPDATE_CACHE_FILE.read_text())
+        data = json.loads(_UPDATE_CACHE_FILE.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
     except Exception:
         return None
@@ -255,7 +255,7 @@ def _load_cached_manifest() -> Optional[dict]:
 def _save_cached_manifest(data: dict) -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _UPDATE_CACHE_FILE.write_text(json.dumps(data))
+        _UPDATE_CACHE_FILE.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
         pass
 

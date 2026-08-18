@@ -138,7 +138,7 @@ def _cmd_sessions():
     reports = []
     for p in sorted(scans_dir.glob("*.json"), reverse=True):
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
             reports.append(data)
         except (OSError, json.JSONDecodeError):
             continue

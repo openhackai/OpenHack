@@ -130,7 +130,7 @@ class ScanSession:
                 "files_analyzed": len(self.analyzed_files),
             },
         }
-        path.write_text(json.dumps(data, indent=2, default=str))
+        path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         logger.debug(f"Session {self.session_id} saved: {self.scanned_count}/{len(self.entry_points)} scanned")
 
     @classmethod
@@ -139,7 +139,7 @@ class ScanSession:
         path = SESSIONS_DIR / f"{session_id}.json"
         if not path.exists():
             return None
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         session = cls(data["session_id"], data["target_dir"])
         session.created_at = data.get("created_at", "")
         session.updated_at = data.get("updated_at", "")
@@ -158,7 +158,7 @@ class ScanSession:
         sessions = []
         for path in sorted(SESSIONS_DIR.glob("*.json"), reverse=True):
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 if target_dir and data.get("target_dir") != target_dir:
                     continue
                 sessions.append({

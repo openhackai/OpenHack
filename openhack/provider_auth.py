@@ -66,7 +66,7 @@ class OAuthCredential:
 
 def _load(path: Path = AUTH_PATH) -> dict[str, dict[str, Any]]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
@@ -79,7 +79,7 @@ def _save(data: dict[str, dict[str, Any]], path: Path = AUTH_PATH) -> None:
     except OSError:
         pass
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(path)
     try:

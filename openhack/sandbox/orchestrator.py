@@ -210,7 +210,7 @@ class SandboxOrchestrator:
 
         # Write override file
         override_path = self.target_dir / f".openhack-sandbox-override-{self._project_name}.yml"
-        override_path.write_text(override)
+        override_path.write_text(override, encoding="utf-8")
         self._override_file = override_path
 
         # Build and start with override
@@ -243,7 +243,7 @@ class SandboxOrchestrator:
         Parses the compose file with a simple line-based approach to avoid
         requiring pyyaml as a dependency.
         """
-        compose_text = compose_file.read_text()
+        compose_text = compose_file.read_text(encoding="utf-8")
 
         # Extract service names and their port mappings
         services = self._parse_compose_services(compose_text)
