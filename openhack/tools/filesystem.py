@@ -8,7 +8,6 @@ import hashlib
 import inspect
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +24,18 @@ _GREP_SOURCE_INCLUDES = [
     "*.c", "*.cpp", "*.h",
     "*.vue", "*.svelte",
 ]
+
+
+def _walk_matching_files(root: Path, includes: list[str]):
+    """Yield matching files without relying on platform-specific shell tools."""
+    for current_root, dirs, files in os.walk(root):
+        dirs[:] = [
+            name for name in dirs
+            if not any(fnmatch.fnmatch(name, pattern) for pattern in _GREP_EXCLUDE_DIRS)
+        ]
+        for name in files:
+            if any(fnmatch.fnmatch(name, pattern) for pattern in includes):
+                yield Path(current_root) / name
 
 
 class FileSystemTools:
@@ -44,7 +55,9 @@ class FileSystemTools:
 
     def _display_path(self, path: Path) -> str:
         try:
-            return str(path.relative_to(self.jail_dir))
+            # Tool paths are an internal, portable contract.  Keep them in POSIX
+            # form even when the scanner itself is running on Windows.
+            return path.relative_to(self.jail_dir).as_posix()
         except ValueError:
             return str(path)
 
@@ -228,7 +241,7 @@ class FileSystemTools:
                         matched = False
                         if match_path:
                             full = Path(root) / f
-                            rel_from_base = str(full.relative_to(resolved))
+                            rel_from_base = full.relative_to(resolved).as_posix()
                             # Check exact match or any path suffix
                             if fnmatch.fnmatch(rel_from_base, search_pattern):
                                 matched = True
@@ -256,7 +269,7 @@ class FileSystemTools:
             return {"error": f"Error during glob: {e}"}
 
     def grep(self, pattern: str, path: str = ".", include: Optional[str] = None) -> dict:
-        """Search for a regex pattern in files using system grep for speed."""
+        """Search for a regex pattern without requiring an external grep binary."""
         try:
             resolved = self._resolve_safe_path(path)
             if not resolved.exists():
@@ -265,44 +278,25 @@ class FileSystemTools:
             if resolved.is_file():
                 return self._grep_single_file(resolved, pattern)
 
-            cmd = ["grep", "-rEl", "--max-count=3",
-                   "--binary-files=without-match",
-                   pattern, str(resolved)]
-            for d in _GREP_EXCLUDE_DIRS:
-                cmd.insert(1, f"--exclude-dir={d}")
-            if include:
-                cmd.insert(1, f"--include={include}")
-            else:
-                for ext in _GREP_SOURCE_INCLUDES:
-                    cmd.insert(1, f"--include={ext}")
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            file_paths = [
-                p.strip() for p in result.stdout.strip().split("\n") if p.strip()
-            ][:100]
-
+            regex = re.compile(pattern, re.IGNORECASE)
+            includes = self._expand_braces(include) if include else _GREP_SOURCE_INCLUDES
             matches = []
-            for fp in file_paths:
+            for file_path in _walk_matching_files(resolved, includes):
                 try:
-                    rel = self._display_path(Path(fp))
-                except ValueError:
-                    rel = fp
-                if "node_modules" in rel or "test" in rel.lower():
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as fp:
+                        if not any(regex.search(line) for line in fp):
+                            continue
+                except (OSError, UnicodeError):
                     continue
-                matches.append({"file": rel, "line": 0, "content": ""})
+                matches.append({
+                    "file": self._display_path(file_path),
+                    "line": 0,
+                    "content": "",
+                })
                 if len(matches) >= 100:
                     break
 
             return {"pattern": pattern, "matches": matches}
-        except subprocess.TimeoutExpired:
-            return {"pattern": pattern, "matches": []}
         except PermissionError as e:
             return {"error": str(e)}
         except Exception as e:

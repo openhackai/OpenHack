@@ -12,14 +12,10 @@ Produces a structured summary string that researchers use as context.
 """
 
 import logging
-import os
 import re
-import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Optional
 
-from .tools.filesystem import FileSystemTools, _GREP_EXCLUDE_DIRS
+from .tools.filesystem import FileSystemTools, _walk_matching_files
 from .tools.registry import ToolRegistry
 from .tools.coverage import discover_attack_surface
 from .framework_detection import detect_frameworks
@@ -130,128 +126,30 @@ def _detect_features_fast(
     fs: FileSystemTools,
     feature_indicators: dict[str, list[tuple[str, str]]],
 ) -> dict[str, list[str]]:
-    """Detect features using find (once) + grep -l with small sample per category.
+    """Detect features with one portable, in-process walk of source files."""
+    compiled_patterns = {
+        feature_name: re.compile("|".join(pattern for pattern, _ in patterns))
+        for feature_name, patterns in feature_indicators.items()
+    }
+    match_counts = {feature_name: 0 for feature_name in feature_indicators}
+    includes = [f"*{extension}" for extension in _SOURCE_EXTENSIONS]
 
-    Collects source file paths once, then for each feature category runs
-    grep -l (stop after first 5 matches) on the file list. Fast because:
-    - Single directory walk via find
-    - Each grep reads from cached file list, stops early (-m 1 per file, -l first 5)
-    """
-    target_dir = str(fs.jail_dir)
-
-    find_cmd = ["find", target_dir, "-type", "f", "("]
-    for i, ext in enumerate(_SOURCE_EXTENSIONS):
-        if i > 0:
-            find_cmd.append("-o")
-        find_cmd.extend(["-name", f"*{ext}"])
-    find_cmd.append(")")
-    for d in _GREP_EXCLUDE_DIRS:
-        clean = d.rstrip("*").rstrip(".")
-        find_cmd[2:2] = ["-not", "-path", f"*/{clean}/*"]
-
-    try:
-        find_result = subprocess.run(
-            find_cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-        file_list = find_result.stdout
-    except Exception as e:
-        logger.warning(f"Find failed: {e}")
-        return {}
-
-    if not file_list.strip():
-        return {}
-
-    file_count = file_list.count("\n")
-
-    if file_count > 5000:
-        # Large repo: fixed-string grep in parallel threads
-        quick_checks = {
-            "file_uploads": ["multer", "busboy", "formidable", "multipart", "request.files"],
-            "outbound_requests": ["webhook", "Webhook", "httpx", "aiohttp", "apprise"],
-            "auth_system": ["bcrypt", "argon2", "jsonwebtoken", "passport", "login_required"],
-            "template_rendering": ["dangerouslySetInnerHTML", "mark_safe", "render_template_string", "DOMPurify"],
-            "database": ["cursor.", "RawSQL", ".raw(", "execute("],
-            "graphql": ["graphql", "GraphQL", "ApolloServer"],
-            "websocket": ["WebSocket", "socket.io", "Socket.IO"],
-            "grpc": ["grpc", "protobuf"],
-            "deserialization": ["pickle.load", "yaml.load", "unserialize"],
-        }
-
-        def _check_feature(name_and_keywords):
-            fname, keywords = name_and_keywords
-            cmd = ["xargs", "grep", "-Fl", "--max-count=1",
-                   "--binary-files=without-match"]
-            for kw in keywords:
-                cmd.extend(["-e", kw])
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    input=file_list,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=15,
-                )
-                matches = [l for l in proc.stdout.strip().split("\n") if l.strip()]
-                if matches:
-                    readable = fname.replace("_", " ").title()
-                    return fname, [f"{readable} ({len(matches)} files)"]
-            except Exception:
-                pass
-            return fname, None
-
-        result: dict[str, list[str]] = {}
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(_check_feature, item): item
-                       for item in quick_checks.items()}
-            for future in as_completed(futures):
-                fname, value = future.result()
-                if value:
-                    result[fname] = value
-        return result
-
-    # Small/medium repo: full regex scan per category
-    result: dict[str, list[str]] = {}
-    for feature_name, patterns in feature_indicators.items():
-        combined = "|".join(p for p, _ in patterns)
-        cmd_parts = ["xargs", "grep", "-El", "--max-count=1",
-                     "--binary-files=without-match", combined]
+    for file_path in _walk_matching_files(fs.jail_dir, includes):
         try:
-            proc = subprocess.run(
-                cmd_parts,
-                input=file_list,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            files = []
-            for line in proc.stdout.strip().split("\n"):
-                fp = line.strip()
-                if not fp:
-                    continue
-                try:
-                    rel = str(Path(fp).relative_to(target_dir))
-                except ValueError:
-                    rel = fp
-                if "node_modules" not in rel and "/test" not in rel.lower():
-                    files.append(rel)
-            if files:
-                readable = feature_name.replace("_", " ").title()
-                result[feature_name] = [f"{readable} ({len(files)} files)"]
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for feature_name, regex in compiled_patterns.items():
+            if regex.search(content):
+                match_counts[feature_name] += 1
 
-    return result
+    return {
+        feature_name: [
+            f"{feature_name.replace('_', ' ').title()} ({count} files)"
+        ]
+        for feature_name, count in match_counts.items()
+        if count
+    }
 
 
 def run_deterministic_recon(tools: ToolRegistry) -> dict:
