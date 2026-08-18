@@ -8,6 +8,7 @@ from prompt_toolkit.buffer import Buffer
 
 from openhack.tui import OpenHackApp, ScanState
 from openhack.agents.session import Session
+from tests.conftest import shell_command
 
 
 def _fresh_app():
@@ -133,7 +134,7 @@ def test_prompt_after_shell_and_cd_starts_real_agent(tmp_path, monkeypatch):
 
 def test_run_shell_streams_output_and_exit_code():
     app = _fresh_app()
-    _run(lambda: app._run_shell("printf 'alpha\\nbeta\\n'"))
+    _run(lambda: app._run_shell(shell_command("print('alpha'); print('beta')")))
     txt = _trace_text(app)
     assert "alpha" in txt and "beta" in txt
     assert "exit 0" in txt
@@ -150,7 +151,7 @@ def test_run_shell_handles_huge_single_line():
     # A single line > asyncio's 64KB readline limit must not error or drop output
     # (chunked reads, not readline).
     app = _fresh_app()
-    _run(lambda: app._run_shell("head -c 200000 /dev/zero | tr '\\0' A"))
+    _run(lambda: app._run_shell(shell_command("print('A' * 200000, end='')")))
     txt = _trace_text(app)
     assert "shell error" not in app.last_status_line
     assert "exit 0" in app.last_status_line
@@ -162,7 +163,9 @@ def test_run_shell_interrupt_kills_fast():
     app._interrupting = True
 
     async def go():
-        t = asyncio.create_task(app._run_shell("sleep 30"))
+        t = asyncio.create_task(
+            app._run_shell(shell_command("import time; time.sleep(30)"))
+        )
         await asyncio.sleep(0.4)
         start = time.monotonic()
         t.cancel()

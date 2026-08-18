@@ -6,6 +6,7 @@ inside the tool-call JSON. It truncated, json.loads failed, run_command landed
 with empty args, and the model retried the identical doomed command.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,8 @@ def test_overwrite_replaces_content(tmp_path):
 
 
 def test_mode_makes_a_script_executable(tmp_path):
+    if os.name == "nt":
+        pytest.skip("Windows does not implement POSIX executable mode bits")
     w = FileWriteTools(jail_dir=tmp_path)
     w.write_file("run.sh", "#!/bin/sh\necho hi\n", mode="755")
     assert (tmp_path / "run.sh").stat().st_mode & 0o111

@@ -18,7 +18,8 @@ def test_auth_store_is_separate_and_owner_only(tmp_path):
         "type": "api",
         "key": "secret",
     }
-    assert os.stat(path).st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert os.stat(path).st_mode & 0o777 == 0o600
     provider_auth.remove_credential("openrouter", path)
     assert provider_auth.get_credential("openrouter", path) is None
 

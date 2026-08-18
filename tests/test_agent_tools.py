@@ -1,5 +1,6 @@
 """Tests for the interactive hacking toolkit: shell, security, mailbox, registry."""
 
+import os
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from openhack.tools.mailbox import MailboxTools
 from openhack.tools.recon import ReconTools
 from openhack.tools.oob import OOBTools
 from openhack.tools.registry import ToolRegistry
+from tests.conftest import shell_command
 
 
 # --------------------------------------------------------------------- shell
@@ -33,13 +35,17 @@ def test_shell_run_command_stderr_and_pipes(tmp_path):
     sh = ShellTools(workdir=tmp_path)
     result = sh.run_command("echo oops 1>&2")
     assert "oops" in result["stderr"]
-    piped = sh.run_command("printf 'a\\nb\\nc\\n' | grep b")
+    producer = shell_command("print('a\\nb\\nc')")
+    consumer = shell_command(
+        "import sys; sys.stdout.writelines(line for line in sys.stdin if line.strip() == 'b')"
+    )
+    piped = sh.run_command(f"{producer} | {consumer}")
     assert piped["stdout"].strip() == "b"
 
 
 def test_shell_timeout(tmp_path):
     sh = ShellTools(workdir=tmp_path)
-    result = sh.run_command("sleep 5", timeout=1)
+    result = sh.run_command(shell_command("import time; time.sleep(5)"), timeout=1)
     assert result.get("timed_out") is True
 
 
@@ -56,7 +62,9 @@ def test_shell_background_returns_id_and_bash_output(tmp_path):
     from openhack.shells import ShellManager
     mgr = ShellManager()
     sh = ShellTools(workdir=tmp_path, shells=mgr)
-    started = sh.run_command("printf 'x\\ny\\n'", run_in_background=True)
+    started = sh.run_command(
+        shell_command("print('x'); print('y')"), run_in_background=True
+    )
     assert started["status"] == "running"
     sid = started["shell_id"]
     assert _wait(lambda: mgr.get(sid).status == "exited")
@@ -71,7 +79,9 @@ def test_shell_kill_shell_stops_background(tmp_path):
     from openhack.shells import ShellManager
     mgr = ShellManager()
     sh = ShellTools(workdir=tmp_path, shells=mgr)
-    sid = sh.run_command("sleep 30", run_in_background=True)["shell_id"]
+    sid = sh.run_command(
+        shell_command("import time; time.sleep(30)"), run_in_background=True
+    )["shell_id"]
     assert _wait(lambda: mgr.get(sid).is_running(), timeout=1.0)
     assert sh.kill_shell(sid)["killed"] is True
     assert _wait(lambda: mgr.get(sid).proc.poll() is not None)
@@ -95,7 +105,7 @@ def test_shell_background_tools_registered(tmp_path):
 def test_shell_output_truncation(tmp_path):
     sh = ShellTools(workdir=tmp_path)
     # Emit far more than the cap.
-    result = sh.run_command("python3 -c \"print('x' * 200000)\"")
+    result = sh.run_command(shell_command("print('x' * 200000)"))
     assert result.get("truncated") is True
     assert len(result["stdout"]) <= ShellTools.MAX_OUTPUT_CHARS + 200
 
@@ -108,12 +118,13 @@ def test_truncated_shell_output_is_preserved_as_owner_only_artifact(tmp_path):
         event_log_path=tmp_path / "events.jsonl",
     )
     sh = ShellTools(workdir=tmp_path, session=session)
-    result = sh.run_command("python3 -c \"print('x' * 50000)\"")
+    result = sh.run_command(shell_command("print('x' * 50000)"))
     artifact = result["full_output_artifact"]
     path = Path(artifact["path"])
     assert path.exists()
     assert "x" * 30_000 in path.read_text()
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
     assert any(
         event.event_type == "tool_output_artifact_created"
         for event in session.events
@@ -125,19 +136,23 @@ def test_shell_workdir_override(tmp_path):
     sub.mkdir()
     (sub / "marker.txt").write_text("x")
     sh = ShellTools(workdir=tmp_path)
-    result = sh.run_command("ls", workdir="sub")
+    result = sh.run_command(
+        shell_command("import os; print('\\n'.join(os.listdir('.')))"),
+        workdir="sub",
+    )
     assert "marker.txt" in result["stdout"]
 
 
 def test_shell_workdir_missing(tmp_path):
     sh = ShellTools(workdir=tmp_path)
-    result = sh.run_command("ls", workdir="does-not-exist")
+    result = sh.run_command(shell_command("print('unused')"), workdir="does-not-exist")
     assert "error" in result
 
 
 def test_shell_which(tmp_path):
     sh = ShellTools(workdir=tmp_path)
-    assert sh.which("python3")["installed"] is True
+    available_tool = "cmd" if os.name == "nt" else "python3"
+    assert sh.which(available_tool)["installed"] is True
     assert sh.which("definitely-not-a-real-tool-xyz")["installed"] is False
 
 

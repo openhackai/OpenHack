@@ -14,6 +14,7 @@ import time
 import pytest
 
 from openhack.tools.shell import ShellTools
+from tests.conftest import shell_command
 
 
 # ------------------------------------------------------------------ defaults
@@ -27,7 +28,7 @@ def test_default_timeout_is_sized_for_a_probe():
 
 def test_explicit_timeout_still_wins_over_the_default():
     t = ShellTools()
-    r = t.run_command("sleep 5", timeout=1)
+    r = t.run_command(shell_command("import time; time.sleep(5)"), timeout=1)
     assert r["timed_out"] is True
     assert r["timeout"] == 1
 
@@ -47,7 +48,7 @@ def test_a_hung_command_is_killed_at_the_default_not_left_running():
     ShellTools.DEFAULT_TIMEOUT = 1
     try:
         t0 = time.monotonic()
-        r = t.run_command("sleep 30")
+        r = t.run_command(shell_command("import time; time.sleep(30)"))
         elapsed = time.monotonic() - t0
     finally:
         ShellTools.DEFAULT_TIMEOUT = orig
@@ -86,7 +87,10 @@ def test_ordinary_timeout_keeps_the_useful_advice():
 
 def test_timeout_result_carries_the_note_and_partial_output():
     t = ShellTools()
-    r = t.run_command("echo partial; sleep 30", timeout=1)
+    r = t.run_command(
+        shell_command("import time; print('partial', flush=True); time.sleep(30)"),
+        timeout=1,
+    )
     assert r["timed_out"] is True
     assert "note" in r and r["note"]
     assert "output" in r

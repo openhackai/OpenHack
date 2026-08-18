@@ -1,10 +1,35 @@
 import json
+import os
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from openhack.tools.filesystem import FileSystemTools
 from openhack.tools.registry import ToolRegistry
+
+
+def shell_command(source: str) -> str:
+    """Return a shell-safe command that runs source with this Python."""
+    args = [sys.executable, "-c", source]
+    return subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)
+
+
+@pytest.fixture(autouse=True)
+def _portable_prompt_toolkit_session():
+    """Give non-console Windows test runs a deterministic terminal backend."""
+    if os.name != "nt":
+        yield
+        return
+
+    from prompt_toolkit.application.current import create_app_session
+    from prompt_toolkit.input import DummyInput
+    from prompt_toolkit.output import DummyOutput
+
+    with create_app_session(input=DummyInput(), output=DummyOutput()):
+        yield
 
 
 @pytest.fixture(autouse=True)

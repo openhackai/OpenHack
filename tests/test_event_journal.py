@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from openhack.agents.eventlog import EventJournal
@@ -16,7 +17,8 @@ def test_journal_is_append_only_hash_chained_and_redacted(tmp_path):
     assert lines[0]["data"]["authorization"] == "[REDACTED]"
     assert second.previous_hash == first.event_hash
     assert lines[1]["previous_hash"] == lines[0]["event_hash"]
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
     assert journal.verify()["valid"] is True
 
 

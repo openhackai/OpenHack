@@ -7,6 +7,7 @@ to be redrawn — which is why the message "stayed in the UI after it recovered"
 """
 
 import asyncio
+import re
 from pathlib import Path
 
 import openai
@@ -24,14 +25,17 @@ def _no_backoff(monkeypatch):
 
 def test_library_code_never_prints():
     """A print() from library code lands inside the TUI's screen buffer."""
-    import subprocess
     root = Path(__file__).resolve().parent.parent / "openhack"
-    hits = subprocess.run(
-        ["grep", "-rn", r"^\s*print(", str(root / "agents"), str(root / "tools")],
-        capture_output=True, text=True,
-    ).stdout.strip()
+    hits = []
+    for source_dir in (root / "agents", root / "tools"):
+        for source_path in source_dir.rglob("*.py"):
+            for line_number, line in enumerate(
+                source_path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                if re.match(r"^\s*print\(", line):
+                    hits.append(f"{source_path}:{line_number}:{line}")
     # interactive_runner is the deliberate non-TUI console path.
-    offenders = [l for l in hits.splitlines() if "interactive_runner" not in l]
+    offenders = [line for line in hits if "interactive_runner" not in line]
     assert not offenders, "print() in TUI-reachable code corrupts the display:\n" + "\n".join(offenders)
 
 
