@@ -21,6 +21,14 @@ from typing import Optional, Sequence, Union
 
 __all__ = ["run_killable", "kill_process_group"]
 
+# Never let a command's byte stream inherit the host's locale codec. On
+# Windows that is commonly cp1252, whose undefined bytes (including 0x81)
+# raise inside subprocess._readerthread and silently cut off the tool result.
+# Security tools overwhelmingly emit UTF-8; replacement keeps malformed or
+# legacy-encoded output visible without killing the reader.
+_OUTPUT_ENCODING = "utf-8"
+_OUTPUT_ERRORS = "replace"
+
 
 def kill_process_group(proc: "subprocess.Popen", sig: int = signal.SIGKILL) -> None:
     """Send *sig* to the child's whole process group; fall back to the pid."""
@@ -53,6 +61,15 @@ def run_killable(
     Raises ``subprocess.TimeoutExpired`` (after killing the tree) on timeout,
     exactly like ``subprocess.run`` — existing callers' handling is unchanged.
     """
+    text_options = (
+        {
+            "text": True,
+            "encoding": _OUTPUT_ENCODING,
+            "errors": _OUTPUT_ERRORS,
+        }
+        if text
+        else {"text": False}
+    )
     proc = subprocess.Popen(
         cmd,
         shell=shell,
@@ -61,7 +78,7 @@ def run_killable(
         stdin=subprocess.PIPE if input is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=text,
+        **text_options,
         # New session => the child is its own process-group leader, so killing
         # the group takes down anything it spawned (a shell pipeline, a wrapped
         # scanner) rather than orphaning grandchildren.

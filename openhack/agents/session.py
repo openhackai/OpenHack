@@ -252,6 +252,8 @@ class Session:
                     ["git", "-C", self.target_dir, *args],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=3,
                     check=False,
                 ).stdout.strip()

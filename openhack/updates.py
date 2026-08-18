@@ -203,6 +203,8 @@ async def install_update(version: str, *, dry_run: bool = False) -> InstallResul
         return subprocess.run(
             command,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=180,
             check=False,

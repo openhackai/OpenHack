@@ -277,7 +277,12 @@ class FileSystemTools:
                     cmd.insert(1, f"--include={ext}")
 
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
             )
             file_paths = [
                 p.strip() for p in result.stdout.strip().split("\n") if p.strip()

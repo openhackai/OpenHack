@@ -1,5 +1,9 @@
 """Background-shell manager: spawn, buffer, poll, and kill."""
 
+import os
+import shlex
+import subprocess
+import sys
 import time
 
 from openhack.shells import ShellManager
@@ -22,6 +26,20 @@ def test_spawn_buffers_output_and_exits():
     assert _wait(lambda: sh.status == "exited"), "shell never exited"
     lines = sh.tail(10)
     assert "alpha" in lines and "beta" in lines
+    assert sh.returncode == 0
+
+
+def test_spawn_keeps_reading_after_undecodable_output():
+    code = "import os; os.write(1, b'before' + bytes([0x81]) + b'after\\n')"
+    argv = [sys.executable, "-c", code]
+    command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+    mgr = ShellManager()
+
+    sid = mgr.spawn(command)
+    sh = mgr.get(sid)
+
+    assert _wait(lambda: sh.status == "exited"), "shell reader stopped"
+    assert sh.tail(10) == ["before\ufffdafter"]
     assert sh.returncode == 0
 
 

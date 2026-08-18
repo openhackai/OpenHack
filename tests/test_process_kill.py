@@ -10,6 +10,7 @@ which unblocks the waiting thread. These tests prove the kill actually lands.
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -25,6 +26,20 @@ def test_run_killable_returns_completed_process():
     r = run_killable(["echo", "hi"], timeout=5)
     assert r.returncode == 0
     assert "hi" in r.stdout
+
+
+def test_run_killable_replaces_undecodable_output_instead_of_losing_response():
+    code = (
+        "import os; "
+        "os.write(1, b'before' + bytes([0x81]) + b'after'); "
+        "os.write(2, b'error' + bytes([0xff]) + b'tail')"
+    )
+
+    result = run_killable([sys.executable, "-c", code], timeout=5)
+
+    assert result.returncode == 0
+    assert result.stdout == "before\ufffdafter"
+    assert result.stderr == "error\ufffdtail"
 
 
 def test_run_killable_registers_then_unregisters():

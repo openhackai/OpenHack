@@ -151,7 +151,12 @@ def _detect_features_fast(
 
     try:
         find_result = subprocess.run(
-            find_cmd, capture_output=True, text=True, timeout=30
+            find_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
         )
         file_list = find_result.stdout
     except Exception as e:
@@ -185,8 +190,13 @@ def _detect_features_fast(
                 cmd.extend(["-e", kw])
             try:
                 proc = subprocess.run(
-                    cmd, input=file_list, capture_output=True,
-                    text=True, timeout=15,
+                    cmd,
+                    input=file_list,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=15,
                 )
                 matches = [l for l in proc.stdout.strip().split("\n") if l.strip()]
                 if matches:
@@ -214,8 +224,13 @@ def _detect_features_fast(
                      "--binary-files=without-match", combined]
         try:
             proc = subprocess.run(
-                cmd_parts, input=file_list, capture_output=True,
-                text=True, timeout=30,
+                cmd_parts,
+                input=file_list,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
             )
             files = []
             for line in proc.stdout.strip().split("\n"):
