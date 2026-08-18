@@ -30,9 +30,11 @@ import re
 import sys
 from typing import Callable, Optional
 
-from prompt_toolkit.input.vt100 import Vt100Input
 from prompt_toolkit.input.vt100_parser import Vt100Parser
 from prompt_toolkit.key_binding.key_processor import KeyPress
+
+if sys.platform != "win32":
+    from prompt_toolkit.input.vt100 import Vt100Input
 
 __all__ = [
     "KittyVt100Parser",
@@ -171,14 +173,21 @@ class KittyVt100Parser(Vt100Parser):
         super()._call_handler(key, insert_text)
 
 
-class KittyVt100Input(Vt100Input):
-    """posix Vt100 input that parses CSI-u key events."""
+if sys.platform != "win32":
+    class KittyVt100Input(Vt100Input):
+        """POSIX Vt100 input that parses CSI-u key events."""
 
-    def __init__(self, stdin) -> None:
-        super().__init__(stdin)
-        self.vt100_parser = KittyVt100Parser(
-            lambda key_press: self._buffer.append(key_press)
-        )
+        def __init__(self, stdin) -> None:
+            super().__init__(stdin)
+            self.vt100_parser = KittyVt100Parser(
+                lambda key_press: self._buffer.append(key_press)
+            )
+else:
+    class KittyVt100Input:
+        """Unavailable placeholder for the POSIX-only input adapter."""
+
+        def __init__(self, _stdin) -> None:
+            raise RuntimeError("Kitty Vt100 input is not available on Windows")
 
 
 def enable(stream=None) -> None:
