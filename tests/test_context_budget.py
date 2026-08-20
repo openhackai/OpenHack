@@ -30,6 +30,8 @@ def _cm():
 
 
 def test_latest_hosted_models_use_their_real_context_tiers():
+    assert MODEL_CONTEXT_LIMITS["grok-4.6"] == 500_000
+    assert MODEL_CONTEXT_LIMITS["glm-5.3"] == 1_048_576
     assert MODEL_CONTEXT_LIMITS["kimi-k3"] == 1_000_000
     assert MODEL_CONTEXT_LIMITS["deepseek-v4-pro"] == 1_000_000
     assert MODEL_CONTEXT_LIMITS["deepseek-v4-flash-0731"] == 1_000_000

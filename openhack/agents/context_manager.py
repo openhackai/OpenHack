@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
+    "grok-4.6": 500_000,
     "grok-4.5": 500_000,
     "grok-build-0.1": 256_000,
     "grok-4.3": 1_000_000,
@@ -24,6 +25,7 @@ MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "kimi-k2.6": 262_144,
     "kimi-k2.5": 256_000,
     "kimi-k2-thinking": 262_144,
+    "glm-5.3": 1_048_576,
     "glm-5.2": 262_144,
     "glm-5.1": 204_800,
     "glm-5": 204_800,
