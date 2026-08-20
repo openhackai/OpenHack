@@ -1618,6 +1618,7 @@ class OpenHackApp:
                 })
         self.org_name: str = cfg.get("openhack_org_name") or ""
         self.user_email: str = ""  # populated lazily
+        self.account_plan: str = ""
 
         self.mode: str = "landing"  # "landing" | "scanning" | "viewing" | "sessions"
         self.previous_mode: Optional[str] = None  # set when entering "sessions" so Esc can return
@@ -2335,6 +2336,7 @@ class OpenHackApp:
             "logo.mark": f"bold {OH_PRIMARY}",  # signal-green ground symbol
             "wordmark": f"bold {OH_TEXT}",
             "tagline": OH_MUTED,
+            "plan.badge": f"bold {OH_BG} bg:{OH_PRIMARY}",
             # tip line
             "tip": OH_MUTED,
             "tip.label": f"bold {OH_ORANGE}",
@@ -2787,6 +2789,12 @@ class OpenHackApp:
         def tagline():
             return [("class:tagline", "The open-source security agent")]
 
+        def plan_badge():
+            plan = getattr(self, "account_plan", "").lower()
+            if plan not in {"pro", "max", "enterprise"}:
+                return []
+            return [("class:plan.badge", f"  {plan.upper()}  ")]
+
         def tip():
             if not settings.tips_enabled:
                 return []
@@ -2842,6 +2850,8 @@ class OpenHackApp:
             *logo_windows,
             Window(height=1, style="class:body"),
             Window(FormattedTextControl(tagline), align=WindowAlign.CENTER,
+                   height=1, style="class:body"),
+            Window(FormattedTextControl(plan_badge), align=WindowAlign.CENTER,
                    height=1, style="class:body"),
             Window(height=2, style="class:body"),
             box_region,
@@ -3784,11 +3794,15 @@ class OpenHackApp:
                     else "class:picker.row"
                 )
                 bullet = "● " if active else "  "
-                suffix = (
-                    f"  {m['provider_label']}"
-                    if m.get("recent")
-                    else ""
-                )
+                if m.get("available") is False:
+                    required = str(m.get("required_plan") or "pro").upper()
+                    suffix = f"  🔒 {required}"
+                else:
+                    suffix = (
+                        f"  {m['provider_label']}"
+                        if m.get("recent")
+                        else ""
+                    )
                 text = f"  {bullet}{m['label']}{suffix}"
                 out.append((cls, text[:60].ljust(60)))
                 out.append(("", "\n"))
@@ -4902,23 +4916,24 @@ class OpenHackApp:
 
     async def _cmd_models(self, arg: str = "") -> None:
         from openhack import providers as provider_registry
-        from openhack.agents.llm import fetch_available_model_catalog
+        from openhack.agents.llm import fetch_hosted_model_catalog
 
         if provider_registry.is_connected("openhack"):
             self.last_status_line = "refreshing models from OpenHack inference…"
             self._invalidate()
-            catalog = await asyncio.to_thread(
-                fetch_available_model_catalog,
+            response = await asyncio.to_thread(
+                fetch_hosted_model_catalog,
                 settings.openhack_api_key,
                 settings.openhack_base_url,
             )
-            if catalog is None:
+            if response is None:
                 if self._hosted_model_catalog is None:
                     self.last_status_line = "could not load models from OpenHack inference"
                     self._invalidate()
                     return
             else:
-                self._hosted_model_catalog = catalog
+                self._hosted_model_catalog = response.models
+                self.account_plan = response.plan
         self._open_model_picker()
         if arg.strip():
             self.input_buffer.text = arg.strip()
@@ -5647,6 +5662,18 @@ class OpenHackApp:
     def _select_model_from_picker(self) -> None:
         if self.model_index:
             chosen = self.model_index[self.model_selected]
+            if chosen.get("available") is False:
+                required = str(chosen.get("required_plan") or "pro").lower()
+                tiers = (
+                    "Max and Enterprise"
+                    if required == "max"
+                    else "Pro, Max, and Enterprise"
+                )
+                self.last_status_line = (
+                    f"{chosen['label']} is available on {tiers} plans"
+                )
+                self._close_model_picker()
+                return
             self.provider = chosen["provider"]
             self.model = chosen["id"]
             existing_recents = load_user_config().get("recent_models") or []
@@ -7490,8 +7517,26 @@ class OpenHackApp:
                 await asyncio.sleep(0.5)
                 self._show_announcement_modal(modal_anns[0])
 
+        async def _refresh_account_catalog():
+            from openhack import providers as provider_registry
+            from openhack.agents.llm import fetch_hosted_model_catalog
+
+            if not provider_registry.is_connected("openhack"):
+                return
+            response = await asyncio.to_thread(
+                fetch_hosted_model_catalog,
+                settings.openhack_api_key,
+                settings.openhack_base_url,
+            )
+            if response is None:
+                return
+            self._hosted_model_catalog = response.models
+            self.account_plan = response.plan
+            self._invalidate()
+
         tick_task = asyncio.create_task(_ticker())
         asyncio.create_task(_check_updates())
+        asyncio.create_task(_refresh_account_catalog())
         try:
             await self.app.run_async()
         finally:

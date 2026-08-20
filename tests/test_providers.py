@@ -281,7 +281,32 @@ def test_fetch_available_model_catalog_preserves_server_metadata(monkeypatch):
         "family": "DeepSeek",
         "created_at": "2026-04-24T03:17:46Z",
         "tab": "openhack",
+        "available": True,
+        "required_plan": "",
     }]
+
+
+def test_fetch_hosted_model_catalog_preserves_plan_and_entitlements(monkeypatch):
+    import openhack.agents.llm as llm
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return b'''{"object":"list","plan":"pro","data":[{
+                "id":"gpt-5.6-sol",
+                "family":"GPT-5.6",
+                "available":false,
+                "required_plan":"max"
+            }]}'''
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+    result = llm.fetch_hosted_model_catalog(api_key="sk-test")
+
+    assert result is not None
+    assert result.plan == "pro"
+    assert result.models[0]["available"] is False
+    assert result.models[0]["required_plan"] == "max"
 
 
 def test_fetch_available_models_none_without_key(monkeypatch):

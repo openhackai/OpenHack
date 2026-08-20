@@ -69,17 +69,18 @@ class StreamStalled(Exception):
     """
 
 
-def fetch_available_model_catalog(
+@dataclass(frozen=True)
+class HostedModelCatalog:
+    models: list[dict[str, Any]]
+    plan: str
+
+
+def fetch_hosted_model_catalog(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     timeout: float = 10.0,
-) -> Optional[list[dict[str, Any]]]:
-    """Fetch the authoritative model catalog served by OpenHack inference.
-
-    The response metadata drives terminal tabs, family sections, labels, and
-    release ordering. Returning ``None`` distinguishes a failed refresh from a
-    valid empty catalog so callers never substitute speculative local models.
-    """
+) -> Optional[HostedModelCatalog]:
+    """Fetch model metadata plus the authenticated account's current plan."""
     key = api_key or settings.openhack_api_key
     base = (base_url or settings.openhack_base_url).rstrip("/")
     if not key:
@@ -92,23 +93,40 @@ def fetch_available_model_catalog(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except Exception as e:
-        logger.debug(f"fetch_available_model_catalog failed: {e}")
+        logger.debug(f"fetch_hosted_model_catalog failed: {e}")
         return None
     raw_models = data.get("data", []) if isinstance(data, dict) else []
     models: list[dict[str, Any]] = []
     for raw in raw_models:
         if not isinstance(raw, dict) or not isinstance(raw.get("id"), str):
             continue
-        model = {
+        models.append({
             "id": raw["id"],
             "label": str(raw.get("label") or raw.get("name") or raw["id"]),
             "desc": str(raw.get("description") or raw.get("desc") or ""),
             "family": str(raw.get("family") or "OpenHack"),
             "created_at": str(raw.get("created_at") or ""),
             "tab": str(raw.get("tab") or "openhack"),
-        }
-        models.append(model)
-    return models
+            "available": raw.get("available") is not False,
+            "required_plan": str(raw.get("required_plan") or ""),
+        })
+    plan = str(data.get("plan") or "").strip().lower() if isinstance(data, dict) else ""
+    return HostedModelCatalog(models=models, plan=plan)
+
+
+def fetch_available_model_catalog(
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Optional[list[dict[str, Any]]]:
+    """Fetch the authoritative model catalog served by OpenHack inference.
+
+    The response metadata drives terminal tabs, family sections, labels, and
+    release ordering. Returning ``None`` distinguishes a failed refresh from a
+    valid empty catalog so callers never substitute speculative local models.
+    """
+    catalog = fetch_hosted_model_catalog(api_key, base_url, timeout)
+    return catalog.models if catalog is not None else None
 
 
 def fetch_available_models(

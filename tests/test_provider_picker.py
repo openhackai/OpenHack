@@ -135,6 +135,8 @@ def test_hosted_tabs_group_families_with_newest_models_first(monkeypatch):
 
 
 def test_models_command_refreshes_hosted_catalog_from_inference(monkeypatch):
+    from openhack.agents.llm import HostedModelCatalog
+
     app = _searchable_app()
     opened = []
     live = [{
@@ -147,14 +149,15 @@ def test_models_command_refreshes_hosted_catalog_from_inference(monkeypatch):
     }]
     monkeypatch.setattr(providers, "is_connected", lambda name: name == "openhack")
     monkeypatch.setattr(
-        "openhack.agents.llm.fetch_available_model_catalog",
-        lambda *args: live,
+        "openhack.agents.llm.fetch_hosted_model_catalog",
+        lambda *args: HostedModelCatalog(models=live, plan="pro"),
     )
     app._open_model_picker = lambda: opened.append(True)
 
     asyncio.run(app._cmd_models())
 
     assert app._hosted_model_catalog == live
+    assert app.account_plan == "pro"
     assert opened == [True]
 
 
@@ -177,11 +180,34 @@ def _searchable_app():
     app._model_tabs = []
     app._model_tab = "openhack"
     app._hosted_model_catalog = None
+    app.account_plan = ""
     app.model_index = []
     app.model_selected = 0
     app.input_buffer = Buffer(multiline=False)
     app._invalidate = lambda: None
     return app
+
+
+def test_locked_model_selection_shows_tier_without_changing_model(monkeypatch):
+    app = _searchable_app()
+    app.model_index = [{
+        "id": "gpt-5.6-sol",
+        "label": "GPT-5.6 Sol",
+        "provider": "openhack",
+        "provider_label": "OpenHack",
+        "available": False,
+        "required_plan": "max",
+    }]
+    app.model_selected = 0
+    app._close_model_picker = lambda: setattr(app, "mode", "landing")
+
+    app._select_model_from_picker()
+
+    assert app.model == "grok-4.5"
+    assert app.mode == "landing"
+    assert app.last_status_line == (
+        "GPT-5.6 Sol is available on Max and Enterprise plans"
+    )
 
 
 def test_provider_search_prioritizes_title_and_supports_fuzzy_matches():
