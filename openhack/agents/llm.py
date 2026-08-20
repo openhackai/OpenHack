@@ -73,6 +73,7 @@ class StreamStalled(Exception):
 class HostedModelCatalog:
     models: list[dict[str, Any]]
     plan: str
+    org_name: str = ""
 
 
 def fetch_hosted_model_catalog(
@@ -111,7 +112,8 @@ def fetch_hosted_model_catalog(
             "required_plan": str(raw.get("required_plan") or ""),
         })
     plan = str(data.get("plan") or "").strip().lower() if isinstance(data, dict) else ""
-    return HostedModelCatalog(models=models, plan=plan)
+    org_name = str(data.get("org_name") or "").strip() if isinstance(data, dict) else ""
+    return HostedModelCatalog(models=models, plan=plan, org_name=org_name)
 
 
 def fetch_available_model_catalog(

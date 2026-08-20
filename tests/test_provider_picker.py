@@ -210,6 +210,28 @@ def test_locked_model_selection_shows_tier_without_changing_model(monkeypatch):
     )
 
 
+def test_landing_identity_shows_org_and_only_the_actual_paid_plan():
+    app = OpenHackApp.__new__(OpenHackApp)
+    app.org_name = "Acme Security"
+
+    app.account_plan = "free"
+    assert app._landing_account_identity() == [
+        ("class:account.org", "Acme Security"),
+    ]
+
+    app.account_plan = "max"
+    assert app._landing_account_identity() == [
+        ("class:account.org", "Acme Security"),
+        ("class:account.org", "  ·  "),
+        ("class:account.badge", "  MAX  "),
+    ]
+
+    app.account_plan = "enterprise"
+    assert app._landing_account_identity()[-1] == (
+        "class:account.badge", "  ENTERPRISE  "
+    )
+
+
 def test_provider_search_prioritizes_title_and_supports_fuzzy_matches():
     app = _searchable_app()
     app._provider_all = [

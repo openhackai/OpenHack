@@ -2336,7 +2336,8 @@ class OpenHackApp:
             "logo.mark": f"bold {OH_PRIMARY}",  # signal-green ground symbol
             "wordmark": f"bold {OH_TEXT}",
             "tagline": OH_MUTED,
-            "plan.badge": f"bold {OH_BG} bg:{OH_PRIMARY}",
+            "account.org": OH_MUTED,
+            "account.badge": f"bold {OH_BG} bg:{OH_PRIMARY}",
             # tip line
             "tip": OH_MUTED,
             "tip.label": f"bold {OH_ORANGE}",
@@ -2766,6 +2767,19 @@ class OpenHackApp:
             out.append((dim, ":" + branch))
         return out
 
+    def _landing_account_identity(self) -> list[tuple[str, str]]:
+        """Show the active org and paid tier only on the landing page."""
+        fragments: list[tuple[str, str]] = []
+        org_name = getattr(self, "org_name", "").strip()
+        plan = getattr(self, "account_plan", "").strip().lower()
+        if org_name:
+            fragments.append(("class:account.org", org_name))
+        if plan in {"pro", "max", "enterprise"}:
+            if fragments:
+                fragments.append(("class:account.org", "  ·  "))
+            fragments.append(("class:account.badge", f"  {plan.upper()}  "))
+        return fragments
+
     def _build_landing_container(self) -> HSplit:
         # Landing: the green ground mark over the two-tone wordmark, a brand
         # tagline, a bordered prompt with the signal-green accent bar, a
@@ -2788,12 +2802,6 @@ class OpenHackApp:
 
         def tagline():
             return [("class:tagline", "The open-source security agent")]
-
-        def plan_badge():
-            plan = getattr(self, "account_plan", "").lower()
-            if plan not in {"pro", "max", "enterprise"}:
-                return []
-            return [("class:plan.badge", f"  {plan.upper()}  ")]
 
         def tip():
             if not settings.tips_enabled:
@@ -2851,10 +2859,11 @@ class OpenHackApp:
             Window(height=1, style="class:body"),
             Window(FormattedTextControl(tagline), align=WindowAlign.CENTER,
                    height=1, style="class:body"),
-            Window(FormattedTextControl(plan_badge), align=WindowAlign.CENTER,
-                   height=1, style="class:body"),
             Window(height=2, style="class:body"),
             box_region,
+            Window(height=1, style="class:body"),
+            Window(FormattedTextControl(self._landing_account_identity),
+                   align=WindowAlign.CENTER, height=1, style="class:body"),
             Window(height=1, style="class:body"),
             Window(FormattedTextControl(tip), align=WindowAlign.CENTER,
                    height=1, style="class:body"),
@@ -4934,6 +4943,8 @@ class OpenHackApp:
             else:
                 self._hosted_model_catalog = response.models
                 self.account_plan = response.plan
+                if response.org_name:
+                    self.org_name = response.org_name
         self._open_model_picker()
         if arg.strip():
             self.input_buffer.text = arg.strip()
@@ -7532,6 +7543,8 @@ class OpenHackApp:
                 return
             self._hosted_model_catalog = response.models
             self.account_plan = response.plan
+            if response.org_name:
+                self.org_name = response.org_name
             self._invalidate()
 
         tick_task = asyncio.create_task(_ticker())

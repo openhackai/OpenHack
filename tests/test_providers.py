@@ -293,7 +293,7 @@ def test_fetch_hosted_model_catalog_preserves_plan_and_entitlements(monkeypatch)
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def read(self):
-            return b'''{"object":"list","plan":"pro","data":[{
+            return b'''{"object":"list","plan":"pro","org_name":"Acme Security","data":[{
                 "id":"gpt-5.6-sol",
                 "family":"GPT-5.6",
                 "available":false,
@@ -305,6 +305,7 @@ def test_fetch_hosted_model_catalog_preserves_plan_and_entitlements(monkeypatch)
 
     assert result is not None
     assert result.plan == "pro"
+    assert result.org_name == "Acme Security"
     assert result.models[0]["available"] is False
     assert result.models[0]["required_plan"] == "max"
 
