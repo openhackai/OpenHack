@@ -92,6 +92,7 @@ def test_hosted_tabs_group_families_with_newest_models_first(monkeypatch):
     app.provider = "openhack"
     app.model = "deepseek-v4-pro"
     app._hosted_model_catalog = [
+        {"id": "ox-alpha", "label": "Ox Alpha (Unreleased GLM model)", "desc": "", "family": "GLM", "created_at": "2026-08-20T20:04:55Z", "tab": "openhack", "available": True, "required_plan": ""},
         {"id": "deepseek-v4-flash-0731", "label": "DeepSeek V4 Flash 0731", "desc": "", "family": "DeepSeek", "created_at": "2026-07-31T00:00:00Z", "tab": "openhack"},
         {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "desc": "", "family": "DeepSeek", "created_at": "2026-04-24T00:00:00Z", "tab": "openhack"},
         {"id": "kimi-k3", "label": "Kimi K3", "desc": "", "family": "Kimi", "created_at": "2026-07-16T00:00:00Z", "tab": "openhack"},
@@ -119,12 +120,13 @@ def test_hosted_tabs_group_families_with_newest_models_first(monkeypatch):
         (model["section"], model["id"])
         for model in app.model_index
     ] == [
+        ("GLM", "ox-alpha"),
         ("DeepSeek", "deepseek-v4-flash-0731"),
         ("DeepSeek", "deepseek-v4-pro"),
         ("Kimi", "kimi-k3"),
         ("Kimi", "kimi-k2.5"),
     ]
-    assert app.model_selected == 1
+    assert app.model_selected == 2
 
     app._cycle_model_tab(+1)
     assert {model["section"] for model in app.model_index} == {"GPT"}

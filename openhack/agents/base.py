@@ -5,6 +5,7 @@ Base agent class for the multi-agent vulnerability scanning system.
 import json
 import logging
 import hashlib
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional
@@ -148,32 +149,42 @@ class BaseAgent(ABC):
     @staticmethod
     def _looks_like_unfinished_promise(text: str) -> bool:
         """Whether the tail says work will happen after this response."""
-        tail = " ".join((text or "").lower().split())[-280:]
-        # A conditional handoff is complete: the agent is waiting on the
-        # operator, not promising autonomous work after this response. Treating
-        # "give me a target and I'll get started" as unfinished caused a second
-        # completion-only model call after greetings (session 44dd642b).
-        if any(marker in tail for marker in (
-            "let me know",
-            "give me a target",
-            "give me the target",
-            "tell me what",
-            "tell me which",
-            "send me the",
-            "when you're ready",
-            "when you are ready",
-        )):
+        tail = " ".join((text or "").lower().split())[-400:]
+        promise = re.search(
+            r"\b(?:i['\N{RIGHT SINGLE QUOTATION MARK}]ll|i will|"
+            r"i['\N{RIGHT SINGLE QUOTATION MARK}]m going to|i am going to|"
+            r"let me(?! know\b))\b",
+            tail,
+        )
+        if promise is None:
             return False
-        promise_tail = tail
-        return any(marker in promise_tail for marker in (
-            "let me ",
-            "i'll ",
-            "i will ",
-            "next i'll ",
-            "next i will ",
-            "i'm going to ",
-            "i am going to ",
-        ))
+
+        # A future-tense phrase is not unfinished autonomous work when it is
+        # contingent on information or a choice from the operator. Match that
+        # relationship rather than enumerating exact sentences: providers use
+        # many equivalent phrasings ("give me", "point me at", "send", etc.).
+        before = tail[:promise.start()]
+        operator_request = re.search(
+            r"(?:^|[.!?;:\N{EM DASH}\N{EN DASH}-]\s*)"
+            r"(?:please\s+)?(?:give|tell|send|share|provide|point|paste|"
+            r"specify|choose|pick|confirm|clarify|attach|upload|drop)\b",
+            before,
+        )
+        if operator_request is not None:
+            return False
+
+        # Also cover explicit dependencies placed before or after the promise,
+        # such as "once you send it, I'll start" or "I'll start after you
+        # choose one". Conditions on the agent's own work remain unfinished.
+        dependency = re.compile(
+            r"\b(?:if|once|when|after)\s+(?:you\b|"
+            r"i\s+(?:have|get|receive|know)\s+(?:it|that|them|the\s+"
+            r"(?:target|url|host|path|repo|repository|scope|details?|file|code)\b))"
+        )
+        if dependency.search(tail):
+            return False
+
+        return True
 
     @classmethod
     def _operator_answer_for_completion(

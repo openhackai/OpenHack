@@ -215,8 +215,9 @@ class LLMClient:
     """LLM client for OpenHack."""
 
     # Client-side cost estimate for the TUI only — the inference layer tracks
-    # real cost server-side. Gemma is free on OpenRouter; Mistral/GLM are approx.
+    # real cost server-side. Explicitly free hosted models stay at zero.
     PRICING = {
+        "ox-alpha": {"input": 0.00, "output": 0.00},
         "kimi-k2.5": {"input": 0.50, "output": 2.80},
         "glm-5.2": {"input": 1.15, "output": 4.53},
         "gemma-4-31b": {"input": 0.00, "output": 0.00},
@@ -1080,11 +1081,9 @@ class LLMClient:
                 if input_tokens == 0 and output_tokens == 0:
                     logger.debug("No usage data in stream — cost will be zero for this call")
 
-                # Hosted inference is routed exclusively through OpenRouter;
-                # trust its measured usage.cost rather than maintaining a
-                # second pricing table in the scanner. BYOK providers retain
-                # their local catalog estimate because OpenRouter is not in
-                # that request path.
+                # Hosted inference owns routing and authoritative cost; do not
+                # maintain a second provider-specific pricing path here. BYOK
+                # providers retain their local catalog estimate.
                 cost = (
                     reported_cost or 0.0
                     if self._resolved is None

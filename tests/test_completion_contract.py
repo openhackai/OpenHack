@@ -218,7 +218,7 @@ def test_natural_no_action_completion_needs_no_guard_call(tmp_path):
 
 
 def test_complete_greeting_does_not_start_completion_followup(tmp_path):
-    """Regression for lifecycle calls after greetings, including 44dd642b."""
+    """Regression for lifecycle calls after greetings, including 7d2707d9."""
 
     class _StreamingScriptedLLM(_ScriptedLLM):
         async def chat(self, **kwargs):
@@ -230,8 +230,8 @@ def test_complete_greeting_does_not_start_completion_followup(tmp_path):
             return response
 
     natural = (
-        "Hey — what are we working on? Give me a target and a goal and "
-        "I'll get started."
+        "Hey — what are we working on? Point me at a target (code, URL, host) "
+        "or a task and I'll get started."
     )
     retry = "No task yet — just a greeting, so nothing to run."
     lifecycle_recap = "\n\n"
@@ -327,6 +327,35 @@ def test_unfinished_promise_does_not_override_completion_summary():
     )
 
     assert answer == "Exploit written and verified."
+
+
+def test_operator_dependent_promises_are_complete_handoffs():
+    handoffs = [
+        "Give me a target and I'll get started.",
+        "Point me at the repo, then I will take a look.",
+        "Please send the URL. I'm going to start once I have it.",
+        "Once you provide the scope, I'll begin.",
+        "I'll start after you choose one.",
+    ]
+
+    assert all(
+        not BaseAgent._looks_like_unfinished_promise(handoff)
+        for handoff in handoffs
+    )
+
+
+def test_autonomous_promises_still_trigger_continuation():
+    promises = [
+        "I found the endpoint. I'll scan it now.",
+        "Let me write the exploit now.",
+        "I'm going to run the tests next.",
+        "After I inspect the route, I will report back.",
+    ]
+
+    assert all(
+        BaseAgent._looks_like_unfinished_promise(promise)
+        for promise in promises
+    )
 
 
 def test_let_me_know_invitation_keeps_full_completed_answer():
