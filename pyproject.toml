@@ -66,6 +66,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["openhack"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["/recon"]
+
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.3.0",
