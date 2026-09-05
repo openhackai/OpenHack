@@ -34,7 +34,7 @@ async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
         "openhack.agents.llm.fetch_available_models",
         lambda **kwargs: [
             "grok-4.5",
-            "glm-5.2",
+            "glm-5.3-flash",
             "kimi-k2.5",
             "new-hosted-model",
         ],
@@ -42,8 +42,8 @@ async def test_openhack_onboarding_verifies_and_defaults_to_glm(monkeypatch):
 
     assert await setup._run_first_time_onboarding() is True
     assert saved[-1]["provider"] == "openhack"
-    assert saved[-1]["model"] == "glm-5.2"
-    assert saved[-1]["openhack_model_id"] == "glm-5.2"
+    assert saved[-1]["model"] == "glm-5.3-flash"
+    assert saved[-1]["openhack_model_id"] == "glm-5.3-flash"
     assert saved[-1]["onboarding_version"] == 1
     assert titles == ["Connect a provider", "Connect OpenHack"]
 

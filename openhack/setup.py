@@ -72,7 +72,7 @@ PROVIDERS = [
         "key_env": "OPENHACK_API_KEY",
         # key_url is built dynamically from settings.openhack_app_url at display time.
         "models": [],
-        "default_model": "glm-5.2",
+        "default_model": "glm-5.3-flash",
     },
 ]
 
@@ -493,7 +493,7 @@ async def _run_first_time_onboarding() -> bool:
     _html(f"  {GREEN}✓{EGREEN} Connected to OpenHack")
     _html(f"  {GREEN}✓{EGREEN} Inference verified")
 
-    model_id = "glm-5.2"
+    model_id = "glm-5.3-flash"
 
     new_cfg = {
         "provider": "openhack",
@@ -868,7 +868,7 @@ async def _connect_openhack(
         _html(f"  {YELLOW}⚠{EYELLOW} Could not verify this connection.")
         return False
 
-    model_id = "glm-5.2"
+    model_id = "glm-5.3-flash"
     new_cfg = {
         "provider": "openhack",
         "model": model_id,
