@@ -20,7 +20,7 @@ def _normalize_user_config(data: dict) -> dict:
     if data.get("provider") not in _REMOVED_PROVIDER_IDS:
         return data
     normalized = dict(data)
-    normalized.update({"provider": "openhack", "model": "glm-5.2"})
+    normalized.update({"provider": "openhack", "model": "glm-5.3-flash"})
     return normalized
 
 
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     openhack_api_key: Optional[str] = None
     openhack_base_url: str = ""
     openhack_app_url: str = ""
-    openhack_model_id: str = "glm-5.2"
+    openhack_model_id: str = "glm-5.3-flash"
     # Throughput-first OpenRouter routing for hosted OpenHack inference.
     fast_mode: bool = False
     # Rotating contextual guidance on the TUI landing screen.

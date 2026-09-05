@@ -305,7 +305,7 @@ class _PlaceholderProcessor(Processor):
 
 
 
-PROVIDER_DEFAULTS = {"openhack": "glm-5.2"}
+PROVIDER_DEFAULTS = {"openhack": "glm-5.3-flash"}
 
 CHAT_SYSTEM_PROMPT = (
     "You are OpenHack, a security-focused AI assistant embedded in the OpenHack CLI. "
@@ -1605,7 +1605,7 @@ class OpenHackApp:
                 ),
             )
             if replacement == "openhack":
-                replacement_model = "glm-5.2"
+                replacement_model = "glm-5.3-flash"
             else:
                 resolved = provider_registry.resolve(replacement)
                 replacement_model = resolved.model if resolved else ""
@@ -2664,7 +2664,7 @@ class OpenHackApp:
             ("class:input.box", "  "),
             ("class:input.model.agent", cwd),
             ("class:input.model.sep", " · "),
-            ("class:input.model.name", self.model or "glm-5.2"),
+            ("class:input.model.name", self.model or "glm-5.3-flash"),
             (
                 "class:input.model.provider",
                 f"  {self.provider}"
@@ -4753,7 +4753,7 @@ class OpenHackApp:
             self.last_status_line = f"connection failed: {provider_id} is not authenticated"
             return False
         if provider_id == "openhack":
-            model_id = "glm-5.2"
+            model_id = "glm-5.3-flash"
             provider_label = label or "OpenHack"
         else:
             resolved = provider_registry.resolve(provider_id)
@@ -4919,7 +4919,7 @@ class OpenHackApp:
         remove_credential(provider_id)
         if self.provider == provider_id:
             self.provider = "openhack"
-            self.model = settings.openhack_model_id or "glm-5.2"
+            self.model = settings.openhack_model_id or "glm-5.3-flash"
             save_user_config({"provider": self.provider, "model": self.model})
         self.last_status_line = f"disconnected {provider_id}"
 

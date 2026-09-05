@@ -47,7 +47,7 @@ class TestLoadSaveConfig:
             loaded = load_user_config()
 
         assert loaded["provider"] == "openhack"
-        assert loaded["model"] == "glm-5.2"
+        assert loaded["model"] == "glm-5.3-flash"
         assert resolve_provider("opencode") == "openhack"
 
 
