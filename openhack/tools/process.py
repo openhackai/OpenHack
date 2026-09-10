@@ -17,13 +17,43 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 from typing import Optional, Sequence, Union
 
 __all__ = ["run_killable", "kill_process_group"]
 
+# SIGKILL / process groups are Unix-only. On Windows, SIGTERM exists but
+# SIGKILL does not — None means "hard kill" via TerminateProcess.
+_SIGKILL = getattr(signal, "SIGKILL", None)
 
-def kill_process_group(proc: "subprocess.Popen", sig: int = signal.SIGKILL) -> None:
-    """Send *sig* to the child's whole process group; fall back to the pid."""
+
+def kill_process_group(
+    proc: "subprocess.Popen",
+    sig: Optional[int] = None,
+) -> None:
+    """Send *sig* to the child's whole process group; fall back to the pid.
+
+    ``sig=None`` (default) or ``SIGKILL`` is a hard kill. ``SIGTERM`` is soft.
+    On Windows there are no process groups / ``SIGKILL``; soft uses
+    ``terminate()`` and hard uses ``kill()``.
+    """
+    if proc.poll() is not None:
+        return
+
+    hard = sig is None or sig == _SIGKILL
+
+    if sys.platform == "win32":
+        try:
+            if hard:
+                proc.kill()
+            else:
+                proc.terminate()
+        except OSError:
+            pass
+        return
+
+    if sig is None:
+        sig = signal.SIGKILL
     try:
         os.killpg(os.getpgid(proc.pid), sig)
     except (ProcessLookupError, PermissionError, OSError):
