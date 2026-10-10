@@ -69,3 +69,21 @@ def test_ids_are_sequential_and_listed():
     ids = [mgr.spawn("true") for _ in range(3)]
     assert ids == ["sh1", "sh2", "sh3"]
     assert {s.id for s in mgr.list()} == {"sh1", "sh2", "sh3"}
+
+
+def test_non_utf8_output_does_not_deadlock():
+    # Regression for #13: a command that emits invalid UTF-8 bytes must not
+    # crash the reader thread and deadlock on a full stdout pipe (the child
+    # blocks in write() while the reader stops draining, and wait() hangs).
+    mgr = ShellManager()
+    sid = mgr.spawn(
+        "python3 -c 'import sys; sys.stdout.buffer.write(b\"\\xff\" * 200000)'"
+    )
+    sh = mgr.get(sid)
+    assert _wait(lambda: sh.status == "exited", timeout=5.0), (
+        "shell deadlocked on non-UTF-8 output"
+    )
+    assert sh.returncode == 0
+    # the invalid bytes are decoded as replacement characters, not dropped
+    assert any("\ufffd" in line for line in sh.tail(20))
+
