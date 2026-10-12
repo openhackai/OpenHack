@@ -19,6 +19,34 @@ Usage:
 import sys
 
 
+def _require_auth() -> bool:
+    """Validate that the active LLM provider has credentials configured."""
+    import os
+    from openhack import providers
+    from openhack.config import settings
+
+    active_provider = settings.llm_provider
+    if active_provider != "openhack":
+        if providers.is_connected(active_provider):
+            return True
+        spec = providers.get_spec(active_provider)
+        if spec and spec.required_env:
+            missing = [e for e in spec.required_env if not os.environ.get(e)]
+            if missing:
+                print(f"Error: provider '{active_provider}' is missing required environment: {', '.join(missing)}.")
+                return False
+        key_env = spec.api_key_env if spec else f"{active_provider.upper()}_API_KEY"
+        print(f"Error: provider '{active_provider}' is not configured.")
+        print(f"Set {key_env} or run 'openhack' to configure credentials.")
+        return False
+
+    if not settings.openhack_api_key and not providers.is_connected("openhack"):
+        print("Error: not logged in.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+        return False
+    return True
+
+
 def _cmd_scan():
     """Run a headless scan on a directory."""
     from pathlib import Path
@@ -31,10 +59,7 @@ def _cmd_scan():
         print("Usage: openhack --scan [path]")
         return
 
-    from openhack.config import settings
-    if not settings.openhack_api_key:
-        print("Error: not logged in.")
-        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+    if not _require_auth():
         return
 
     import asyncio
@@ -62,10 +87,7 @@ def _cmd_hack():
     if not target.is_dir():
         target = Path.cwd()
 
-    from openhack.config import settings
-    if not settings.openhack_api_key:
-        print("Error: not logged in.")
-        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+    if not _require_auth():
         return
 
     from openhack.interactive_runner import run_task
@@ -90,10 +112,7 @@ def _cmd_plan():
     if not target.is_dir():
         target = Path.cwd()
 
-    from openhack.config import settings
-    if not settings.openhack_api_key:
-        print("Error: not logged in.")
-        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+    if not _require_auth():
         return
 
     from openhack.interactive_runner import run_plan
@@ -112,10 +131,7 @@ def _cmd_agent():
     if not target.is_dir():
         target = Path.cwd()
 
-    from openhack.config import settings
-    if not settings.openhack_api_key:
-        print("Error: not logged in.")
-        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+    if not _require_auth():
         return
 
     from openhack.interactive_runner import run_repl

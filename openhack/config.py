@@ -227,6 +227,8 @@ def _build_settings() -> Settings:
     for key, val in user_cfg.items():
         if val is not None and val != "":
             env_overrides[key.upper()] = str(val)
+            if key == "provider":
+                env_overrides["LLM_PROVIDER"] = str(resolve_provider(str(val)))
 
     dotenv_keys = _dotenv_nonempty_keys(Path(".env"))
     old_env = {}
