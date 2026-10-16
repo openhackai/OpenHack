@@ -66,6 +66,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "AI_GATEWAY_API_KEY", "anthropic/claude-sonnet-4.6", True,
         hint="Hundreds of models through Vercel AI Gateway",
     ),
+    "cruise": ProviderSpec(
+        "cruise", "BytesBrains Cruise", "https://cruise.bytesbrains.net/v1",
+        "CRUISE_API_KEY", "workers-ai/@cf/zai-org/glm-5.3", True,
+        hint="One key across open models, with budget caps",
+    ),
     "cloudflare-workers-ai": ProviderSpec(
         "cloudflare-workers-ai", "Cloudflare Workers AI",
         "https://api.cloudflare.com/client/v4/accounts/"
@@ -164,6 +169,7 @@ CURATED_PROVIDER_IDS = (
     "openrouter",
     "google",
     "vercel",
+    "cruise",
     "cloudflare-workers-ai",
     "fireworks-ai",
     "groq",

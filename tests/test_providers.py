@@ -29,6 +29,7 @@ def test_curated_provider_list_matches_primary_picker():
         "openrouter",
         "google",
         "vercel",
+        "cruise",
         "cloudflare-workers-ai",
         "fireworks-ai",
         "groq",
@@ -101,6 +102,19 @@ def test_resolve_openai_reads_key_and_base(monkeypatch):
     assert r.api_key == "sk-test"
     assert r.missing_key_env is None
     assert r.model  # a default model
+
+
+def test_resolve_cruise_reads_key_and_base(monkeypatch):
+    monkeypatch.setenv("CRUISE_API_KEY", "ck-test")
+    monkeypatch.delenv("CRUISE_BASE_URL", raising=False)
+    monkeypatch.delenv("CRUISE_MODEL", raising=False)
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
+    r = providers.resolve("cruise")
+    assert r.base_url == "https://cruise.bytesbrains.net/v1"
+    assert r.api_key == "ck-test"
+    assert r.model == "workers-ai/@cf/zai-org/glm-5.3"
+    assert r.supports_prompt_cache is True
+    assert r.missing_key_env is None
 
 
 def test_resolve_reports_missing_key(monkeypatch):
