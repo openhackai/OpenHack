@@ -69,8 +69,8 @@ packages = ["openhack"]
 [tool.hatch.build.targets.sdist]
 exclude = ["/recon"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=7.1.0",
