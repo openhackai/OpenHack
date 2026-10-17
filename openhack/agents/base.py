@@ -237,6 +237,29 @@ class BaseAgent(ABC):
         self.session.total_output_tokens += response.usage.get("output_tokens", 0)
         self.context_manager.update_usage(response.usage.get("input_tokens", 0))
 
+    def _budget_exceeded(self, loop_started: float) -> Optional[str]:
+        """Return a human-readable reason if a spend/runtime cap is hit.
+
+        Both caps are opt-in: a value <= 0 disables that check. Cost is
+        session-wide (agents share ``session.total_cost``); runtime is measured
+        from the start of this agent loop.
+        """
+        max_cost = getattr(settings, "agent_max_cost_usd", 0.0) or 0.0
+        if max_cost > 0 and self.session.total_cost >= max_cost:
+            return (
+                f"cost cap reached (${self.session.total_cost:.4f} >= "
+                f"${max_cost:.4f}; agent_max_cost_usd)"
+            )
+        max_runtime = getattr(settings, "agent_max_runtime_s", 0.0) or 0.0
+        if max_runtime > 0:
+            elapsed = time.monotonic() - loop_started
+            if elapsed >= max_runtime:
+                return (
+                    f"runtime cap reached ({elapsed:.0f}s >= "
+                    f"{max_runtime:.0f}s; agent_max_runtime_s)"
+                )
+        return None
+
     def _estimate_tokens(self, messages: list[Message], system: str) -> int:
         """Rough token estimate: ~4 chars per token for English text."""
         total_chars = len(system)
@@ -403,6 +426,7 @@ class BaseAgent(ABC):
         max_iterations = getattr(settings, "agent_max_iterations", 0) or 0
         stale_limit = getattr(settings, "agent_stale_turn_limit", 8)
         iteration = 0
+        loop_started = time.monotonic()
         # Natural prose returned immediately before the continuation guard.
         # Some providers obey the guard by sending finish_task in a separate
         # response; retain the prose so a no-op greeting does not acquire a
@@ -419,6 +443,21 @@ class BaseAgent(ABC):
             await self.session.wait_if_paused()
             if self.session.cancelled:
                 break
+            budget_reason = self._budget_exceeded(loop_started)
+            if budget_reason:
+                logger.warning(f"[{self.name}] Stopping: {budget_reason}")
+                result = {
+                    "error": "Budget exceeded",
+                    "detail": budget_reason,
+                    "partial_result": self._last_assistant_content(),
+                }
+                self.session.record_event(
+                    "agent_loop_stopped",
+                    {"reason": "budget_exceeded", **result},
+                    agent=self.name,
+                )
+                self.session.finish_turn("budget_exceeded", result, agent=self.name)
+                return result
             iteration += 1
             self.session.record_event(
                 "agent_iteration_started",

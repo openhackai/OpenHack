@@ -157,6 +157,15 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 0
     agent_stale_turn_limit: int = 8
 
+    # Spend / wall-clock backstops. With no iteration cutoff, the stale-turn
+    # stop only catches thrash; a run that keeps producing novel output has no
+    # other bound. These are opt-in (0 = unlimited, matching the no-cutoff
+    # philosophy) and are checked before every model call.
+    #   agent_max_cost_usd:   session-wide spend (all agents share session.total_cost)
+    #   agent_max_runtime_s:  wall-clock seconds for a single agent loop
+    agent_max_cost_usd: float = 0.0
+    agent_max_runtime_s: float = 0.0
+
     # Scan scoping — exclude paths that are never production web attack surface
     scan_exclude_patterns: list[str] = [
         "**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**",
