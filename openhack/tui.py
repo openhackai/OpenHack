@@ -78,6 +78,7 @@ from openhack.config import (
 )
 from openhack.providers import CURATED_PROVIDER_IDS
 from openhack.setup import run_provider_connect, run_setup_command
+from openhack import export as export_mod
 from openhack.shells import ShellManager
 from openhack.tools.registry import ToolRegistry
 from openhack.prompts.project_context import build_project_context
@@ -353,6 +354,7 @@ _SLASH_COMMANDS = [
     ("/findings", "Show findings from the current session"),
     ("/verify", "Verify loaded findings (`/verify sandbox` or `/verify browser`)"),
     ("/copy", "Copy the selected finding as an AI-fix prompt to the clipboard"),
+    ("/export", "Export findings to SARIF / Markdown / JSON — /export [sarif|md|json] [path]"),
     ("/pause", "Pause the running scan/agent (Ctrl+C also pauses)"),
     ("/resume", "Resume a paused run"),
     ("/cancel", "Stop the running scan/agent"),
@@ -398,6 +400,7 @@ _GENERAL_TIPS = (
     "Use /verify sandbox to reproduce findings safely.",
     "Use /verify browser to validate browser-exploitable findings.",
     "Use /copy to copy a finding as a remediation prompt.",
+    "Use /export to save findings as SARIF for GitHub code scanning.",
     "Use /sessions to reopen an earlier investigation.",
     "Use /cost to inspect token usage and inference cost.",
     "Use /cd <path> to change the active project.",
@@ -4614,6 +4617,8 @@ class OpenHackApp:
             self._open_shells_view()
         elif cmd == "/copy":
             self._cmd_copy_fix()
+        elif cmd == "/export":
+            self._cmd_export(arg)
         elif cmd == "/verify":
             self._cmd_verify(arg)
         elif cmd == "/mouse":
@@ -5128,6 +5133,49 @@ class OpenHackApp:
             self.last_status_line = (
                 "couldn't find a clipboard tool (pbcopy/xclip/wl-copy/clip)"
             )
+
+    def _cmd_export(self, arg: str) -> None:
+        """/export [sarif|md|json] [path] — write all loaded findings to a file."""
+        findings = self._current_findings()
+        if not findings:
+            self.last_status_line = (
+                "no findings to export — run /scan or load a session from /sessions first"
+            )
+            return
+
+        tokens = arg.split()
+        fmt: Optional[str] = None
+        if tokens:
+            fmt = export_mod.normalize_format(tokens[0])
+            if fmt is not None:
+                tokens = tokens[1:]
+        raw_path = " ".join(tokens)
+
+        if fmt is None and raw_path:
+            fmt = export_mod.infer_format_from_path(raw_path)
+            if fmt is None:
+                self.last_status_line = (
+                    f"usage: /export [{'|'.join(export_mod.FORMATS)}] [path] — "
+                    f"can't infer a format from '{raw_path}'"
+                )
+                return
+        fmt = fmt or "sarif"
+
+        dest = _resolve_path_argument(raw_path, default=os.getcwd())
+        target = (
+            self.viewing_target
+            or (self.scan.target if self.scan is not None and self.scan.target else "")
+            or None
+        )
+        try:
+            written = export_mod.write_export(findings, fmt, dest, target=target)
+        except export_mod.ExportError as exc:
+            self.last_status_line = f"error: {exc}"
+            return
+        self.last_status_line = (
+            f"exported {len(findings)} finding(s) as {fmt.upper()} → "
+            f"{_abbrev_home(str(written))}"
+        )
 
     # ── Sessions overlay ──────────────────────────────────────────
 
