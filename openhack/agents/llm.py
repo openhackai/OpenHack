@@ -228,6 +228,7 @@ class LLMClient:
     # Set to True for the rest of the session when the endpoint rejects
     # prompt_cache_key (e.g. Groq), so we stop sending it.
     _cache_key_unsupported = False
+    _temperature_unsupported_models: set[str] = set()
 
     def __init__(
         self,
@@ -248,6 +249,7 @@ class LLMClient:
             self.model = model or settings.openhack_model_id
 
         self.temperature = temperature
+        self._temperature_unsupported = False
         self.max_tokens = max_tokens
         self.prompt_cache_key = prompt_cache_key
         self.total_cost: float = 0.0
@@ -265,6 +267,13 @@ class LLMClient:
         self.event_callback = None
 
         self._init_client()
+
+    @property
+    def _is_temperature_unsupported(self) -> bool:
+        return (
+            getattr(self, "_temperature_unsupported", False)
+            or self.model in LLMClient._temperature_unsupported_models
+        )
 
     def _status(self, text: str) -> None:
         self._event("model_status", {"message": text})
@@ -727,27 +736,65 @@ class LLMClient:
         tool_choice: Optional[str] = None,
         on_chunk: Optional[Callable] = None,
     ) -> LLMResponse:
-        try:
-            return await self._chat(messages, tools, system, tool_choice=tool_choice, on_chunk=on_chunk)
-        except openai.APIStatusError as e:
-            detail = str(e).lower()
-            if (
-                self.prompt_cache_key
-                and not LLMClient._cache_key_unsupported
-                and ("prompt_cache_key" in detail or "prompt cache key" in detail)
-            ):
-                LLMClient._cache_key_unsupported = True
-                # NEVER print here: in the TUI this writes straight into the
-                # full-screen buffer, tearing the layout and leaving text the
-                # renderer doesn't know about (it survives until that region
-                # happens to be redrawn). Log it, and tell the UI via the hook.
-                logger.warning(
-                    "Endpoint doesn't support prompt caching — retrying without it. "
-                    "To disable permanently: /config prompt_caching false"
-                )
-                self._status("endpoint rejected prompt caching — retrying without it")
+        while True:
+            try:
                 return await self._chat(messages, tools, system, tool_choice=tool_choice, on_chunk=on_chunk)
-            raise
+            except openai.APIStatusError as e:
+                detail = str(e).lower()
+                if (
+                    self.prompt_cache_key
+                    and not LLMClient._cache_key_unsupported
+                    and ("prompt_cache_key" in detail or "prompt cache key" in detail)
+                ):
+                    LLMClient._cache_key_unsupported = True
+                    # NEVER print here: in the TUI this writes straight into the
+                    # full-screen buffer, tearing the layout and leaving text the
+                    # renderer doesn't know about (it survives until that region
+                    # happens to be redrawn). Log it, and tell the UI via the hook.
+                    logger.warning(
+                        "Endpoint doesn't support prompt caching — retrying without it. "
+                        "To disable permanently: /config prompt_caching false"
+                    )
+                    self._status("endpoint rejected prompt caching — retrying without it")
+                    continue
+
+                param = ""
+                if hasattr(e, "body") and isinstance(e.body, dict):
+                    error_obj = e.body.get("error")
+                    if isinstance(error_obj, dict):
+                        param = str(error_obj.get("param") or "").lower()
+
+                if (
+                    self.temperature is not None
+                    and not self._is_temperature_unsupported
+                    and (
+                        param == "temperature"
+                        or (
+                            "temperature" in detail
+                            and any(
+                                phrase in detail
+                                for phrase in (
+                                    "unsupported",
+                                    "unknown parameter",
+                                    "unexpected keyword",
+                                    "not supported",
+                                    "not allowed",
+                                    "does not support",
+                                    "invalid parameter",
+                                )
+                            )
+                        )
+                    )
+                ):
+                    self._temperature_unsupported = True
+                    LLMClient._temperature_unsupported_models.add(self.model)
+                    logger.warning(
+                        f"Model '{self.model}' rejected temperature parameter — retrying without it."
+                    )
+                    self._status(f"model '{self.model}' rejected temperature — retrying without it")
+                    continue
+
+                raise
 
     async def _chat(
         self,
@@ -766,10 +813,11 @@ class LLMClient:
             "model": self.model,
             "messages": openai_messages,
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.temperature is not None and not self._is_temperature_unsupported:
+            kwargs["temperature"] = self.temperature
         # OpenHack inference translates this trusted product hint into
         # OpenRouter's provider.sort="throughput" routing. It is deliberately
         # a header so it never leaks as an unsupported model parameter.
@@ -798,7 +846,7 @@ class LLMClient:
             {
                 "provider": getattr(self, "provider", None),
                 "requested_model": self.model,
-                "temperature": self.temperature,
+                "temperature": kwargs.get("temperature"),
                 "max_tokens": self.max_tokens,
                 "stream": True,
                 "tool_choice": tool_choice or ("auto" if tools else None),
