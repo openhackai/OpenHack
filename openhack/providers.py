@@ -293,7 +293,10 @@ def is_connected(name: str) -> bool:
         and (credential.get("access") or credential.get("refresh"))
     ):
         return True
-    return bool(spec.keyless_default and config.get("provider") == name)
+    return bool(
+        spec.keyless_default
+        and (config.get("provider") == name or os.environ.get("LLM_PROVIDER") == name)
+    )
 
 
 def connected_provider_ids(
@@ -327,7 +330,10 @@ def connected_provider_ids(
             os.environ.get(spec.api_key_env)
             or has_api_key
             or has_oauth
-            or (spec.keyless_default and config.get("provider") == spec.name)
+            or (
+                spec.keyless_default
+                and (config.get("provider") == spec.name or os.environ.get("LLM_PROVIDER") == spec.name)
+            )
         ):
             connected.add(spec.name)
     return connected

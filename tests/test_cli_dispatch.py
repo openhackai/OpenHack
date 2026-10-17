@@ -101,3 +101,79 @@ def test_launch_tui_never_runs_first_time_setup(monkeypatch):
     m._launch_tui()
 
     assert calls == [{"resume_session_id": None}]
+
+
+def test_require_auth_passes_for_connected_byok_provider(monkeypatch):
+    from openhack.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openhack_api_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert m._require_auth() is True
+    assert out.getvalue() == ""
+
+
+def test_require_auth_fails_for_disconnected_byok_provider(monkeypatch):
+    from openhack.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openhack_api_key", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("openhack.provider_auth.all_credentials", lambda: {})
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert m._require_auth() is False
+    assert "Error: provider 'openai' is not configured." in out.getvalue()
+    assert "OPENAI_API_KEY" in out.getvalue()
+
+
+def test_require_auth_fails_for_openhack_when_logged_out(monkeypatch):
+    from openhack.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "openhack")
+    monkeypatch.setattr(settings, "openhack_api_key", None)
+    monkeypatch.delenv("OPENHACK_API_KEY", raising=False)
+    monkeypatch.setattr("openhack.config.load_user_config", lambda: {})
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert m._require_auth() is False
+    assert "Error: not logged in." in out.getvalue()
+
+
+def test_require_auth_passes_for_openhack_when_logged_in(monkeypatch):
+    from openhack.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "openhack")
+    monkeypatch.setattr(settings, "openhack_api_key", "sk-openhack-test")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert m._require_auth() is True
+    assert out.getvalue() == ""
+
+
+def test_cmd_scan_runs_with_byok_provider_without_openhack_key(monkeypatch, tmp_path):
+    from openhack.config import settings
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openhack_api_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
+
+    target_dir = tmp_path / "sample-project"
+    target_dir.mkdir()
+    monkeypatch.setattr("sys.argv", ["openhack", "--scan", str(target_dir)])
+
+    scan_invoked = []
+
+    async def _fake_run(target):
+        scan_invoked.append(target)
+
+    monkeypatch.setattr("openhack.headless_scan.run_headless_scan", _fake_run)
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        m._cmd_scan()
+
+    assert scan_invoked == [str(target_dir)]
+    assert "Error: not logged in" not in out.getvalue()
+
