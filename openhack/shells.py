@@ -94,6 +94,7 @@ class ShellManager:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",  # non-UTF-8 output must not crash the reader and deadlock the pipe
             bufsize=1,
             cwd=cwd or os.getcwd(),
             env=env,
