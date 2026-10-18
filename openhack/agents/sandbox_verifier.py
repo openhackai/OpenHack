@@ -355,7 +355,16 @@ class SandboxVerifierAgent(BaseAgent):
                     },
                 )
 
-                if tool_call.name == "sandbox_http_request":
+                if tool_call.parse_error:
+                    result = {
+                        "error": "tool_call_truncated",
+                        "message": (
+                            f"Arguments for '{tool_call.name}' were truncated due to token limits "
+                            f"(parse error: {tool_call.parse_error}). "
+                            "Please retry and call the tool with more concise arguments."
+                        ),
+                    }
+                elif tool_call.name == "sandbox_http_request":
                     result = await self._handle_sandbox_http_request(tool_call.arguments)
                 elif tool_call.name == "sandbox_multi_step":
                     result = await self._handle_sandbox_multi_step(tool_call.arguments)

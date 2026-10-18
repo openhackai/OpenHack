@@ -652,7 +652,16 @@ class BaseAgent(ABC):
                 # (for example, two identical greetings).  Caching it across
                 # turns rejects a valid completion and makes the continuation
                 # guard ask the model for a second response.
-                if not is_finish_task and key in self._call_cache:
+                if tool_call.parse_error:
+                    result = {
+                        "error": "tool_call_truncated",
+                        "message": (
+                            f"Arguments for '{tool_call.name}' were truncated due to token limits "
+                            f"(parse error: {tool_call.parse_error}). "
+                            "Please retry and call the tool with more concise arguments."
+                        ),
+                    }
+                elif not is_finish_task and key in self._call_cache:
                     # Anti-repetition: this exact call already ran — don't
                     # re-execute (saves tokens) and nudge the agent to move on.
                     prev_turn, prev_summ = self._call_cache[key]

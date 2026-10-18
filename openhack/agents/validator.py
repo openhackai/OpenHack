@@ -91,7 +91,10 @@ class ValidatorAgent(BaseAgent):
         return super().get_tools() + [VALIDATE_FINDING_TOOL, FINISH_VALIDATION_TOOL]
 
     def _handle_validate_finding(self, args: dict) -> dict:
-        status = args.get("status", "").lower()
+        raw_status = args.get("status")
+        if not isinstance(raw_status, str) or not raw_status.strip():
+            return {"error": "Missing or invalid required field: 'status' must be a non-empty string."}
+        status = raw_status.lower().strip()
         if self.original_finding_index is not None:
             original_index = self.original_finding_index
         else:
@@ -189,10 +192,27 @@ class ValidatorAgent(BaseAgent):
                     },
                 )
 
-                if tool_call.name == "validate_finding":
-                    result = self._handle_validate_finding(tool_call.arguments)
+                if tool_call.parse_error:
+                    result = {
+                        "error": "tool_call_truncated",
+                        "message": (
+                            f"Arguments for '{tool_call.name}' were truncated due to token limits "
+                            f"(parse error: {tool_call.parse_error}). "
+                            "Please retry and call the tool with more concise arguments."
+                        ),
+                    }
+                elif tool_call.name == "validate_finding":
+                    try:
+                        result = self._handle_validate_finding(tool_call.arguments)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to handle validate_finding: {e}")
+                        result = {"error": f"Failed to validate finding: {e}"}
                 elif tool_call.name == "finish_validation":
-                    result = self._handle_finish_validation(tool_call.arguments)
+                    try:
+                        result = self._handle_finish_validation(tool_call.arguments)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to handle finish_validation: {e}")
+                        result = {"error": f"Failed to finish validation: {e}"}
                     should_finish = True
                 else:
                     result = self.tools.execute_tool(tool_call.name, tool_call.arguments)

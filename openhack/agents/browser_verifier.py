@@ -493,7 +493,16 @@ class BrowserVerifierAgent(BaseAgent):
                     )
 
                     try:
-                        if tool_call.name == "browser_navigate":
+                        if tool_call.parse_error:
+                            result = {
+                                "error": "tool_call_truncated",
+                                "message": (
+                                    f"Arguments for '{tool_call.name}' were truncated due to token limits "
+                                    f"(parse error: {tool_call.parse_error}). "
+                                    "Please retry and call the tool with more concise arguments."
+                                ),
+                            }
+                        elif tool_call.name == "browser_navigate":
                             result = await self._handle_browser_navigate(tool_call.arguments)
                         elif tool_call.name == "browser_click":
                             result = await self._handle_browser_click(tool_call.arguments)

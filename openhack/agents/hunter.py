@@ -200,10 +200,29 @@ class HunterAgent(BaseAgent):
         return line_number
 
     def _handle_report_finding(self, args: dict) -> dict:
-        file_path = args.get("file_path", "")
+        raw_file_path = args.get("file_path")
+        raw_desc = args.get("description")
+
+        if not isinstance(raw_file_path, str) or not isinstance(raw_desc, str):
+            logger.warning(f"Finding rejected: missing or non-string file_path/description (args={args})")
+            return {
+                "status": "rejected",
+                "reason": "Missing or invalid required fields: 'file_path' and 'description' must be non-empty strings.",
+            }
+
+        file_path = raw_file_path.strip()
+        description = raw_desc.strip()
+
+        # Reject findings missing core required fields
+        if not file_path or not description:
+            logger.warning(f"Finding rejected: missing file_path or description (args={args})")
+            return {
+                "status": "rejected",
+                "reason": "Missing required fields: 'file_path' and 'description' must not be empty.",
+            }
 
         # Pre-filter: reject findings in excluded paths
-        if file_path and self._is_excluded_path(file_path):
+        if self._is_excluded_path(file_path):
             logger.info(f"Finding rejected (excluded path): {args.get('category', '?')} in {file_path}")
             return {"status": "rejected", "reason": f"File is in an excluded path (test/CLI/docs/examples): {file_path}"}
 
@@ -402,13 +421,31 @@ class HunterAgent(BaseAgent):
                     },
                 )
 
-                if tool_call.name == "report_finding":
-                    result = self._handle_report_finding(tool_call.arguments)
+                if tool_call.parse_error:
+                    result = {
+                        "error": "tool_call_truncated",
+                        "message": (
+                            f"Arguments for '{tool_call.name}' were truncated due to token limits "
+                            f"(parse error: {tool_call.parse_error}). "
+                            "Please retry and call the tool with more concise arguments, "
+                            "or report findings one at a time."
+                        ),
+                    }
+                elif tool_call.name == "report_finding":
+                    try:
+                        result = self._handle_report_finding(tool_call.arguments)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to handle report_finding: {e}")
+                        result = {"error": f"Failed to record finding: {e}"}
                     iterations_since_finding = 0
                     consecutive_reads = 0
                     analysis_mode = False
                 elif tool_call.name == "finish_hunt":
-                    result = self._handle_finish_hunt(tool_call.arguments)
+                    try:
+                        result = self._handle_finish_hunt(tool_call.arguments)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Failed to handle finish_hunt: {e}")
+                        result = {"error": f"Failed to finish hunt: {e}"}
                     should_finish = True
                 else:
                     try:
