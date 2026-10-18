@@ -139,7 +139,7 @@ class ShellManager:
             def _hard() -> None:
                 try:
                     if sh.proc.poll() is None:
-                        kill_process_group(sh.proc, signal.SIGKILL)
+                        kill_process_group(sh.proc)  # hard kill (SIGKILL on Unix)
                 except OSError:
                     pass
 
@@ -171,6 +171,6 @@ class ShellManager:
         for sh in procs:
             try:
                 if sh.proc.poll() is None:
-                    kill_process_group(sh.proc, signal.SIGKILL)
+                    kill_process_group(sh.proc)  # hard kill (SIGKILL on Unix)
             except OSError:
                 pass
