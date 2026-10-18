@@ -32,7 +32,7 @@ from openhack.entry_points import detect_entry_points
 from openhack.scan_session import ScanSession
 from openhack.quality import run_quality_gates
 from openhack.categories import normalize_category, normalize_severity
-from openhack.config import reload_settings, settings
+from openhack.config import reload_settings, resolve_validator_model, settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -150,23 +150,43 @@ async def run(target_dir: str, resume_session_id: str = None):
 
     # ── Step 5: LLM Validation ──────────────────────────────────
     print(f"\n[5/5] Validating {len(feature_findings)} findings...")
-    validator_llm = LLMClient(provider=settings.llm_provider, temperature=0.0, max_tokens=8192)
+    feature_hunter_model = (
+        getattr(settings, "feature_hunter_model_id", None)
+        or getattr(settings, "hunter_model_id", None)
+        or coordinator.llm.model
+    )
+    validator_model = resolve_validator_model(
+        hunter_model=feature_hunter_model,
+        requested_validator_model=settings.validator_model_id,
+        provider=settings.llm_provider,
+    )
+    validator_llm = LLMClient(
+        model=validator_model,
+        provider=settings.llm_provider,
+        temperature=0.0,
+        max_tokens=8192,
+    )
     validator_context = {
         "hunter": {"findings": feature_findings},
         "recon": recon_result,
     }
-    validator_swarm = ValidatorSwarmAgent(validator_llm, tools, session)
+    validator_swarm = ValidatorSwarmAgent(
+        validator_llm, tools, session, hunter_model=feature_hunter_model
+    )
     validator_result = await validator_swarm.run(
         "Validate each potential vulnerability.", context=validator_context,
     )
 
     validated = validator_result.get("validated_findings", [])
+    false_positives = validator_result.get("false_positives", [])
+    unreviewed = validator_result.get("unreviewed", [])
     validator_cost = validator_swarm.total_cost
     total_cost += validator_cost
     total_tokens += validator_swarm.total_tokens
 
     print(f"  Validation complete: {len(validated)} confirmed, "
-          f"${validator_cost:.4f}")
+          f"{len(false_positives)} false positives, "
+          f"{len(unreviewed)} unreviewed, ${validator_cost:.4f}")
 
     # Deduplicate and cap
     validated = CoordinatorAgent._deduplicate_validated(validated, feature_findings)

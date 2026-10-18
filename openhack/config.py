@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     validator_model_id: Optional[str] = None
     browser_verifier_model_id: Optional[str] = None
 
+    # Number of validation votes per finding. 1 = single pass. Set to 3 for strict >=2-of-3 majority.
+    validator_votes: int = 1
+
     max_concurrent_hunters: int = 3
     max_concurrent_validators: int = 5
 
@@ -257,3 +260,46 @@ def reload_settings() -> None:
     fresh = _build_settings()
     for field_name in Settings.model_fields:
         setattr(settings, field_name, getattr(fresh, field_name))
+
+
+# Cross-model validation defaults: mapping hunter model to an independent validator model
+DEFAULT_CROSS_MODELS = {
+    "gpt-5.6-sol": "kimi-k2.5",
+    "gpt-5-mini": "kimi-k2.5",
+    "glm-5.2": "kimi-k2.5",
+    "glm-5.3-flash": "kimi-k2.5",
+    "kimi-k2.5": "gpt-5.6-sol",
+    "claude-sonnet-5": "gpt-5.6-sol",
+    "meta-llama/Llama-3.3-70B-Instruct": "gpt-5.6-sol",
+}
+
+
+def resolve_validator_model(
+    hunter_model: str,
+    requested_validator_model: Optional[str] = None,
+    provider: str = "openhack",
+) -> str:
+    """Resolve validator model, preferring cross-model validation over self-validation."""
+    if requested_validator_model:
+        return requested_validator_model
+    if provider == "openhack":
+        # Hosted OpenHack has access to cross-model targets (e.g. K2.5 vs GPT-5.6 / GLM)
+        return DEFAULT_CROSS_MODELS.get(
+            hunter_model,
+            "kimi-k2.5" if hunter_model != "kimi-k2.5" else "gpt-5.6-sol",
+        )
+    return hunter_model
+
+
+def check_self_validation(hunter_model: str, validator_model: str) -> Optional[str]:
+    """Return warning message if validator model is identical to hunter model."""
+    if (
+        hunter_model
+        and validator_model
+        and hunter_model.strip().lower() == validator_model.strip().lower()
+    ):
+        return (
+            f"Self-validation detected: validator using same model as hunter ({validator_model}). "
+            "Cross-model validation recommended to prevent precision inflation."
+        )
+    return None

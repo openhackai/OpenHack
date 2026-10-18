@@ -39,7 +39,7 @@ from openhack.categories import normalize_category, normalize_severity
 from openhack.framework_detection import detect_frameworks
 from openhack.quality import run_quality_gates
 # Static validator removed — line number correction in hunter, semantic validation by LLM
-from openhack.config import settings
+from openhack.config import settings, resolve_validator_model, check_self_validation
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,15 @@ class CoordinatorAgent(BaseAgent):
 
     def _create_llm_for_agent(self, agent_type: str) -> LLMClient:
         model_override = getattr(settings, f"{agent_type}_model_id", None)
-        model = model_override or self.llm.model
+        if agent_type == "validator":
+            hunter_model = getattr(settings, "hunter_model_id", None) or self.llm.model
+            model = resolve_validator_model(
+                hunter_model=hunter_model,
+                requested_validator_model=model_override,
+                provider=self.llm.provider,
+            )
+        else:
+            model = model_override or self.llm.model
         return LLMClient(model=model, temperature=0.0, max_tokens=8192, provider=self.llm.provider, prompt_cache_key=self.llm.prompt_cache_key)
 
     @staticmethod
@@ -790,7 +798,10 @@ class CoordinatorAgent(BaseAgent):
             if potential_findings:
                 self.session.add_trace(agent="coordinator", event_type="step_start", content="Step 3: Validation (swarm)")
                 validator_llm = self._create_llm_for_agent("validator")
-                validator_swarm = ValidatorSwarmAgent(validator_llm, self.tools, self.session)
+                hunter_model = getattr(settings, "hunter_model_id", None) or self.llm.model
+                validator_swarm = ValidatorSwarmAgent(
+                    validator_llm, self.tools, self.session, hunter_model=hunter_model
+                )
                 validator_result = await validator_swarm.run(
                     "Validate each potential vulnerability.", context=self.context)
                 self.context["validator"] = validator_result

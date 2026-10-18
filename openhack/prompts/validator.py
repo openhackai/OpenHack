@@ -155,7 +155,7 @@ You MUST evaluate these five criteria. If ANY criterion disqualifies the finding
 
 **B. Browser & Protocol Constraints -- Does the platform actually permit this?**
 - CORS: `Access-Control-Allow-Origin: *` with `Access-Control-Allow-Credentials: true` is REJECTED by all browsers per the Fetch specification. If the finding relies on this combination, mark it as FALSE POSITIVE.
-- CSRF: If the target uses `SameSite=Lax` cookies (browser default) or requires custom headers/tokens that cross-site requests cannot provide (Turnstile tokens, API keys in headers), mark CSRF as FALSE POSITIVE.
+- CSRF: Confirm ONLY if the auth cookie is NOT `SameSite=Lax` or `SameSite=Strict`. You MUST read the cookie-setting code (`Set-Cookie`, session options, auth middleware). Modern browsers default cookies to `SameSite=Lax`. If the session cookie is `SameSite=Lax`/`Strict` or lacks cross-site delivery on state-changing requests (POST/PUT/PATCH/DELETE), mark as FALSE POSITIVE. Also mark FALSE POSITIVE if the endpoint requires custom headers (e.g. `Authorization`, `X-CSRF-Token`, custom JSON Content-Type requiring preflight) or bot tokens (Turnstile).
 - SameSite=None: If intentionally set for embed/widget functionality (a product requirement), this is BY DESIGN, not a vulnerability.
 
 **C. Existing Mitigations -- What defenses are in place?**
@@ -163,16 +163,22 @@ You MUST evaluate these five criteria. If ANY criterion disqualifies the finding
 - Are there downstream authorization checks (e.g., Prisma nested writes through user relations) that prevent actual impact even if the initial lookup is unscoped?
 - Is there middleware, WAF, or infrastructure-level protection (HSTS at CDN, CSP via headers middleware)?
 
-**D. Damage Assessment -- Is the impact meaningful?**
+**D. Parser & Sink Constraints -- Does the engine actually execute or expand this?**
+- **XXE (XML External Entity):** Confirm ONLY if the parser explicitly resolves EXTERNAL entities. Popular JavaScript/Node parsers (`xml2js`, `fast-xml-parser`, `sax`, `xml-js`) and safe Python parsers (`defusedxml`) do NOT resolve external entities by default. Unless external entity expansion is explicitly enabled in code configuration (`resolveEntities: true`, `load_dtd=True`, `noent=True`), mark as FALSE POSITIVE.
+- **XSS (Cross-Site Scripting):** Confirm ONLY if user-controlled input reaches an executable sink: a RAW-HTML sink (e.g., `dangerouslySetInnerHTML`, `v-html`, `innerHTML`, `document.write`, or unescaped template tags `{{{{ }}}}`), an executable URL attribute (e.g., `href` or `src` accepting `javascript:` pseudo-protocols), or a dynamic script context. Standard JSX/TSX text expressions (e.g., `<div>{{userInput}}</div>`) are automatically HTML-escaped (auto-escaped) by React/Next.js/Vue and CANNOT execute script tags; mark those as FALSE POSITIVE.
+- **Framework Default Configs:** Framework default development configurations and diagnostic endpoints (e.g., Nuxt DevTools, Next.js telemetry, Vite HMR, Swagger UI in dev mode) are NOT production vulnerabilities unless active and reachable in production builds with real sensitive impact. Mark as FALSE POSITIVE.
+- **Blank / Vague Rationale:** If a candidate finding has a blank description, missing code snippet, or a vague tautological claim ("input is not validated" without demonstrating an exploitable sink and payload), mark as FALSE POSITIVE.
+
+**E. Damage Assessment -- Is the impact meaningful?**
 - "Attacker can trigger a password reset email" = NOT damage. The link goes to the legitimate user's email inbox.
 - "Attacker can create a booking" on a scheduling app = NOT damage. Public booking is the product's core function.
 - "Attacker can determine a UUID exists" = NOT damage. No sensitive information is revealed.
 - "Attacker can view source code" of an open-source project = NOT damage. The code is already public on GitHub.
 - "Missing security headers" without a companion injection vulnerability = NOT exploitable damage.
 
-**E. Design Intent -- Is this behavior intentional? ("Too good to be true" check)**
+**F. Design Intent -- Is this behavior intentional? ("Too good to be true" check)**
 
-This is the most important criterion. Many scanner findings are actually INTENTIONAL DESIGN by the developer. Before confirming ANY finding, you MUST ask: "Did the developer do this on purpose?"
+This is a critical criterion. Many scanner findings are actually INTENTIONAL DESIGN by the developer. Before confirming ANY finding, you MUST ask: "Did the developer do this on purpose?"
 
 **Signals of intentional design (finding is likely FALSE POSITIVE):**
 - The code has a `@since` version tag (versioned, reviewed API — not accidental)
@@ -189,9 +195,13 @@ This is the most important criterion. Many scanner findings are actually INTENTI
 - Is the configuration required for product functionality (embeds, widgets, public APIs, third-party integrations)?
 - Would "fixing" the finding break core product functionality?
 
+**Definition of `false_positive` vs `confirmed`:**
+- `false_positive` = MITIGATED, NOT PRESENT, NOT REACHABLE, or UNEXPLOITABLE.
+- Do NOT mark a real, reproducible vulnerability as `false_positive` merely because it is low-severity or low-impact. If the vulnerability is real and exploitable but has minor impact, mark it as `confirmed` with `severity="low"` (and appropriate CVSS score).
+
 **Decision Matrix:**
-- Fails ANY of A-E → `false_positive` (with explanation of which criterion failed)
-- Passes all A-E with clear evidence → `confirmed`
+- Fails ANY of A-F → `false_positive` (with explanation of which criterion failed)
+- Passes all A-F with clear evidence → `confirmed`
 - Uncertain on one criterion → `needs_more_info`
 
 ## Potential Vulnerabilities to Validate
@@ -308,9 +318,14 @@ Be RUTHLESS about false positives. False positives waste developer time and erod
 
 **For runtime findings:** A 200 status code with 0 rows is NOT a vulnerability. A 204 on a dummy UUID is NOT a confirmed write. Only ACTUAL DATA in the response proves an exploit.
 
-**For static findings:** A code pattern match is NOT a confirmed vulnerability. You MUST evaluate practical exploitability using criteria A-E above. Key automatic disqualifiers:
+**For static findings:** A code pattern match is NOT a confirmed vulnerability. You MUST evaluate practical exploitability using criteria A-F above. Key automatic disqualifiers:
 - IDOR where IDs are UUIDs/CUIDs → FALSE POSITIVE (cannot guess 122-bit random IDs)
 - CORS `*` + credentials: true → FALSE POSITIVE (browsers reject this per Fetch spec)
+- CSRF where cookie is SameSite=Lax/Strict (or modern browser default) or requires custom headers/tokens → FALSE POSITIVE
+- XXE where parser does not explicitly resolve external entities (e.g. xml2js, sax, fast-xml-parser, defusedxml) → FALSE POSITIVE
+- XSS where input only reaches standard JSX/TSX text without raw-HTML or executable sink → FALSE POSITIVE
+- Framework default dev configuration (Nuxt devtools, Next.js telemetry, Vite HMR) → FALSE POSITIVE
+- Blank or generic rationale without verified attacker-controlled sink/payload → FALSE POSITIVE
 - CSRF on forgot-password/signup/booking endpoints → FALSE POSITIVE (by-design public, no meaningful damage)
 - Missing headers without companion injection → FALSE POSITIVE (informational only)
 - Source maps on open-source projects → FALSE POSITIVE (code already public)

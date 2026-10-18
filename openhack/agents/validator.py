@@ -68,16 +68,20 @@ class ValidatorAgent(BaseAgent):
         findings_text = ""
         for i, f in enumerate(findings, 1):
             findings_text += f"""
-### Finding {i}
+### Candidate Finding {i} (UNVERIFIED HYPOTHESIS)
 - **Category**: {f.get('category', 'Unknown')}
-- **Severity**: {f.get('severity', 'Unknown')}
+- **Reported Severity**: {f.get('severity', 'Unknown')}
 - **File**: {f.get('file_path', 'Unknown')}
 - **Line**: {f.get('line_number', 'Unknown')}
-- **Description**: {f.get('description', 'No description')}
-- **Code**:
+- **Description / Claim**: {f.get('description', 'No description')}
+- **Code Snippet**:
 ```
 {f.get('code_snippet', 'No code snippet')}
 ```
+> Note: Treat this candidate finding as an unverified hypothesis from the hunter swarm.
+> Independently audit the surrounding code, data flow, and mitigations. If the issue is mitigated,
+> uses framework auto-escaping, lacks external entity resolution, relies on SameSite cookies,
+> or is a framework dev default, mark it as false_positive.
 """
 
         base_prompt = VALIDATOR_PROMPT.format(
