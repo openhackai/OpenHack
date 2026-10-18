@@ -1,9 +1,15 @@
-import json
-from pathlib import Path
+import os
+
+import pytest
 from tests.conftest import write_file, write_json
 
 from openhack.tools.registry import ToolRegistry
-from openhack.deterministic_recon import run_deterministic_recon
+from openhack.deterministic_recon import (
+    _FEATURE_INDICATORS,
+    _detect_features_fast,
+    run_deterministic_recon,
+)
+from openhack.tools.filesystem import FileSystemTools
 
 
 class TestFeatureDetection:
@@ -53,3 +59,28 @@ class TestReconOutput:
         assert "type" in result
         assert result["type"] == "recon_complete"
         assert "attack_surface" in result
+
+
+class TestFeatureDetectionPaths:
+    @pytest.mark.parametrize("file_count", [2, 5001], ids=["regex", "fixed-string"])
+    def test_quoted_paths_preserve_all_features(self, tmp_path, file_count):
+        write_file(tmp_path, "src/owner's uploads/don't_break.js", "multer();\n")
+        write_file(tmp_path, "auth.js", "bcrypt();\n")
+        for index in range(file_count - 2):
+            write_file(tmp_path, f"src/empty_{index}.js", "")
+
+        features = _detect_features_fast(FileSystemTools(tmp_path), _FEATURE_INDICATORS)
+
+        assert features == {
+            "file_uploads": ["File Uploads (1 files)"],
+            "auth_system": ["Auth System (1 files)"],
+        }
+
+    @pytest.mark.skipif(os.name == "nt", reason="Requires POSIX filename characters")
+    @pytest.mark.parametrize("filename", ['double"quote.js', "back\\slash.js", "new\nline.js", "tab\tname.js"])
+    def test_special_filename_is_counted_once(self, tmp_path, filename):
+        write_file(tmp_path, filename, "multer();\n")
+
+        features = _detect_features_fast(FileSystemTools(tmp_path), _FEATURE_INDICATORS)
+
+        assert features == {"file_uploads": ["File Uploads (1 files)"]}

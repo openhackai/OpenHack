@@ -145,6 +145,8 @@ def _detect_features_fast(
             find_cmd.append("-o")
         find_cmd.extend(["-name", f"*{ext}"])
     find_cmd.append(")")
+    # Keep filenames literal across find, xargs, and grep.
+    find_cmd.append("-print0")
     for d in _GREP_EXCLUDE_DIRS:
         clean = d.rstrip("*").rstrip(".")
         find_cmd[2:2] = ["-not", "-path", f"*/{clean}/*"]
@@ -158,10 +160,10 @@ def _detect_features_fast(
         logger.warning(f"Find failed: {e}")
         return {}
 
-    if not file_list.strip():
+    if not file_list:
         return {}
 
-    file_count = file_list.count("\n")
+    file_count = file_list.count("\0")
 
     if file_count > 5000:
         # Large repo: fixed-string grep in parallel threads
@@ -179,7 +181,7 @@ def _detect_features_fast(
 
         def _check_feature(name_and_keywords):
             fname, keywords = name_and_keywords
-            cmd = ["xargs", "grep", "-Fl", "--max-count=1",
+            cmd = ["xargs", "-0", "grep", "-FlZ", "--max-count=1",
                    "--binary-files=without-match"]
             for kw in keywords:
                 cmd.extend(["-e", kw])
@@ -188,7 +190,7 @@ def _detect_features_fast(
                     cmd, input=file_list, capture_output=True,
                     text=True, timeout=15,
                 )
-                matches = [l for l in proc.stdout.strip().split("\n") if l.strip()]
+                matches = [fp for fp in proc.stdout.split("\0") if fp]
                 if matches:
                     readable = fname.replace("_", " ").title()
                     return fname, [f"{readable} ({len(matches)} files)"]
@@ -210,7 +212,7 @@ def _detect_features_fast(
     result: dict[str, list[str]] = {}
     for feature_name, patterns in feature_indicators.items():
         combined = "|".join(p for p, _ in patterns)
-        cmd_parts = ["xargs", "grep", "-El", "--max-count=1",
+        cmd_parts = ["xargs", "-0", "grep", "-ElZ", "--max-count=1",
                      "--binary-files=without-match", combined]
         try:
             proc = subprocess.run(
@@ -218,8 +220,7 @@ def _detect_features_fast(
                 text=True, timeout=30,
             )
             files = []
-            for line in proc.stdout.strip().split("\n"):
-                fp = line.strip()
+            for fp in proc.stdout.split("\0"):
                 if not fp:
                     continue
                 try:
