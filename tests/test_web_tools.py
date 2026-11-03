@@ -45,7 +45,7 @@ def test_extract_text_passes_through_non_html():
 # --------------------------------------------------------------- provider pick
 
 _KEYS = ("OPENHACK_SEARCH_PROVIDER", "TAVILY_API_KEY", "PERPLEXITY_API_KEY",
-         "EXA_API_KEY", "BRAVE_API_KEY")
+         "EXA_API_KEY", "BRAVE_API_KEY", "KEENABLE_API_KEY")
 
 
 def _clear_keys(monkeypatch, openhack=True):
@@ -166,6 +166,42 @@ def test_web_search_tavily(monkeypatch):
     assert out["engine"] == "tavily" and out["count"] == 1
     assert out["results"][0]["url"] == "https://slcyber.io/x"
     assert "pre-auth RCE" in out["results"][0]["snippet"]
+
+
+def test_web_search_keenable_keyless_via_override(monkeypatch):
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENHACK_SEARCH_PROVIDER", "keenable")
+    w = WebTools()
+    seen = {}
+
+    def fake_post(url, payload, headers=None, **k):
+        seen.update(url=url, payload=payload, headers=headers)
+        return _Resp(payload={"results": [
+            {"title": "A", "url": "https://a.example", "description": "short", "snippet": "long body"},
+            {"title": "no url"},
+        ]})
+
+    monkeypatch.setattr(w, "_post", fake_post)
+    out = w.web_search("q", max_results=3)
+    assert out["engine"] == "keenable" and out["count"] == 1
+    assert out["results"][0]["snippet"] == "short"
+    assert seen["url"] == "https://api.keenable.ai/v1/search/public"
+    assert seen["payload"] == {"query": "q", "max_results": 3}
+    assert seen["headers"]["X-Keenable-Title"] == "OpenHack"
+    assert "X-API-Key" not in seen["headers"]
+
+
+def test_keenable_key_selects_keyed_endpoint(monkeypatch):
+    _clear_keys(monkeypatch, openhack=False)
+    monkeypatch.setenv("KEENABLE_API_KEY", "kk")
+    assert WebTools._provider() == "keenable"
+    w = WebTools()
+    seen = {}
+    monkeypatch.setattr(w, "_post", lambda url, payload, headers=None, **k: (
+        seen.update(url=url, headers=headers) or _Resp(payload={"results": []})))
+    w.web_search("q")
+    assert seen["url"] == "https://api.keenable.ai/v1/search"
+    assert seen["headers"]["X-API-Key"] == "kk"
 
 
 def test_web_search_duckduckgo_parses_and_unwraps_redirect(monkeypatch):

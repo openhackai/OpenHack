@@ -191,6 +191,8 @@ class WebTools:
             return "exa"
         if os.environ.get("BRAVE_API_KEY"):
             return "brave"
+        if os.environ.get("KEENABLE_API_KEY"):
+            return "keenable"
         # Otherwise OpenHack's own gateway, which holds a provider key
         # server-side — so search works with zero setup, exactly like inference.
         # (Login is mandatory, so this is the normal path for everyone.)
@@ -218,6 +220,8 @@ class WebTools:
                 results = self._search_exa(query, n)
             elif provider == "brave":
                 results = self._search_brave(query, n)
+            elif provider == "keenable":
+                results = self._search_keenable(query, n)
             else:
                 provider = "duckduckgo"
                 results = self._search_duckduckgo(query, n)
@@ -366,6 +370,29 @@ class WebTools:
                     snippet=re.sub(r"<[^>]+>", "", it.get("description") or ""))
             for it in web[:n]
         ]
+
+    def _search_keenable(self, query: str, n: int) -> list[dict]:
+        """Keenable: keyless via the public endpoint, or keyed with KEENABLE_API_KEY.
+        Select it without a key via OPENHACK_SEARCH_PROVIDER=keenable."""
+        key = (os.environ.get("KEENABLE_API_KEY") or "").strip()
+        headers = {"X-Keenable-Title": "OpenHack"}
+        if key:
+            headers["X-API-Key"] = key
+        r = self._post(
+            "https://api.keenable.ai/v1/search" if key
+            else "https://api.keenable.ai/v1/search/public",
+            {"query": query, "max_results": n},
+            headers=headers,
+        )
+        r.raise_for_status()
+        out = []
+        for it in (r.json().get("results") or [])[:n]:
+            if not it.get("url"):
+                continue
+            # Prefer the short description; the snippet can be a long page excerpt.
+            snippet = it.get("description") or (it.get("snippet") or "")[:1000]
+            out.append(_result(title=it.get("title"), url=it.get("url"), snippet=snippet))
+        return out
 
     def _search_duckduckgo(self, query: str, n: int) -> list[dict]:
         """Keyless fallback — scrape DuckDuckGo's no-JS endpoints.
