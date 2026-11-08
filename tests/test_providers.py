@@ -123,6 +123,24 @@ def test_model_override_and_base_override(monkeypatch):
     assert r2.model == "o3"
 
 
+def test_resolve_runcrate_reads_key_and_base(monkeypatch):
+    monkeypatch.setenv("RUNCRATE_API_KEY", "rc-test")
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
+    assert "runcrate" in providers.list_providers()
+    r = providers.resolve("runcrate")
+    assert r.name == "runcrate"
+    assert r.base_url == "https://api.runcrate.ai/v1"
+    assert r.api_key == "rc-test"
+    assert r.missing_key_env is None
+    assert r.model == "Qwen/Qwen3-235B-A22B-Instruct-2507"
+
+
+def test_resolve_runcrate_reports_missing_key(monkeypatch):
+    monkeypatch.delenv("RUNCRATE_API_KEY", raising=False)
+    monkeypatch.setattr(providers, "get_credential", lambda name: None)
+    assert providers.resolve("runcrate").missing_key_env == "RUNCRATE_API_KEY"
+
+
 def test_ollama_is_keyless(monkeypatch):
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     r = providers.resolve("ollama")

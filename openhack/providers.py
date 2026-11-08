@@ -106,6 +106,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "deepinfra", "DeepInfra", "https://api.deepinfra.com/v1/openai",
         "DEEPINFRA_API_KEY", "meta-llama/Llama-3.3-70B-Instruct",
     ),
+    "runcrate": ProviderSpec(
+        "runcrate", "Runcrate", "https://api.runcrate.ai/v1",
+        "RUNCRATE_API_KEY", "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    ),
     "nebius": ProviderSpec(
         "nebius", "Nebius Token Factory", "https://api.tokenfactory.nebius.com/v1",
         "NEBIUS_API_KEY", "meta-llama/Llama-3.3-70B-Instruct",
