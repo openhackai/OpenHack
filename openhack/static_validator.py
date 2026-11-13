@@ -184,6 +184,39 @@ def _is_comment_line(line: str, file_path: str) -> bool:
     return bool(_JS_LINE_COMMENT.match(stripped))
 
 
+def _is_in_block_comment(lines: list[str], line_number: int) -> bool:
+    """Check if a 1-based line sits inside a JS-style /* ... */ block comment.
+
+    Tracks block-comment state across the lines preceding the target, and
+    also treats a target line that itself opens a block comment as commented.
+    """
+    in_block = False
+    for raw in lines[: line_number - 1]:
+        i = 0
+        while i < len(raw):
+            if in_block:
+                end = raw.find("*/", i)
+                if end == -1:
+                    break
+                in_block = False
+                i = end + 2
+            else:
+                start = raw.find("/*", i)
+                if start == -1:
+                    break
+                in_block = True
+                i = start + 2
+    if in_block:
+        return True
+    if 0 < line_number <= len(lines):
+        target = lines[line_number - 1]
+        # Strip line-number prefix if present (from read_file format)
+        if "\t" in target:
+            target = target.split("\t", 1)[1]
+        return bool(_JS_BLOCK_COMMENT_START.match(target.strip()))
+    return False
+
+
 def _line_has_sink_pattern(line: str, category: str) -> bool:
     """Check if a line contains a sink pattern for the given vuln category."""
     normalized_cat = category.lower().replace(" ", "_").replace("-", "_")
@@ -228,6 +261,8 @@ def validate_finding_basic(finding: dict, fs_tools) -> tuple[bool, str]:
             # Check 2a: Is this line a comment?
             if _is_comment_line(target_line, file_path):
                 return False, f"Reported line {line_number} is a comment"
+            if not file_path.endswith(".py") and _is_in_block_comment(lines, line_number):
+                return False, f"Reported line {line_number} is inside a block comment"
 
             # Check 2b: Does the line contain anything related to the claimed category?
             # Only reject if we have specific sink patterns AND the line is clearly unrelated
