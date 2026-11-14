@@ -196,6 +196,22 @@ class Settings(BaseSettings):
     browser_max_exploit_attempts: int = 7
     browser_timeout_ms: int = 30000
 
+    # Security regression tests (opt-in; needs Docker). For sandbox-verified
+    # findings of a supported class, generate a test in the target repo's own
+    # framework and accept it only once the sandbox shows it fails on the
+    # vulnerable code and passes on the remediated revision (fixed_ref: a git
+    # revision or directory holding the fix).
+    regression_tests_enabled: bool = False
+    regression_tests_fixed_ref: Optional[str] = None
+    regression_tests_max_attempts: int = 3
+    regression_tests_validation_runs: int = 2
+    regression_tests_timeout: int = 180
+    regression_tests_build_timeout: int = 900
+    # "" = python:<detected version>-slim. Override for a mirror or a base
+    # image that trusts a corporate TLS root.
+    regression_tests_base_image: str = ""
+    regression_test_model_id: Optional[str] = None
+
     # Negotiate the Kitty keyboard protocol (CSI-u) in the TUI so modifier
     # combos that legacy terminal encoding collapses — Option/Alt+Backspace,
     # lone Escape, Ctrl+key — arrive disambiguated. Harmless on terminals that

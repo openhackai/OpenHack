@@ -480,8 +480,13 @@ class SandboxOrchestrator:
         cwd: Optional[Path] = None,
         env: Optional[dict] = None,
         timeout: int = 60,
+        check: bool = True,
     ) -> asyncio.subprocess.Process:
-        """Run a shell command asynchronously."""
+        """Run a shell command asynchronously.
+
+        With check=False a non-zero exit is returned rather than raised — for
+        commands like `docker start -a` whose exit code is the result.
+        """
         import os
         full_env = {**os.environ, **(env or {})}
 
@@ -498,12 +503,14 @@ class SandboxOrchestrator:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
-            raise SandboxError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+            raise SandboxTimeoutError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
 
-        proc.stdout = stdout.decode() if stdout else ""
-        proc.stderr = stderr.decode() if stderr else ""
+        # Output can come from untrusted code in the container; never let a
+        # stray byte sequence turn into a UnicodeDecodeError here.
+        proc.stdout = stdout.decode(errors="replace") if stdout else ""
+        proc.stderr = stderr.decode(errors="replace") if stderr else ""
 
-        if proc.returncode != 0:
+        if check and proc.returncode != 0:
             raise SandboxError(
                 f"Command failed (exit {proc.returncode}): {' '.join(cmd)}\n"
                 f"STDERR: {proc.stderr[:2000]}"
@@ -514,4 +521,9 @@ class SandboxOrchestrator:
 
 class SandboxError(Exception):
     """Raised when sandbox operations fail."""
+    pass
+
+
+class SandboxTimeoutError(SandboxError):
+    """Raised when a sandbox command exceeds its time limit."""
     pass

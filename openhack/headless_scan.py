@@ -32,11 +32,30 @@ def _on_trace(entry: TraceEntry):
     event = entry.event_type or ""
     if event == "tool_call":
         pass
+    elif event == "regression_test_result":
+        data = entry.content if isinstance(entry.content, dict) else {}
+        print(f"    [{agent}] REGRESSION TEST: {data.get('label', '?')} — {data.get('title', '')}")
     elif "finding" in event.lower():
         print(f"    [{agent}] FINDING: {entry.content}")
     elif event in ("status", "step_start", "step_complete", "resume"):
         snippet = str(entry.content or "")[:120]
         print(f"    [{agent}] {event}: {snippet}")
+
+
+def format_regression_status(finding: Finding) -> list[str]:
+    """Human-readable regression-test status lines for one finding."""
+    data = finding.regression_test
+    if not isinstance(data, dict):
+        return []
+    lines = [f"Regression test: {data.get('status_label') or data.get('status')}"]
+    if data.get("test_path") and data.get("status") in ("validated", "remediation_unavailable"):
+        lines[0] += f" — {data['test_path']}"
+    if data.get("reason"):
+        lines.append(f"  {data['reason']}")
+    patch = (data.get("artifacts") or {}).get("patch")
+    if patch:
+        lines.append(f"  Patch: {patch}  (apply from the repository root: git apply <patch>)")
+    return lines
 
 
 def _write_report(
@@ -69,6 +88,7 @@ def _write_report(
         "event_log_path": session.event_log_path,
         "event_count": len(session.events),
         "event_log_error": session.journal.last_error,
+        "repository": session.repository_summary(),
         "pid": os.getpid(),
         "started_at": datetime.fromtimestamp(start_time).isoformat(),
         "duration_seconds": round(elapsed, 2),
@@ -190,6 +210,8 @@ async def run_headless_scan(
                 desc = f.description or ""
                 if desc:
                     print(f"     {desc}")
+                for line in format_regression_status(f):
+                    print(f"     {line}")
                 print()
 
         cost = session.get_cost_breakdown()

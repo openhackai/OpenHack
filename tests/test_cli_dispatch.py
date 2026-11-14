@@ -39,7 +39,7 @@ def test_no_args_launches_tui_on_cwd(routed):
 @pytest.mark.parametrize("flag,name", [
     ("--scan", "scan"), ("--hack", "hack"), ("--plan", "plan"),
     ("--agent", "agent"), ("--sessions", "sessions"), ("--resume", "resume"),
-    ("--classify", "classify"),
+    ("--regression-tests", "regression-tests"), ("--classify", "classify"),
     ("--login", "login"), ("--setup", "setup"),
 ])
 def test_flag_forms_route_to_command(routed, flag, name):

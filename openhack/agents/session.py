@@ -42,6 +42,10 @@ class Finding:
     confidence: str = "medium"
     validated: bool = False
     source: Optional[str] = None
+    # Redacted record of the sandbox exploit that verified this finding.
+    exploit_evidence: Optional[dict] = None
+    # Outcome of security regression test generation (see openhack.regression).
+    regression_test: Optional[dict] = None
 
     def fingerprint(self) -> str:
         import hashlib
@@ -70,7 +74,35 @@ class Finding:
         }
         if self.source:
             d["verificationSource"] = self.source
+        if self.exploit_evidence:
+            d["exploitEvidence"] = self.exploit_evidence
+        if self.regression_test:
+            d["regressionTest"] = self.regression_test
         return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Finding":
+        """Rebuild a Finding from a saved report entry (camelCase or snake_case)."""
+        finding = cls(
+            category=data.get("category", "") or "",
+            severity=(data.get("severity") or "info"),
+            title=data.get("title", "") or "",
+            description=data.get("description", "") or "",
+            file_path=data.get("file_path") or data.get("filePath") or "",
+            line_number=data.get("line_number") or data.get("lineNumber"),
+            code_snippet=data.get("code_snippet") or data.get("relevantCode"),
+            poc=data.get("poc"),
+            fix=data.get("fix") or data.get("recommendation"),
+            cvss_score=data.get("cvss_score") or data.get("cvssScore"),
+            confidence=data.get("confidence", "medium"),
+            validated=bool(data.get("validated", False)),
+            source=data.get("source") or data.get("verificationSource"),
+            exploit_evidence=data.get("exploit_evidence") or data.get("exploitEvidence"),
+            regression_test=data.get("regression_test") or data.get("regressionTest"),
+        )
+        if data.get("id"):
+            finding.id = str(data["id"])
+        return finding
 
     def _generate_vulnerability_type(self) -> str:
         category_lower = self.category.lower().replace(" ", "_").replace("-", "_")
@@ -186,6 +218,9 @@ class Session:
         # Lazily created on first access because Session may be instantiated
         # outside an event loop (e.g. in serialization tests).
         self._pause_event: Optional[Any] = None
+        # Kept (not just journaled) so reports can record the exact commit that
+        # was scanned — regression-test validation materializes it later.
+        self.repository: dict[str, Any] = self._repository_snapshot()
         self.record_event(
             "session_started",
             {
@@ -194,7 +229,7 @@ class Session:
                 "target_dir": self.target_dir,
                 "pid": os.getpid(),
                 "execution": self._execution_snapshot(),
-                "repository": self._repository_snapshot(),
+                "repository": self.repository,
             },
             agent="system",
         )
@@ -276,6 +311,20 @@ class Session:
             "branch": git("branch", "--show-current"),
             "status": git("status", "--short"),
             "worktrees": worktrees,
+        }
+
+    def repository_summary(self) -> dict[str, Any]:
+        """The scanned revision, as recorded in reports."""
+        repo = getattr(self, "repository", None) or {}
+        # Only tracked-file changes mean HEAD differs from what was scanned.
+        changed = [
+            line for line in str(repo.get("status") or "").splitlines()
+            if line.strip() and not line.startswith("??")
+        ]
+        return {
+            "head": repo.get("head", ""),
+            "branch": repo.get("branch", ""),
+            "dirty": bool(changed),
         }
 
     @property

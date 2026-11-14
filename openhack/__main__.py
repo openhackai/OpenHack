@@ -9,6 +9,9 @@ Usage:
   openhack --agent [path]             Interactive agent prompt loop (no TUI)
   openhack --sessions                 List all saved scan sessions
   openhack --resume <id>              Resume a previous scan session
+  openhack --regression-tests <id> [fixed-revision]
+                                      Generate/validate security regression tests
+                                      for a saved scan against the fixed code
   openhack --classify [path]          Classify frameworks and detect entry points
   openhack --login                    Log in to your OpenHack account
   openhack --setup                    Run the setup wizard
@@ -179,6 +182,33 @@ def _cmd_resume():
     _launch_tui(resume_session_id=report_path.stem)
 
 
+def _cmd_regression_tests():
+    """Generate or re-validate security regression tests for a saved scan."""
+    session_id = sys.argv[2] if len(sys.argv) > 2 else None
+    if not session_id:
+        print("Usage: openhack --regression-tests <session_id> [fixed-revision]")
+        print("  fixed-revision: git commit/branch/tag (or a directory) containing the fix;")
+        print("  defaults to regression_tests_fixed_ref, then HEAD if it moved past the scan.")
+        return
+    fixed = sys.argv[3] if len(sys.argv) > 3 else None
+
+    from openhack.config import settings
+    if not settings.openhack_api_key:
+        print("Error: not logged in.")
+        print("Run 'openhack --login' to set up your account, or set OPENHACK_API_KEY.")
+        return
+
+    import asyncio
+    from openhack.regression.headless import run_regression_tests_for_report
+    try:
+        code = asyncio.run(run_regression_tests_for_report(session_id, fixed))
+    except KeyboardInterrupt:
+        print()
+        return
+    if code:
+        sys.exit(code)
+
+
 def _cmd_classify():
     """Classify frameworks and detect entry points."""
     from pathlib import Path
@@ -306,6 +336,7 @@ COMMANDS = {
     "scan": _cmd_scan,
     "sessions": _cmd_sessions,
     "resume": _cmd_resume,
+    "regression-tests": _cmd_regression_tests,
     "classify": _cmd_classify,
     "login": _cmd_login,
     "setup": _cmd_setup,

@@ -27,3 +27,25 @@ jobs:
 
       - name: Run tests
         run: uv run python -m pytest tests/ -v
+
+  regression-sandbox-e2e:
+    # Security regression test generation validated in real Docker containers
+    # (skipped in the matrix above, which runs without OPENHACK_DOCKER_TESTS).
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run Docker end-to-end tests
+        env:
+          OPENHACK_DOCKER_TESTS: "1"
+        run: uv run python -m pytest tests/test_regression_e2e_docker.py -v

@@ -66,6 +66,7 @@ from openhack.agents.coordinator import CoordinatorAgent
 from openhack.agents.llm import LLMClient, Message, LLMResponse
 from openhack.agents.session import Session, SessionStatus, Finding, TraceEntry
 from openhack.agents.eventlog import redact
+from openhack.regression.evidence import sanitize_exploit_evidence
 
 logger = logging.getLogger(__name__)
 from openhack.config import (
@@ -383,6 +384,8 @@ _CONFIG_KEYS = [
     ("openhack_model_id", "OpenHack model ID"),
     ("fast_mode", "Throughput-first OpenHack inference routing"),
     ("tips_enabled", "Rotating status-bar guidance"),
+    ("regression_tests_enabled", "Generate sandbox-validated regression tests for verified findings"),
+    ("regression_tests_fixed_ref", "Git revision (or directory) holding the fix to validate against"),
 ]
 
 _GENERAL_TIPS = (
@@ -982,6 +985,35 @@ class ScanState:
             ])
             return
 
+        if etype == "regression_test_check":
+            data = entry.content if isinstance(entry.content, dict) else {}
+            verdict = "ok" if data.get("passed") else "rejected"
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.agent", f"  {agent:>24}"),
+                ("class:trace.dim", f"  {data.get('revision', '?')} revision {verdict} · "
+                 f"{str(data.get('detail', ''))[:160]}"),
+            ])
+            return
+
+        if etype == "regression_test_result":
+            data = entry.content if isinstance(entry.content, dict) else {}
+            status = data.get("status", "")
+            label = data.get("label") or status
+            style = {
+                "validated": "class:verified",
+                "remediation_unavailable": "class:sev.medium",
+            }.get(status, "class:trace.dim")
+            self.last_message = f"regression test · {label}"
+            self._append_trace(agent, [
+                ("class:trace.time", ts),
+                ("class:trace.agent", f"  {agent:>24}"),
+                ("class:trace.arrow", "  ·  "),
+                (style, label),
+                ("class:trace.dim", f"  {data.get('title', '')}"),
+            ])
+            return
+
         # ── Bang / shell mode ──────────────────────────────────────
         if etype == "shell_start":
             cmd = str(entry.content or "")
@@ -1114,6 +1146,69 @@ def _section_header(label: str) -> list[tuple[str, str]]:
     return [
         ("class:section.label", f"{label.upper()}  "),
         ("class:rule", "─" * max(6, 28 - len(label))),
+    ]
+
+
+# Regression tests that reproduced the vulnerability (validated, or pending a fix).
+_USABLE_REGRESSION_STATUSES = ("validated", "remediation_unavailable")
+
+
+def _regression_test_fragments(finding: Finding) -> list[tuple[str, str]]:
+    """Details-pane section describing a finding's security regression test."""
+    data = getattr(finding, "regression_test", None)
+    if not isinstance(data, dict) or not data.get("status"):
+        return []
+    status = data["status"]
+    if status == "validated":
+        style, mark = "class:verified", "✓ "
+    elif status == "remediation_unavailable":
+        style, mark = "class:sev.medium", "◐ "
+    else:
+        style, mark = "class:trace.dim", "✗ "
+    out = _section_header("Regression test")
+    out += [("", "\n"), (style, mark + (data.get("status_label") or status))]
+    if data.get("test_path"):
+        out.append(("class:finding.path", f"  {data['test_path']}"))
+    out.append(("", "\n"))
+    if data.get("reason"):
+        out.append(("class:trace.dim", f"{data['reason']}\n"))
+    if status in _USABLE_REGRESSION_STATUSES:
+        if data.get("run_command"):
+            out.append(("class:trace.dim", f"run: {data['run_command']}\n"))
+        patch = (data.get("artifacts") or {}).get("patch")
+        if patch:
+            out.append(("class:trace.dim", f"patch: {patch}\n"))
+        if data.get("test_code"):
+            out.append(("", "\n"))
+            out.extend(_highlight_code(data["test_code"], data.get("test_path") or ""))
+    out.append(("", "\n\n"))
+    return out
+
+
+def _regression_test_prompt_lines(finding: Finding) -> list[str]:
+    """Regression-test section of the /copy remediation prompt."""
+    data = getattr(finding, "regression_test", None)
+    if not isinstance(data, dict) or data.get("status") not in _USABLE_REGRESSION_STATUSES:
+        return []
+    code, path = data.get("test_code"), data.get("test_path")
+    if not code or not path:
+        return []
+    if data["status"] == "validated":
+        intro = (
+            "OpenHack generated this security regression test and validated it in its "
+            "sandbox: it fails on the vulnerable code and passes once the vulnerability is fixed."
+        )
+    else:
+        intro = (
+            "OpenHack generated this security regression test. In its sandbox it fails on the "
+            "current code because of this vulnerability; it has not been validated against a "
+            "fix yet, so it must pass after your fix."
+        )
+    lang = "python" if path.endswith(".py") else ""
+    return [
+        "## Regression test", "", intro,
+        f"Add it unchanged at `{path}` in the same change and do not weaken its assertions.",
+        "", f"```{lang}", code.rstrip("\n"), "```", "",
     ]
 
 
@@ -3387,6 +3482,7 @@ class OpenHackApp:
             else:
                 out.append(("class:trace.dim", "No fix saved for this finding.\n"))
 
+            out.extend(_regression_test_fragments(f))
             return out
 
         def details_text():
@@ -5103,6 +5199,8 @@ class OpenHackApp:
         if fix:
             lines += ["## Recommended fix", "", fix, ""]
 
+        lines += _regression_test_prompt_lines(f)
+
         if f.file_path:
             lines.append(f"Apply the recommended fix to `{f.file_path}`.")
 
@@ -5776,20 +5874,7 @@ class OpenHackApp:
         loaded: list[Finding] = []
         for fd in (data.get("findings") or []):
             try:
-                loaded.append(Finding(
-                    category=fd.get("category", "") or "",
-                    severity=(fd.get("severity") or "info"),
-                    title=fd.get("title", "") or "",
-                    description=fd.get("description", "") or "",
-                    file_path=fd.get("file_path") or fd.get("filePath") or "",
-                    line_number=fd.get("line_number") or fd.get("lineNumber"),
-                    code_snippet=fd.get("code_snippet") or fd.get("relevantCode"),
-                    poc=fd.get("poc"),
-                    fix=fd.get("fix") or fd.get("recommendation"),
-                    cvss_score=fd.get("cvss_score") or fd.get("cvssScore"),
-                    confidence=fd.get("confidence", "medium"),
-                    validated=bool(fd.get("validated", False)),
-                ))
+                loaded.append(Finding.from_dict(fd))
             except Exception:
                 continue
         return loaded
@@ -6135,7 +6220,7 @@ class OpenHackApp:
         parts = arg.strip().split(None, 1)
         key = parts[0].lower()
         value = parts[1] if len(parts) > 1 else ""
-        valid = {"provider", "model", "openhack_api_key", "openhack_model_id", "openhack_base_url", "prompt_caching", "fast_mode", "tips_enabled"}
+        valid = {"provider", "model", "openhack_api_key", "openhack_model_id", "openhack_base_url", "prompt_caching", "fast_mode", "tips_enabled", "regression_tests_enabled", "regression_tests_fixed_ref"}
         if key not in valid:
             self.last_status_line = f"unknown config key: {key}"
             return
@@ -6533,6 +6618,8 @@ class OpenHackApp:
                 evidence = item.get("evidence")
                 if evidence and not f.poc:
                     f.poc = evidence
+                if kind == "sandbox":
+                    f.exploit_evidence = sanitize_exploit_evidence(item) or f.exploit_evidence
                 verified_count += 1
 
             # Persist the now-annotated findings so the user can find them in /sessions.
@@ -7286,6 +7373,7 @@ class OpenHackApp:
                 "event_log_path": session.event_log_path,
                 "event_count": len(session.events),
                 "event_log_error": session.journal.last_error,
+                "repository": session.repository_summary(),
                 "pid": os.getpid(),
                 "started_at": datetime.fromtimestamp(session.created_at).isoformat(),
                 "duration_seconds": round(elapsed, 2),
