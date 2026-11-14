@@ -6,6 +6,10 @@ import pytest
 from openhack.tools.filesystem import FileSystemTools
 from openhack.tools.registry import ToolRegistry
 
+# Fixture applications carry their own test suites; those only ever run inside
+# the regression-test sandbox, never as part of OpenHack's own test run.
+collect_ignore_glob = ["fixtures/*"]
+
 
 @pytest.fixture(autouse=True)
 def _stub_api_key(monkeypatch):

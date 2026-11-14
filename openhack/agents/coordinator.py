@@ -926,6 +926,9 @@ class CoordinatorAgent(BaseAgent):
                         r.get("finding_index") for r in exploitable
                     }
 
+                    # Imported here: openhack.regression imports from this package.
+                    from openhack.regression.evidence import sanitize_exploit_evidence
+
                     for r in exploitable:
                         idx = r.get("finding_index")
                         if idx is not None and idx < len(self.session.findings):
@@ -935,6 +938,11 @@ class CoordinatorAgent(BaseAgent):
                                 finding.poc = r["working_poc"]
                             finding.validated = True
                             finding.source = "sandbox_verified"
+                            # Keep a redacted record of the exploit: regression
+                            # test generation derives the violated invariant from it.
+                            finding.exploit_evidence = (
+                                sanitize_exploit_evidence(r) or finding.exploit_evidence
+                            )
 
                     # Remove findings that couldn't be exploited in sandbox
                     if not_exploitable:
@@ -1070,6 +1078,14 @@ class CoordinatorAgent(BaseAgent):
                         content=f"Browser verification failed: {str(e)}. Findings preserved.",
                     )
 
+            # Step 6: Security regression tests (optional)
+            if settings.regression_tests_enabled and self.session.findings:
+                regression_cost, regression_tokens = await self._run_regression_tests()
+                total_cost += regression_cost
+                total_tokens += regression_tokens
+                self.session.total_cost = total_cost
+                self.session.total_tokens = total_tokens
+
             self.session.status = SessionStatus.COMPLETED
 
             # Clean up checkpoints on successful completion
@@ -1100,6 +1116,52 @@ class CoordinatorAgent(BaseAgent):
             self.session.status = SessionStatus.FAILED
             logger.debug(f"Scan failed: {e}", exc_info=True)
             raise
+
+    async def _run_regression_tests(self) -> tuple[float, int]:
+        """Step 6: turn verified findings into sandbox-validated regression tests.
+
+        Every finding gets a regression_test status (validated, unsupported,
+        missing evidence, ...). A failure here never costs the scan its findings.
+        Returns the step's (cost, tokens).
+        """
+        from openhack.regression.pipeline import PipelineOptions, RegressionTestPipeline
+
+        self.session.add_trace(
+            agent="coordinator", event_type="step_start",
+            content=f"Step 6: Security regression tests ({len(self.session.findings)} findings)",
+        )
+        regression_llm: Optional[LLMClient] = None
+        try:
+            regression_llm = self._create_llm_for_agent("regression_test")
+            options = PipelineOptions.from_settings(settings, self.session.target_dir)
+            pipeline = RegressionTestPipeline(
+                regression_llm, self.session, self.session.target_dir, options,
+            )
+            results = await pipeline.run(self.session.findings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Regression test generation failed: {e}", exc_info=True)
+            self.session.add_trace(
+                agent="coordinator", event_type="regression_test_error",
+                content=f"Regression test generation failed: {e}. Findings preserved.",
+            )
+            results = []
+        cost = regression_llm.total_cost if regression_llm else 0.0
+        tokens = regression_llm.total_tokens if regression_llm else 0
+        self.session.record_step_cost(
+            "regression_tests", cost, tokens,
+            input_tokens=regression_llm.total_input_tokens if regression_llm else 0,
+            output_tokens=regression_llm.total_output_tokens if regression_llm else 0,
+        )
+        statuses: dict[str, int] = {}
+        for result in results:
+            statuses[result.status.value] = statuses.get(result.status.value, 0) + 1
+        self.session.add_trace(
+            agent="coordinator", event_type="step_complete",
+            content={"step": "regression_tests", "statuses": statuses, "cost": cost, "tokens": tokens},
+        )
+        return cost, tokens
 
     async def run(self, task: str, context: Optional[dict] = None) -> dict:
         return await self.run_full_scan()

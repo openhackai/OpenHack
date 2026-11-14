@@ -33,6 +33,14 @@ not silently discard the remainder:
 - When shell output exceeds the context cap, its complete stdout/stderr is saved
   under `~/.openhack/scans/artifacts/<session-id>/` with mode `0600`.
 - The tool result and journal contain the artifact path, size, and SHA-256.
+- Security regression tests (the test file, a `git apply` patch and the
+  validation record) are saved under
+  `~/.openhack/scans/artifacts/<session-id>/regression-tests/` with the same
+  owner-only permissions; see [REGRESSION_TESTS.md](REGRESSION_TESTS.md).
+
+Reports also record the scanned revision (`repository`: commit, branch, and
+whether tracked files had uncommitted changes), so later regression-test
+validation can materialize exactly the code that was scanned.
 
 ## Completion contract
 

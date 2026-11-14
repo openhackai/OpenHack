@@ -47,6 +47,8 @@ OpenHack does `recon` -> `hunting` -> `validation` -> `verification` all in one 
 
 **Verification**: Verification agent performs a full browser + sandbox based attack to find verify vulnerabilities in a real docker / DOM environment.
 
+**Regression tests** *(opt-in)*: For verified vulnerabilities, OpenHack can write a security regression test in your repo's own test framework, and keeps it only after the sandbox shows it fails on the vulnerable code and passes on the fix.
+
 
 ## Quick start
 
@@ -70,6 +72,7 @@ OpenHack runs a multi-agent pipeline against your codebase:
 - **Validators** — re-read the suspect code to confirm or reject each candidate finding
 - **Sandbox verification** (`/verify sandbox`) *(Beta — requires Docker)* — spins up your app in a Docker container and attempts to exploit each finding with live HTTP requests. Findings that are successfully exploited get a ✓ mark.
 - **Browser verification** (`/verify browser`) *(Beta — requires Docker when combined with sandbox)* — launches a headless browser against the sandboxed app to verify client-side vulnerabilities (XSS, CSRF, DOM-based issues) with real browser execution.
+- **Security regression tests** *(Beta, opt-in — requires Docker)* — for sandbox-verified IDOR findings in pytest projects, extracts the violated security invariant and generates a test in your repo's existing suite. The test is only accepted after it fails on the vulnerable revision and passes on the fixed revision in locked-down containers. You get it as a `git apply`-able patch, and it's included in the `/copy` fix prompt. Enable with `regression_tests_enabled`; see [docs/REGRESSION_TESTS.md](docs/REGRESSION_TESTS.md).
 
 > **Docker prerequisite.** Sandbox verification requires Docker Desktop (or any working Docker daemon) installed and running on the machine where the scan runs. Browser verification inherits this when used with sandbox. If Docker isn't running, `/verify sandbox` will fail with a clear error before the scan starts.
 
@@ -151,6 +154,7 @@ OpenHack runs the same pipeline as the TUI, prints progress to stdout, writes a 
 | `openhack --plan "<obj>"`    | Draft a read-only attack plan                            |
 | `openhack --sessions`        | List all saved scans                                     |
 | `openhack --resume <id>`     | Resume a scan from its last checkpoint                   |
+| `openhack --regression-tests <id> [rev]` | Generate or re-validate security regression tests for a saved scan against the fixed revision `rev` (git ref or directory) |
 | `openhack --classify [path]` | Classify frameworks + detect entry points (no LLM calls) |
 | `openhack --login`           | Log in to your OpenHack account                          |
 | `openhack --setup`           | Run the setup wizard                                     |
@@ -199,6 +203,10 @@ You can override at runtime via environment variables:
 | `OPENHACK_API_KEY`  | Bearer token for the OpenHack inference API                                                                                            |
 | `OPENHACK_DEV=1`    | Point the CLI at local dev servers (app on `:9080`, inference on `:8787`) for self-hosted setups                                       |
 | `PROMPT_CACHING=0`  | Stop sending `prompt_cache_key` with API calls — needed for OpenAI-compatible endpoints that reject it (also: `/config prompt_caching false`) |
+| `REGRESSION_TESTS_ENABLED=1` | Generate sandbox-validated security regression tests for verified findings (also: `/config regression_tests_enabled true`) |
+| `REGRESSION_TESTS_FIXED_REF` | Git revision (or directory) holding the fix that regression tests are validated against |
+
+Further regression-test settings (attempts, runs, timeouts, base image) are listed in [docs/REGRESSION_TESTS.md](docs/REGRESSION_TESTS.md).
 
 
 ## Privacy
