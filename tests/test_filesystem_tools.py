@@ -115,3 +115,25 @@ class TestGrep:
         fs = FileSystemTools(jail_dir=tmp_path)
         result = fs.grep("nonexistent_string_xyz")
         assert len(result["matches"]) == 0
+
+    def test_grep_keeps_paths_with_test_substring(self, tmp_path):
+        """Directories like src/latest/ or src/contest/ contain the substring
+        "test" but are not test directories; grep must not silently drop them."""
+        write_file(tmp_path, "src/latest/handler.py", "eval(user_input)\n")
+        write_file(tmp_path, "src/contest/util.py", "eval(user_input)\n")
+        fs = FileSystemTools(jail_dir=tmp_path)
+        result = fs.grep("eval")
+        files = {m["file"] for m in result["matches"]}
+        assert any("latest" in f for f in files), files
+        assert any("contest" in f for f in files), files
+
+    def test_grep_still_skips_real_test_files(self, tmp_path):
+        write_file(tmp_path, "src/core/app.py", "eval(user_input)\n")
+        write_file(tmp_path, "tests/test_app.py", "eval(user_input)\n")
+        write_file(tmp_path, "src/app.test.js", "eval(user_input)\n")
+        fs = FileSystemTools(jail_dir=tmp_path)
+        result = fs.grep("eval")
+        files = {m["file"] for m in result["matches"]}
+        assert any("core" in f for f in files), files
+        assert not any("test_app" in f for f in files), files
+        assert not any(f.endswith(".test.js") for f in files), files

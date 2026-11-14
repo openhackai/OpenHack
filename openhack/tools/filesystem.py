@@ -19,6 +19,32 @@ _GREP_EXCLUDE_DIRS = [
     ".pytest_cache", ".tox", "eggs", "*.egg-info",
 ]
 
+_TEST_PATH_DIR_NAMES = {
+    "test", "tests", "__tests__", "spec", "__mocks__", "fixtures",
+    "mocks", "__fixtures__", "e2e", "cypress", "playwright", "node_modules",
+}
+
+def _is_test_or_vendor_path(rel_path: str) -> bool:
+    """Check whether a path is a test/vendor file, by path component.
+
+    Matches whole directory names and test-file naming conventions only, so
+    source directories that merely contain the substring "test" (e.g.
+    src/latest/, src/contest/) are still searched.
+    """
+    parts = [p.lower() for p in rel_path.replace("\\", "/").split("/")]
+    if any(part in _TEST_PATH_DIR_NAMES for part in parts[:-1]):
+        return True
+    basename = parts[-1] if parts else ""
+    return (
+        basename.startswith("test_")
+        or basename.startswith("conftest.")
+        or basename.endswith("fixture")
+        or "_test." in basename
+        or ".test." in basename
+        or ".spec." in basename
+    )
+
+
 _GREP_SOURCE_INCLUDES = [
     "*.py", "*.js", "*.ts", "*.tsx", "*.jsx",
     "*.rb", "*.go", "*.rs", "*.java", "*.php",
@@ -289,7 +315,7 @@ class FileSystemTools:
                     rel = self._display_path(Path(fp))
                 except ValueError:
                     rel = fp
-                if "node_modules" in rel or "test" in rel.lower():
+                if _is_test_or_vendor_path(rel):
                     continue
                 matches.append({"file": rel, "line": 0, "content": ""})
                 if len(matches) >= 100:
