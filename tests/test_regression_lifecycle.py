@@ -183,6 +183,9 @@ def test_headless_status_lines():
     assert "git apply" in lines[2]
     assert format_regression_status(verified_idor_finding()) == []
 
+    finding.regression_test["artifacts"]["repo_path"] = f"services/api/{TEST_PATH}"
+    assert format_regression_status(finding)[0].endswith(f"— services/api/{TEST_PATH}")
+
 
 # ── openhack --regression-tests ──
 
@@ -356,8 +359,38 @@ def test_copy_prompt_carries_the_regression_test(status, included, phrase):
     assert ("## Regression test" in prompt) is included
     if included:
         assert phrase in prompt
-        assert f"Add it unchanged at `{TEST_PATH}`" in prompt
+        assert f"Add it unchanged at `{TEST_PATH}` in its test project" in prompt
         assert "```python\ndef test_x():\n    assert True\n```" in prompt
+
+
+def test_copy_prompt_places_a_subproject_test_from_the_repository_root(tmp_path):
+    """A monorepo finding: the test belongs in the project, not at the repository root."""
+    import shutil
+
+    from openhack.tui import OpenHackApp, _regression_test_fragments
+    from tests.regression_support import FIXTURE_APP
+
+    repo = tmp_path / "monorepo"
+    shutil.copytree(FIXTURE_APP / "vulnerable", repo / "services" / "api")
+    (repo / "README.md").write_text("# monorepo\n")
+    finding = verified_idor_finding(file_path="services/api/app.py")
+    runner = FakeRunner()
+    pipeline = pipeline_mod.RegressionTestPipeline(
+        ScriptedLLM([submit()]), Session(str(repo), persist_events=False), repo,
+        PipelineOptions(artifacts_root=tmp_path / "artifacts"), runner=runner,
+    )
+    result = asyncio.run(pipeline.run([finding]))[0]
+
+    assert result.status.value == "remediation_unavailable"
+    assert result.test_path == TEST_PATH
+    assert result.artifacts["repo_path"] == f"services/api/{TEST_PATH}"
+    assert result.run_command == f"cd services/api && python -m pytest {TEST_PATH}"
+    assert list(runner.runs[0]["files"]) == [f"services/api/{TEST_PATH}"]
+
+    prompt = OpenHackApp._format_finding_for_agent(finding)
+    assert f"Add it unchanged at `services/api/{TEST_PATH}` (relative to the repository root)" in prompt
+    details = "".join(fragment[1] for fragment in _regression_test_fragments(finding))
+    assert f"services/api/{TEST_PATH}" in details
 
 
 def test_tui_details_and_trace_show_regression_status():

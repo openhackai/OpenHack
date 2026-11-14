@@ -140,6 +140,42 @@ def test_artifacts_include_the_test_and_an_applicable_patch(tmp_path):
     assert git(run.repo, "status", "--porcelain") == f"?? {TEST_PATH}"
 
 
+def test_repository_path_is_kept_when_artifacts_cannot_be_written(tmp_path, monkeypatch):
+    import openhack.regression.pipeline as pipeline_mod
+
+    def disk_full(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(pipeline_mod, "write_private_file", disk_full)
+    run = run_pipeline(tmp_path, [submit()])
+    assert run.result.status is Status.VALIDATED
+    assert run.result.artifacts == {"repo_path": TEST_PATH}
+
+
+def test_two_findings_never_add_the_same_test_file(tmp_path):
+    read_any = verified_idor_finding()
+    delete_any = verified_idor_finding(title="IDOR: delete any note")
+    # The second generator ignores its suggested path and reuses the first test's file.
+    responses = [submit(), submit(call_id="same-file"),
+                 submit(path="tests/test_security_idor_note_2.py", call_id="new-file")]
+    run = run_pipeline(tmp_path, responses, findings=[read_any, delete_any])
+
+    first, second = run.results
+    assert first.status is Status.VALIDATED and second.status is Status.VALIDATED
+    assert first.test_path == TEST_PATH
+    assert second.test_path == "tests/test_security_idor_note_2.py"
+    feedback = feedback_sent(run.llm, 2)
+    assert f"`{TEST_PATH}` is already the regression test for another finding" in feedback
+    assert "such as `tests/test_security_idor_note_2.py`" in feedback
+    # The two patches apply together.
+    git(run.repo, "checkout", "-q", FIX_BRANCH)
+    for result in run.results:
+        subprocess.run(["git", "-C", str(run.repo), "apply", result.artifacts["patch"]], check=True)
+    assert git(run.repo, "status", "--porcelain").splitlines() == [
+        f"?? {TEST_PATH}", "?? tests/test_security_idor_note_2.py",
+    ]
+
+
 def test_the_scanned_repository_is_never_modified(tmp_path):
     run = run_pipeline(tmp_path, [submit(path="tests/test_notes.py"), submit(call_id="s2")])
     assert run.result.status is Status.VALIDATED
@@ -233,6 +269,32 @@ def test_collection_errors_are_reported_with_output(tmp_path):
     assert run.result.status is Status.VALIDATION_FAILED
     assert "could not be collected or run" in run.result.reason
     assert "No module named 'notes'" in feedback_sent(run.llm, 1)
+
+
+@pytest.mark.parametrize("revision,exit_code,expected", [
+    # A plugin or session fixture failing the run after every test passed.
+    ("remediated", 1, "exited with code 1 although every test passed (expected 0)"),
+    ("vulnerable", 3, "exited with code 3 although some tests failed (expected 1)"),
+    ("vulnerable", 0, "exited with code 0 although some tests failed (expected 1)"),
+])
+def test_runs_must_end_with_the_exit_status_their_results_imply(tmp_path, revision, exit_code, expected):
+    def unclean(label, code, run_index):
+        outcomes = realistic_idor(label, code, run_index)
+        return (outcomes, exit_code) if label == revision else outcomes
+
+    run = run_pipeline(tmp_path, [submit(), submit(call_id="s2")], behavior=unclean, max_attempts=2)
+    assert run.result.status is Status.VALIDATION_FAILED
+    assert "did not finish cleanly" in run.result.reason and expected in run.result.reason
+    assert run.result.artifacts == {}
+    # The runner's own output explains a session failure, so it goes back to the generator.
+    feedback = feedback_sent(run.llm, 1)
+    assert "Test output (tail):" in feedback and "a plugin failed the session" in feedback
+
+
+def test_oversized_results_are_rejected(tmp_path):
+    run = run_pipeline(tmp_path, [submit()], behavior=lambda *a: "oversized_results", max_attempts=1)
+    assert run.result.status is Status.VALIDATION_FAILED
+    assert "more than 16 MB in its results directory" in run.result.reason
 
 
 def test_failing_control_test_means_the_failure_is_not_the_vulnerability(tmp_path):
@@ -510,3 +572,15 @@ def test_evaluate_runs_requires_a_control_test():
 def test_evaluate_runs_parametrized_tests_match_by_base_name():
     reports = [_report(**{"test_inv[read]": "failed", "test_inv[delete]": "failed", "test_ctl": "passed"})]
     assert evaluate_runs(reports, SUBMISSION, "vulnerable", True, 60).passed
+
+
+def test_evaluate_runs_requires_every_run_to_finish_cleanly():
+    clean, unclean = _report(test_inv="passed", test_ctl="passed"), _report(test_inv="passed", test_ctl="passed")
+    unclean.session_error = "pytest exited with code 1 although every test passed (expected 0)"
+    unclean.output_tail = "FAIL Required test coverage of 90% not reached"
+
+    check = evaluate_runs([clean, unclean], SUBMISSION, "remediated", True, 60)
+    assert not check.passed and check.retryable
+    assert check.detail.startswith("the test run did not finish cleanly: pytest exited with code 1")
+    assert check.show_output and "coverage" in check.output_tail
+    assert evaluate_runs([clean, clean], SUBMISSION, "remediated", True, 60).passed

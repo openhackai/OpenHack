@@ -51,7 +51,12 @@ class FrameworkProfile:
     test_dir: str
     file_patterns: list[str]
     config_file: Optional[str] = None
+    # Every file the dependency install reads (including -r/-c includes), and
+    # the subset installed as requirements.
     dependency_files: list[str] = field(default_factory=list)
+    requirement_files: list[str] = field(default_factory=list)
+    # A requirement installs from the project's own files (`-e .`, `./libs/x`).
+    requirements_need_source: bool = False
     installable_project: bool = False
     install_extras: list[str] = field(default_factory=list)
     fixtures: dict[str, str] = field(default_factory=dict)
@@ -85,6 +90,8 @@ class RunReport:
     exit_code: Optional[int] = None
     timed_out: bool = False
     collection_error: Optional[str] = None
+    # The runner's exit status contradicts the per-test results.
+    session_error: Optional[str] = None
     output_tail: str = ""
 
     def outcomes(self) -> dict[str, str]:
@@ -186,7 +193,8 @@ def _posix(path: Path | PurePosixPath | str) -> str:
 
 
 def _xml_is_safe(text: str) -> bool:
-    lowered = text[:4096].lower()
+    # The whole (size-capped) document: comments of any length may precede a DTD.
+    lowered = text.lower()
     return "<!doctype" not in lowered and "<!entity" not in lowered
 
 
@@ -197,6 +205,7 @@ _REQUIREMENTS_NAMES = (
     "requirements-test.txt", "requirements_test.txt", "requirements-tests.txt",
     "dev-requirements.txt", "test-requirements.txt", "requirements-testing.txt",
 )
+_ARCHIVE_SUFFIXES = (".whl", ".zip", ".tar.gz", ".tgz", ".tar.bz2")
 _TEST_EXTRAS = ("test", "tests", "testing", "dev")
 _APP_FRAMEWORKS = (
     "flask", "django", "fastapi", "starlette", "quart", "aiohttp", "tornado",
@@ -264,6 +273,29 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
+def _installs_from_project(requirements: str) -> bool:
+    """Whether requirements install from the project's own files.
+
+    `-e .`, `./libs/shared`, `pkg @ file:...` or `--find-links ./wheels` need
+    the source tree in place before pip runs.
+    """
+    for raw in re.sub(r"\\\r?\n", " ", requirements).splitlines():
+        line = re.split(r"(?:^|\s)#", raw, maxsplit=1)[0].strip()
+        option = re.match(r"(?:-e|--editable|-f|--find-links)(?:\s*=\s*|\s*)(\S+)", line)
+        if not line or (option is None and line.startswith("-")):
+            continue  # other pip options: -r, -c, --index-url, ...
+        if "file:" in line:
+            return True
+        target = option.group(1) if option else line.split()[0].split(";")[0]
+        if "://" in target or re.match(r"(?:git|hg|svn|bzr)\+", target):
+            continue  # a remote URL or VCS checkout
+        if option or target.startswith((".", "/", "~")) or "/" in target or "\\" in target:
+            return True
+        if target.lower().endswith(_ARCHIVE_SUFFIXES):
+            return True
+    return False
+
+
 def _module_root_forbidden(module: str) -> Optional[str]:
     for name, why in _FORBIDDEN_MODULES.items():
         if module == name or module.startswith(name + "."):
@@ -287,10 +319,10 @@ class PytestAdapter(FrameworkAdapter):
         config_file, ini = self._pytest_config(project)
         test_files = [p for p in self._test_files(project, ini)]
         conftests = list(_iter_files(project, "conftest.py"))
-        deps = self._dependency_files(project)
+        requirement_files, deps = self._dependency_files(project)
         pyproject = self._load_pyproject(project)
-        dep_text = "\n".join(_read(project / d) for d in deps).lower()
-        dep_text += "\n" + json.dumps(pyproject).lower()
+        requirements_text = "\n".join(_read(project / d) for d in deps)
+        dep_text = requirements_text.lower() + "\n" + json.dumps(pyproject).lower()
         # Any pytest-ecosystem package (pytest, pytest-django, ...) counts.
         has_pytest_dep = bool(re.search(r"(?<![\w-])pytest", dep_text))
         if not (config_file or conftests or (test_files and has_pytest_dep)):
@@ -313,6 +345,8 @@ class PytestAdapter(FrameworkAdapter):
             file_patterns=self._patterns(ini),
             config_file=config_file,
             dependency_files=deps,
+            requirement_files=requirement_files,
+            requirements_need_source=_installs_from_project(requirements_text),
             installable_project=installable,
             install_extras=extras,
             fixtures=self._fixtures(project, conftests),
@@ -417,26 +451,41 @@ class PytestAdapter(FrameworkAdapter):
         return "tests"
 
     @staticmethod
-    def _dependency_files(project: Path) -> list[str]:
-        files: list[str] = [n for n in _REQUIREMENTS_NAMES if (project / n).is_file()]
+    def _dependency_files(project: Path) -> tuple[list[str], list[str]]:
+        """The requirement files to install, and every file the install reads.
+
+        `-r other.txt` / `-c constraints.txt` includes are followed so the
+        image build has every file they reference. A constraints file is only
+        copied, never installed: it pins versions of packages the project may
+        not use at all, so installing it as requirements could fail a build
+        the project's own install passes.
+        """
+        roots: list[str] = [n for n in _REQUIREMENTS_NAMES if (project / n).is_file()]
         req_dir = project / "requirements"
         if req_dir.is_dir():
-            files += sorted(_posix(p.relative_to(project)) for p in req_dir.glob("*.txt"))
-        # Follow `-r other.txt` / `-c constraints.txt` includes so the image
-        # build sees every file the listed requirements reference.
+            roots += sorted(
+                _posix(p.relative_to(project)) for p in req_dir.glob("*.txt")
+                if "constraint" not in p.name.lower()
+            )
+        files = list(roots)
+        constraints: set[str] = set()
         queue = list(files)
         while queue:
             current = queue.pop()
             base = PurePosixPath(current).parent
             for line in _read(project / current).splitlines():
-                match = re.match(r"\s*(?:-r|--requirement|-c|--constraint)\s*=?\s*(\S+)", line)
+                match = re.match(r"\s*(-r|--requirement|-c|--constraint)\s*=?\s*(\S+)", line)
                 if not match:
                     continue
-                include = _posix(base / match.group(1))
-                if include not in files and ".." not in include and (project / include).is_file():
+                include = _posix(base / match.group(2))
+                if ".." in include or not (project / include).is_file():
+                    continue
+                if match.group(1) in ("-c", "--constraint"):
+                    constraints.add(include)
+                if include not in files:
                     files.append(include)
                     queue.append(include)
-        return files
+        return [f for f in roots if f not in constraints], files
 
     @staticmethod
     def _load_pyproject(project: Path) -> dict:
@@ -616,13 +665,21 @@ class PytestAdapter(FrameworkAdapter):
             "PIP_NO_INPUT=1 PIP_ROOT_USER_ACTION=ignore",
             f"WORKDIR {workdir}",
         ]
-        if profile.dependency_files:
+        install = "RUN pip install --no-cache-dir " + " ".join(
+            f"-r {json.dumps(d)}" for d in profile.requirement_files
+        )
+        # Installing before the source is copied keeps the dependencies in a
+        # cached layer that the other revision's image can reuse. Requirements
+        # such as `-e .` install from the project's own files, so they wait.
+        early = bool(profile.requirement_files) and not profile.requirements_need_source
+        if early:
             for dep in profile.dependency_files:
                 src = dep if root == "." else f"{root}/{dep}"
                 lines.append(f"COPY {json.dumps([src, f'{workdir}/{dep}'])}")
-            flags = " ".join(f"-r {json.dumps(d)}" for d in profile.dependency_files)
-            lines.append(f"RUN pip install --no-cache-dir {flags}")
+            lines.append(install)
         lines.append('COPY [".", "/workspace"]')
+        if profile.requirement_files and not early:
+            lines.append(install)
         if profile.installable_project:
             target = "." + (f"[{','.join(profile.install_extras)}]" if profile.install_extras else "")
             lines.append(
@@ -639,9 +696,13 @@ class PytestAdapter(FrameworkAdapter):
         # Output goes to a file so a noisy test can't flood the host, and the
         # repository's own pytest configuration (rootdir, conftest, plugins)
         # still applies. --maxfail overrides any `-x` in addopts so every
-        # declared test reports an outcome.
+        # declared test reports an outcome. A coverage threshold in addopts
+        # would fail a one-file session whose tests all pass, so pytest-cov's
+        # --no-cov is added (only when pytest-cov is installed, as it is
+        # otherwise an unknown option).
         script = (
-            'python -m pytest "$1" -p no:cacheprovider --maxfail=100000 '
+            'if python -c "import pytest_cov" 2>/dev/null; then set -- "$1" --no-cov; fi; '
+            'python -m pytest "$@" -p no:cacheprovider --maxfail=100000 '
             f"-o junit_family=xunit2 --junitxml={RESULTS_DIR}/junit.xml "
             f"> {RESULTS_DIR}/output.txt 2>&1"
         )
@@ -708,6 +769,19 @@ class PytestAdapter(FrameworkAdapter):
             report.cases.append(CaseOutcome(name, classname, outcome, message, assertion))
         if not report.cases and report.collection_error is None:
             report.collection_error = f"no tests were collected. Output:\n{output[-2000:]}"
+        if report.collection_error is None:
+            # pytest exits 0 when every test passed and 1 when some failed.
+            # Anything else means the session itself failed or was altered
+            # (a plugin, a session fixture, or the project's configuration),
+            # even though the results file was written.
+            failed = any(c.outcome in ("failed", "error") for c in report.cases)
+            expected = 1 if failed else 0
+            if exit_code != expected:
+                state = "some tests failed" if failed else "every test passed"
+                report.session_error = (
+                    f"pytest exited with code {exit_code} although {state} (expected {expected}), "
+                    "so something outside the test cases failed or altered the session"
+                )
         return report
 
 

@@ -233,6 +233,36 @@ def test_incomplete_fix_is_reported_not_weakened(tmp_path):
     assert result.artifacts == {}
 
 
+def test_projects_with_editable_requirements_constraints_and_a_coverage_gate(tmp_path):
+    """Common real-world tooling must not stop validation: `-e .` in a
+    requirements file, a constraints file pinning a package the project never
+    installs (and that does not exist), and a coverage threshold in addopts
+    that a single-file run can never meet."""
+    def tooling(repo: Path) -> None:
+        (repo / "requirements.txt").write_text("-c constraints.txt\nflask>=3.0,<4\n")
+        (repo / "constraints.txt").write_text("flask<4\nopenhack-unpublished-internal-package==1.0\n")
+        (repo / "requirements-dev.txt").write_text("-r requirements.txt\n-e .\npytest>=8.0\npytest-cov>=4\n")
+        (repo / "setup.py").write_text(
+            "from setuptools import setup\n\nsetup(name='notes-app', version='0.0.0', py_modules=['app'])\n"
+        )
+        with open(repo / "pytest.ini", "a") as ini:
+            ini.write("addopts = --cov=app --cov-fail-under=100\n")
+
+    fx = make_fixture_repo(tmp_path, customize=tooling)
+    repo = fx["repo"]
+    llm = ScriptedLLM([submit()])
+    pipeline = RegressionTestPipeline(
+        llm, Session(str(repo), persist_events=False), repo,
+        PipelineOptions(remediation=RevisionSpec.git(FIX_BRANCH), base_image=BASE_IMAGE,
+                        artifacts_root=tmp_path / "artifacts"),
+    )
+    result = asyncio.run(pipeline.run([verified_idor_finding()]))[0]
+
+    assert result.status is Status.VALIDATED, result.reason
+    assert result.attempts == 1
+    assert {n for n, o in result.validation["vulnerable"]["outcomes"].items() if o == "failed"} == set(GOOD_INVARIANT_TESTS)
+
+
 def _probe_image(tmp_path: Path, runner: ContainerTestRunner) -> str:
     context = tmp_path / "probe"
     context.mkdir()
@@ -270,6 +300,42 @@ def test_test_containers_are_locked_down(tmp_path):
         finally:
             run.cleanup()
         assert _docker("ps", "-a", "--filter", f"name={run.container}", "-q").stdout.strip() == ""
+    finally:
+        asyncio.run(runner.remove_images())
+
+
+def test_results_are_capped_and_links_never_reach_the_host(tmp_path):
+    mb = 1024 * 1024
+    runner = ContainerTestRunner(ContainerLimits(run_timeout=60, file_size=4 * mb, results_bytes=mb))
+    image = _probe_image(tmp_path, runner)
+    try:
+        script = (
+            "ln -s /etc/hostname /openhack-results/output.txt; "
+            "ulimit -f > /openhack-results/fsize; "
+            "head -c 8000000 /dev/zero > /tmp/big; echo $? > /openhack-results/big_rc; "
+            "wc -c < /tmp/big > /openhack-results/big_size; "
+            "echo '<testsuites/>' > /openhack-results/junit.xml"
+        )
+        run = asyncio.run(runner.run_test(image, {}, ["sh", "-c", script]))
+        try:
+            assert run.results_error is None
+            # The planted symlink stays in the container.
+            assert sorted(p.name for p in run.results_dir.iterdir()) == ["big_rc", "big_size", "fsize", "junit.xml"]
+            assert (run.results_dir / "fsize").read_text().strip() == str(4 * mb // 512)
+            assert (run.results_dir / "big_rc").read_text().strip() != "0"  # killed at the file-size limit
+            assert int((run.results_dir / "big_size").read_text()) == 4 * mb
+        finally:
+            run.cleanup()
+
+        flood = asyncio.run(runner.run_test(
+            image, {}, ["sh", "-c", "head -c 3000000 /dev/zero > /openhack-results/flood"],
+        ))
+        try:
+            assert "more than 1 MB in its results directory" in flood.results_error
+            assert list(flood.results_dir.iterdir()) == []
+        finally:
+            flood.cleanup()
+        assert _docker("ps", "-a", "--filter", f"name={flood.container}", "-q").stdout.strip() == ""
     finally:
         asyncio.run(runner.remove_images())
 

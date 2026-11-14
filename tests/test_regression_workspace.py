@@ -1,6 +1,7 @@
 """Revision workspaces: materializing vulnerable and remediated code safely."""
 
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -77,6 +78,21 @@ def test_worktree_snapshot_honors_gitignore_and_skips_credentials(fixture_repo, 
         assert absent not in files
     assert not any(f.startswith(("node_modules/", ".git/")) for f in files)
     assert copy.resolved.startswith("working tree @ ")
+
+
+def test_tracked_directory_replaced_by_a_symlink_is_not_followed(fixture_repo, tmp_path):
+    repo = fixture_repo["repo"]
+    outside = tmp_path / "outside"
+    write_file(outside, "conftest.py", "HOST_SECRET = 'outside the checkout'\n")
+    write_file(outside, "test_notes.py", "HOST_SECRET = 'outside the checkout'\n")
+    shutil.rmtree(repo / "tests")
+    os.symlink(outside, repo / "tests")
+    # The index still lists the directory's files under the symlink.
+    assert "tests/conftest.py" in git(repo, "ls-files", "--cached").splitlines()
+
+    copy = materialize(repo, RevisionSpec.worktree(), tmp_path / "w")
+    assert not (copy.root / "tests").exists()
+    assert (copy.root / "app.py").is_file()
 
 
 def test_directory_revisions(tmp_path):

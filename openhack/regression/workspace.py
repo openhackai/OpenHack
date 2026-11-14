@@ -202,16 +202,35 @@ class _Copier:
         return digest.hexdigest()
 
 
+def _regular_file(source: Path, rel: str) -> Optional[Path]:
+    """``source / rel`` if it is a regular file reached without any symlink.
+
+    Symlinks are skipped because one pointing outside the tree would smuggle
+    host files into the build context. Every component is checked, not just
+    the last: git's index still lists the files of a tracked directory that
+    was replaced by a symlink.
+    """
+    relpath = PurePosixPath(rel)
+    if relpath.is_absolute() or ".." in relpath.parts:
+        return None
+    path = source
+    for part in relpath.parts:
+        path = path / part
+        if path.is_symlink():
+            return None
+    if not path.is_relative_to(source) or not path.is_file():
+        return None
+    return path
+
+
 def _copy_tree_files(source: Path, relpaths: list[str], copier: _Copier) -> None:
     source = source.resolve()
     for rel in relpaths:
         rel = PurePosixPath(rel).as_posix()
         if is_excluded_path(rel):
             continue
-        path = source / rel
-        # Symlinks are skipped: one pointing outside the tree would otherwise
-        # smuggle host files into the build context.
-        if path.is_symlink() or not path.is_file():
+        path = _regular_file(source, rel)
+        if path is None:
             continue
         with open(path, "rb") as stream:
             copier.add(rel, stream, executable=os.access(path, os.X_OK))

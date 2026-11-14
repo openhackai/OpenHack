@@ -1167,8 +1167,9 @@ def _regression_test_fragments(finding: Finding) -> list[tuple[str, str]]:
         style, mark = "class:trace.dim", "✗ "
     out = _section_header("Regression test")
     out += [("", "\n"), (style, mark + (data.get("status_label") or status))]
-    if data.get("test_path"):
-        out.append(("class:finding.path", f"  {data['test_path']}"))
+    path = (data.get("artifacts") or {}).get("repo_path") or data.get("test_path")
+    if path:
+        out.append(("class:finding.path", f"  {path}"))
     out.append(("", "\n"))
     if data.get("reason"):
         out.append(("class:trace.dim", f"{data['reason']}\n"))
@@ -1205,9 +1206,16 @@ def _regression_test_prompt_lines(finding: Finding) -> list[str]:
             "fix yet, so it must pass after your fix."
         )
     lang = "python" if path.endswith(".py") else ""
+    repo_path = (data.get("artifacts") or {}).get("repo_path")
+    if repo_path:
+        location = f"`{repo_path}` (relative to the repository root)"
+    else:
+        # The test path is relative to its project, which the run command names.
+        run = data.get("run_command")
+        location = f"`{path}` in its test project" + (f" (run it with `{run}`)" if run else "")
     return [
         "## Regression test", "", intro,
-        f"Add it unchanged at `{path}` in the same change and do not weaken its assertions.",
+        f"Add it unchanged at {location} in the same change and do not weaken its assertions.",
         "", f"```{lang}", code.rstrip("\n"), "```", "",
     ]
 

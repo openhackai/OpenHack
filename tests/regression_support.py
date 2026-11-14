@@ -33,10 +33,15 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def make_fixture_repo(tmp_path: Path) -> dict:
-    """Create the IDOR fixture as a git repo; returns paths and commit ids."""
+def make_fixture_repo(tmp_path: Path, customize: Optional[Callable[[Path], None]] = None) -> dict:
+    """Create the IDOR fixture as a git repo; returns paths and commit ids.
+
+    ``customize(repo)`` can change the project's tooling before the first commit.
+    """
     repo = tmp_path / "notes-app"
     shutil.copytree(FIXTURE_APP / "vulnerable", repo)
+    if customize is not None:
+        customize(repo)
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "dev@example.invalid")
     git(repo, "config", "user.name", "dev")
@@ -364,7 +369,7 @@ COLLECTION_ERROR_XML = (
     "ModuleNotFoundError: No module named 'notes'</error></testcase></testsuite></testsuites>"
 )
 
-Behavior = Callable[[str, str, int], Union[dict, str]]
+Behavior = Callable[[str, str, int], Union[dict, tuple, str]]
 
 
 def realistic_idor(label: str, code: str, run_index: int) -> dict:
@@ -380,7 +385,8 @@ def realistic_idor(label: str, code: str, run_index: int) -> dict:
 
 class FakeRunner:
     """Stands in for ContainerTestRunner. ``behavior(label, code, run_index)``
-    returns {test: outcome}, or "timeout" / "collection_error" / "no_results"."""
+    returns {test: outcome}, ({test: outcome}, exit_code) to force pytest's exit
+    status, or "timeout" / "collection_error" / "no_results" / "oversized_results"."""
 
     def __init__(self, behavior: Behavior = realistic_idor, available: bool = True,
                  build_error: Optional[str] = None):
@@ -417,10 +423,20 @@ class FakeRunner:
             (results / "junit.xml").write_text(COLLECTION_ERROR_XML)
             (results / "output.txt").write_text("ModuleNotFoundError: No module named 'notes'\n")
             return ContainerRunResult(2, False, results)
+        if outcome == "oversized_results":
+            return ContainerRunResult(1, False, results, results_error=(
+                "the test run left more than 16 MB in its results directory, so the results "
+                "were discarded; keep test output small"
+            ))
+        exit_code, output = None, "collected tests\n"
+        if isinstance(outcome, tuple):
+            outcome, exit_code = outcome
+            output += "INTERNALERROR> a plugin failed the session\n"
         (results / "junit.xml").write_text(junit_xml(outcome))
-        (results / "output.txt").write_text("collected tests\n")
-        failed = any(o != "passed" for o in outcome.values())
-        return ContainerRunResult(1 if failed else 0, False, results)
+        (results / "output.txt").write_text(output)
+        if exit_code is None:
+            exit_code = int(any(o in ("failed", "crashed", "error") for o in outcome.values()))
+        return ContainerRunResult(exit_code, False, results)
 
     async def remove_images(self) -> None:
         self.images_removed = True

@@ -48,8 +48,9 @@ def format_regression_status(finding: Finding) -> list[str]:
     if not isinstance(data, dict):
         return []
     lines = [f"Regression test: {data.get('status_label') or data.get('status')}"]
-    if data.get("test_path") and data.get("status") in ("validated", "remediation_unavailable"):
-        lines[0] += f" — {data['test_path']}"
+    path = (data.get("artifacts") or {}).get("repo_path") or data.get("test_path")
+    if path and data.get("status") in ("validated", "remediation_unavailable"):
+        lines[0] += f" — {path}"
     if data.get("reason"):
         lines.append(f"  {data['reason']}")
     patch = (data.get("artifacts") or {}).get("patch")

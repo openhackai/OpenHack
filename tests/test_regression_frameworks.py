@@ -8,6 +8,7 @@ import pytest
 from openhack.regression.frameworks import (
     PytestAdapter,
     UnsupportedFrameworkError,
+    _installs_from_project,
     detect_framework,
 )
 from openhack.regression.invariants import IdorSpec
@@ -220,12 +221,32 @@ def test_parse_results_without_results_file(tmp_path):
     assert "file or directory not found" in report.collection_error
 
 
-def test_parse_results_rejects_entity_declarations(tmp_path):
+@pytest.mark.parametrize("prolog", ["", "<!--" + "padding " * 2000 + "-->"])
+def test_parse_results_rejects_entity_declarations(tmp_path, prolog):
     (tmp_path / "junit.xml").write_text(
-        '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><testsuites><testsuite>'
+        f'<?xml version="1.0"?>{prolog}<!DOCTYPE x [<!ENTITY a "aaaa">]><testsuites><testsuite>'
         '<testcase classname="t" name="test_a"/></testsuite></testsuites>'
     )
     assert "DTD/entity" in adapter.parse_results(tmp_path, 0, False).collection_error
+
+
+@pytest.mark.parametrize("cases,exit_code,problem", [
+    ({"test_a": "passed"}, 0, None),
+    ({"test_a": "failed", "test_b": "passed"}, 1, None),
+    ({"test_a": "error"}, 1, None),
+    # e.g. a coverage threshold or a plugin failing the session at shutdown
+    ({"test_a": "passed"}, 1, "exited with code 1 although every test passed (expected 0)"),
+    ({"test_a": "failed"}, 0, "exited with code 0 although some tests failed (expected 1)"),
+    ({"test_a": "failed"}, 3, "exited with code 3 although some tests failed"),
+])
+def test_parse_results_checks_the_exit_status_against_the_results(tmp_path, cases, exit_code, problem):
+    (tmp_path / "junit.xml").write_text(junit_xml(cases))
+    report = adapter.parse_results(tmp_path, exit_code, False)
+    assert report.collection_error is None
+    if problem is None:
+        assert report.session_error is None
+    else:
+        assert problem in report.session_error
 
 
 def test_parse_results_on_timeout(tmp_path):
@@ -237,10 +258,12 @@ def test_parse_results_on_timeout(tmp_path):
 
 def test_dockerfile_installs_the_projects_own_test_dependencies(profile):
     dockerfile = adapter.dockerfile(profile, "python:3.12-slim")
-    assert dockerfile.splitlines()[1] == "FROM python:3.12-slim"
-    assert 'COPY ["requirements.txt", "/workspace/requirements.txt"]' in dockerfile
-    assert 'RUN pip install --no-cache-dir -r "requirements.txt"' in dockerfile
-    assert 'COPY [".", "/workspace"]' in dockerfile
+    lines = dockerfile.splitlines()
+    assert lines[1] == "FROM python:3.12-slim"
+    assert 'COPY ["requirements.txt", "/workspace/requirements.txt"]' in lines
+    install = 'RUN pip install --no-cache-dir -r "requirements.txt"'
+    # Dependencies install before the source arrives, as a reusable layer.
+    assert lines.index(install) < lines.index('COPY [".", "/workspace"]')
     assert "chown -R 65534:65534 /workspace /openhack-results" in dockerfile
     assert adapter.default_base_image(profile) == "python:3.12-slim"
 
@@ -248,17 +271,69 @@ def test_dockerfile_installs_the_projects_own_test_dependencies(profile):
 def test_dockerfile_for_subproject_with_includes(tmp_path):
     write_file(tmp_path, "api/requirements.txt", "flask\n")
     write_file(tmp_path, "api/requirements-dev.txt", "-r requirements.txt\n-c constraints/pins.txt\npytest\n")
-    write_file(tmp_path, "api/constraints/pins.txt", "flask==3.0.3\n")
+    write_file(tmp_path, "api/constraints/pins.txt", "flask==3.0.3\nsome-internal-package==1.0\n")
     write_file(tmp_path, "api/setup.py", "from setuptools import setup\nsetup(name='api')\n")
     write_file(tmp_path, "api/tests/test_a.py", "def test_a():\n    assert True\n")
     _, profile = detect_framework(tmp_path, "api/app.py")
     assert profile.project_root == "api"
     assert profile.dependency_files == ["requirements.txt", "requirements-dev.txt", "constraints/pins.txt"]
+    assert profile.requirement_files == ["requirements.txt", "requirements-dev.txt"]
     dockerfile = adapter.dockerfile(profile, "python:3.11-slim")
     assert "WORKDIR /workspace/api" in dockerfile
+    # The constraints file is there for the -c include but is not installed.
     assert 'COPY ["api/constraints/pins.txt", "/workspace/api/constraints/pins.txt"]' in dockerfile
+    assert 'RUN pip install --no-cache-dir -r "requirements.txt" -r "requirements-dev.txt"\n' in dockerfile
+    assert '-r "constraints/pins.txt"' not in dockerfile
     assert 'pip install --no-cache-dir -e "."' in dockerfile
     assert adapter.display_command(profile, "tests/test_x.py") == "cd api && python -m pytest tests/test_x.py"
+
+
+def test_constraints_files_in_a_requirements_directory_are_not_installed(tmp_path):
+    write_file(tmp_path, "pytest.ini", "[pytest]\n")
+    write_file(tmp_path, "requirements/base.txt", "-c constraints.txt\nflask\n")
+    write_file(tmp_path, "requirements/test.txt", "-r base.txt\npytest\n")
+    write_file(tmp_path, "requirements/constraints.txt", "flask==3.0.3\nsome-internal-package==1.0\n")
+    write_file(tmp_path, "tests/test_a.py", "def test_a():\n    assert True\n")
+    _, profile = detect_framework(tmp_path)
+    assert profile.requirement_files == ["requirements/base.txt", "requirements/test.txt"]
+    assert "requirements/constraints.txt" in profile.dependency_files
+    assert '-r "requirements/constraints.txt"' not in adapter.dockerfile(profile, "python:3.12-slim")
+
+
+def test_requirements_that_install_the_project_wait_for_its_source(tmp_path):
+    write_file(tmp_path, "requirements.txt", "flask\n")
+    write_file(tmp_path, "requirements-dev.txt", "-r requirements.txt\n-e .[test]\npytest\n")
+    write_file(tmp_path, "setup.py", "from setuptools import setup\nsetup(name='svc')\n")
+    write_file(tmp_path, "tests/test_a.py", "def test_a():\n    assert True\n")
+    _, profile = detect_framework(tmp_path)
+    assert profile.requirements_need_source
+    lines = adapter.dockerfile(profile, "python:3.12-slim").splitlines()
+    install = 'RUN pip install --no-cache-dir -r "requirements.txt" -r "requirements-dev.txt"'
+    assert lines.index('COPY [".", "/workspace"]') < lines.index(install)
+    assert not any(line.startswith('COPY ["requirements') for line in lines)
+
+
+@pytest.mark.parametrize("requirements,local", [
+    ("-e .\n", True),
+    ("-e .[dev]\n", True),
+    ("--editable=./packages/core\n", True),
+    (".\n", True),
+    ("./libs/shared\n", True),
+    ("libs/shared[extra]\n", True),
+    ("notes @ file:///workspace/libs/notes\n", True),
+    ("-e file:.\n", True),
+    ("--find-links ./wheels\nnotes\n", True),
+    ("vendor/notes-1.0-py3-none-any.whl\n", True),
+    ("flask>=3.0,<4\npytest  # see ./docs/testing.md\n", False),
+    ("notes @ https://example.com/notes-1.0-py3-none-any.whl\n", False),
+    ("-e git+https://github.com/example/notes.git#egg=notes\n", False),
+    ("-r base.txt\n-c constraints.txt\n--index-url https://pypi.org/simple\n", False),
+    ("-f https://download.pytorch.org/whl/torch_stable.html\ntorch\n", False),
+    ("django==4.2 \\\n    --hash=sha256:0123abcd\n", False),
+    ("# -e .\n", False),
+])
+def test_requirements_installing_from_the_project_are_recognized(requirements, local):
+    assert _installs_from_project(requirements) is local
 
 
 def test_container_command_runs_one_file_with_junit_results(profile):
@@ -268,3 +343,5 @@ def test_container_command_runs_one_file_with_junit_results(profile):
     assert "--junitxml=/openhack-results/junit.xml" in command[2]
     assert "--maxfail=100000" in command[2]
     assert "> /openhack-results/output.txt 2>&1" in command[2]
+    # Coverage thresholds are switched off only where pytest-cov can parse --no-cov.
+    assert 'if python -c "import pytest_cov" 2>/dev/null; then set -- "$1" --no-cov; fi;' in command[2]

@@ -125,9 +125,10 @@ and the patch path. `/copy` includes the test in the AI-fix prompt.
    **control tests** (legitimate access, expected to pass on both versions).
 3. **Checks before anything runs.** The test must be a new file under your
    existing test directory that pytest will discover. It can never overwrite,
-   modify or delete an existing test. A static policy rejects skips and
-   xfails, swallowed assertions, network or subprocess use, dynamic code
-   execution, sleeps, pytest hooks, and embedded credentials.
+   modify or delete an existing test, or reuse the file of another finding's
+   test, so the patches for several findings apply together. A static policy
+   rejects skips and xfails, swallowed assertions, network or subprocess use,
+   dynamic code execution, sleeps, pytest hooks, and embedded credentials.
 4. **Sandbox validation.** For each revision, OpenHack builds an image from a
    private copy of that revision plus your project's own test dependencies,
    then runs the test in a fresh locked-down container (by default twice per
@@ -137,7 +138,12 @@ and the patch path. `/copy` includes the test in the AI-fix prompt.
      fixture, skip or error doesn't count;
    - on the **remediated** code, every test passes;
    - every declared test ran, and all runs of a revision produced identical
-     outcomes.
+     outcomes;
+   - every run ended with the exit status its results imply (pytest exits 1
+     on the vulnerable code and 0 on the remediated code). A session that a
+     plugin or session fixture fails after the tests pass is rejected.
+     Coverage thresholds don't apply to these single-file runs: when
+     pytest-cov is installed, it runs with `--no-cov`.
 5. **Feedback.** A rejected test is sent back to the generator with the
    precise reason and per-test outcomes, up to `regression_tests_max_attempts`
    times. One case is never retried: if an invariant test still fails its
@@ -152,24 +158,32 @@ untrusted. They only ever execute inside a container started with:
 
 - `--network none`. Dependencies are installed during the image build, but
   the test run can't reach the network.
-- No host mounts. The test goes in, and results come out, via `docker cp`.
+- No host mounts. The test goes in via `docker cp`. Results come back as a
+  stream capped at 16 MB, and only regular files are written to the host, so
+  a symlink planted in the results never reaches it. A run whose results
+  exceed the cap is rejected.
 - A non-root user (`65534`), `--cap-drop ALL` and `no-new-privileges`.
-- Memory, CPU and PID limits, plus a wall-clock timeout after which the
-  container is killed.
+- Memory, CPU and PID limits, a 64 MB limit on any file the run writes, no
+  core dumps, and a wall-clock timeout after which the container is killed.
+- The container is never attached and keeps no logs (`--log-driver none`),
+  so nothing the test prints is buffered on the host.
 - A fresh container per run, always removed afterwards. Images are removed
   when the run finishes.
 
 The private workspace copies leave out `.env` files (templates like
 `.env.example` are kept), private keys, `.npmrc`/`.pypirc`/`.netrc`, cloud
-credential directories, symlinks and git submodules. Your checkout is never
-modified.
+credential directories, git submodules, and symlinks, including any path
+through a symlinked directory. Your checkout is never modified.
 
 ## Results and artifacts
 
 Every finding gets a `regressionTest` entry in the scan report
 (`~/.openhack/scans/<session-id>.json`). It holds the status, the reason, the
 invariant, the test path and code, the run command, and per-revision
-outcomes. Verified findings also carry their redacted `exploitEvidence`.
+outcomes. For validated and pending tests, `artifacts.repo_path` is the
+test's path from the repository root. It differs from the test path when the
+finding is in a subproject of a monorepo. Verified findings also carry their
+redacted `exploitEvidence`.
 
 Validated and pending tests are written, owner-only, to
 `~/.openhack/scans/artifacts/<session-id>/regression-tests/<finding-id>/`:
@@ -200,9 +214,11 @@ artifacts.
 - **Vulnerability classes:** IDOR / broken object-level authorization
   (CWE-639).
 - **Test frameworks:** pytest (Python), including Flask, FastAPI, Starlette and
-  pytest-django projects. Requirements files (including `-r`/`-c` includes),
-  `pyproject.toml` test extras and installable projects are supported, and so
-  are monorepos: the project containing the finding is used.
+  pytest-django projects. Requirements files are supported, with `-r`
+  includes, `-c` constraints (which only constrain versions and are never
+  installed as requirements) and lines that install the project itself, such
+  as `-e .`. So are `pyproject.toml` test extras, installable projects and
+  monorepos: the project containing the finding is used.
 - **Not yet supported** (reported as unsupported): other vulnerability
   classes; Jest, Vitest, Mocha and other JavaScript runners; Go `testing`;
   JUnit; RSpec; PHPUnit; and Django's `manage.py test` runner without pytest.
@@ -227,6 +243,10 @@ test framework, subclass `FrameworkAdapter` in
   is. A test runs inside the same process as pytest, so result integrity also
   relies on the policy and on cross-checking declared tests against reported
   outcomes.
+- Docker has no portable way to cap a container's total disk use. Each file a
+  run writes is limited to 64 MB and the run to its timeout, but a hostile
+  test can still use disk inside Docker until it is killed and its container
+  removed.
 - During a scan, the vulnerable revision is the working tree that was scanned.
 - Only one test file is generated per finding, and existing tests are never
   edited.

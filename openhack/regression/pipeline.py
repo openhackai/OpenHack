@@ -96,6 +96,8 @@ class RevisionCheck:
     outcomes: dict[str, str] = field(default_factory=dict)
     failures: dict[str, str] = field(default_factory=dict)
     output_tail: str = ""
+    # The runner's output explains the problem better than per-test outcomes.
+    show_output: bool = False
 
     def to_dict(self, revision: MaterializedRevision) -> dict:
         return {
@@ -118,15 +120,26 @@ def evaluate_runs(
     """Judge repeated runs of a candidate test against one revision.
 
     ``expect="vulnerable"``: controls pass and at least one invariant test
-    fails on an assertion. ``expect="remediated"``: every test passes.
+    fails on an assertion. ``expect="remediated"``: every test passes. Either
+    way every run must end with the exit status its results imply.
     """
     first = reports[0]
     outcomes = first.outcomes()
     failures = {c.name: c.message for c in first.cases if c.outcome != "passed" and c.message}
     deterministic = all(r.outcomes() == outcomes for r in reports[1:])
 
-    def result(passed: bool, detail: str, retryable: bool = True) -> RevisionCheck:
-        return RevisionCheck(passed, detail, retryable, deterministic, outcomes, failures, first.output_tail)
+    def result(passed: bool, detail: str, retryable: bool = True,
+               report: Optional[RunReport] = None) -> RevisionCheck:
+        tail = (report or first).output_tail
+        return RevisionCheck(passed, detail, retryable, deterministic, outcomes, failures, tail,
+                             show_output=report is not None)
+
+    def finished_cleanly(detail: str) -> RevisionCheck:
+        unclean = next((r for r in reports if r.session_error), None)
+        if unclean is not None:
+            return result(False, f"the test run did not finish cleanly: {unclean.session_error}",
+                          report=unclean)
+        return result(True, detail)
 
     if any(r.timed_out for r in reports):
         return result(False, f"the test run timed out after {timeout}s (does it block, sleep or need the network?)")
@@ -185,8 +198,7 @@ def evaluate_runs(
                 f"invariant test(s) {', '.join(crashed)} failed with an unexpected exception rather than "
                 "an assertion, so it is not the security property that failed",
             )
-        return result(
-            True,
+        return finished_cleanly(
             f"{len(failed)} invariant test(s) failed on assertions while {len(control)} control test(s) passed",
         )
 
@@ -209,7 +221,7 @@ def evaluate_runs(
             "test(s) failed on the REMEDIATED code: " + ", ".join(c.name for c in failing)
             + ". The test setup must work against the fixed code too",
         )
-    return result(True, f"all {len(first.cases)} test(s) passed")
+    return finished_cleanly(f"all {len(first.cases)} test(s) passed")
 
 
 def _feedback(stage: str, check: RevisionCheck) -> str:
@@ -220,13 +232,18 @@ def _feedback(stage: str, check: RevisionCheck) -> str:
         ))
     for name, message in list(check.failures.items())[:6]:
         lines.append(f"--- {name} ---\n{message[-800:]}")
-    if not check.outcomes and check.output_tail:
+    if check.output_tail and (check.show_output or not check.outcomes):
         lines.append(f"Test output (tail):\n{check.output_tail[-1500:]}")
     lines.append(
         "Keep every invariant test that covers an operation on the object; fix setup or "
         "assertions that pin implementation details instead of removing coverage."
     )
     return "\n".join(lines)
+
+
+def _project_path(profile: FrameworkProfile, rel: str) -> str:
+    """A path relative to the test project, made relative to the scanned directory."""
+    return rel if profile.project_root == "." else f"{profile.project_root}/{rel}"
 
 
 def _with_provenance(code: str, invariant: SecurityInvariant) -> str:
@@ -311,6 +328,9 @@ class RegressionTestPipeline:
         self.runner = runner or ContainerTestRunner(self.options.limits)
         self.run_id = uuid4().hex[:10]
         self.git = git_info(self.target_dir)
+        # Test file of each accepted finding: two patches that add the same
+        # file could not both be applied.
+        self._claimed_paths: dict[str, str] = {}
 
     @property
     def total_cost(self) -> float:
@@ -468,14 +488,13 @@ class RegressionTestPipeline:
             content={"title": finding.title, "class": spec.key,
                      "endpoint": f"{invariant.method} {invariant.path_template}"},
         )
-        root = profile.project_root
 
-        def repo_path(rel: str) -> str:
-            return rel if root == "." else f"{root}/{rel}"
+        def claimed_by_another_finding(rel: str) -> bool:
+            return self._claimed_paths.get(_project_path(profile, rel), finding.id) != finding.id
 
         def available(rel: str, stored_code: Optional[str] = None) -> bool:
-            path = repo_path(rel)
-            if vulnerable.exists(path):
+            path = _project_path(profile, rel)
+            if vulnerable.exists(path) or claimed_by_another_finding(rel):
                 return False
             if remediated is not None and remediated.exists(path):
                 # The developer may have committed our pending test alongside
@@ -550,6 +569,11 @@ class RegressionTestPipeline:
             path_error = adapter.validate_test_path(profile, candidate.path)
             if path_error:
                 problems.append(path_error)
+            elif claimed_by_another_finding(candidate.path):
+                problems.append(
+                    f"`{candidate.path}` is already the regression test for another finding; "
+                    f"use a new file such as `{suggested}`"
+                )
             elif not available(candidate.path, candidate.code if candidate_is_stored else None):
                 problems.append(
                     f"`{candidate.path}` already exists in the repository; existing tests are never "
@@ -651,13 +675,15 @@ class RegressionTestPipeline:
     async def _run_once(self, image: str, adapter: FrameworkAdapter,
                         profile: FrameworkProfile, candidate: CandidateTest) -> RunReport:
         root = profile.project_root
-        rel_in_repo = candidate.path if root == "." else f"{root}/{candidate.path}"
         workdir = "/workspace" if root == "." else f"/workspace/{root}"
         run = await self.runner.run_test(
-            image, {rel_in_repo: candidate.code},
+            image, {_project_path(profile, candidate.path): candidate.code},
             adapter.container_command(profile, candidate.path), workdir=workdir,
         )
         try:
+            if run.results_error:
+                return RunReport(exit_code=run.exit_code, timed_out=run.timed_out,
+                                 collection_error=run.results_error)
             return adapter.parse_results(run.results_dir, run.exit_code, run.timed_out)
         finally:
             run.cleanup()
@@ -690,14 +716,19 @@ class RegressionTestPipeline:
         result.control_tests = list(candidate.control_tests)
         result.summary = candidate.summary
         result.validation = validation
+        self._claimed_paths[_project_path(profile, candidate.path)] = finding.id
+        parts = [p for p in (self.git.get("prefix", ""), profile.project_root, candidate.path) if p and p != "."]
+        # Kept even if the files below can't be written: it says where the
+        # test belongs in the repository.
+        result.artifacts = {"repo_path": PurePosixPath(*parts).as_posix()}
         try:
-            result.artifacts = self._write_artifacts(finding, result, profile)
+            result.artifacts = self._write_artifacts(finding, result, result.artifacts["repo_path"])
         except OSError as exc:
             logger.warning(f"Could not write regression test artifacts: {exc}")
         return result
 
     def _write_artifacts(self, finding: Finding, result: RegressionTestResult,
-                         profile: FrameworkProfile) -> dict[str, str]:
+                         repo_path: str) -> dict[str, str]:
         root = self.options.artifacts_root or default_artifacts_root(self.session)
         session_dir = root / (self.options.report_id or self.session.id)
         art_dir = session_dir / "regression-tests" / finding.id[:8]
@@ -707,8 +738,6 @@ class RegressionTestPipeline:
                 os.chmod(directory, 0o700)
             except OSError:
                 pass
-        parts = [p for p in (self.git.get("prefix", ""), profile.project_root, result.test_path) if p and p != "."]
-        repo_path = PurePosixPath(*parts).as_posix()
         test_file = art_dir / repo_path
         patch = art_dir / "regression-test.patch"
         write_private_file(test_file, result.test_code or "")

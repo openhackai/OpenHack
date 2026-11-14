@@ -38,7 +38,6 @@ from openhack.tools.coverage import (
 from openhack.categories import normalize_category, normalize_severity
 from openhack.framework_detection import detect_frameworks
 from openhack.quality import run_quality_gates
-from openhack.regression.evidence import sanitize_exploit_evidence
 # Static validator removed — line number correction in hunter, semantic validation by LLM
 from openhack.config import settings
 
@@ -926,6 +925,9 @@ class CoordinatorAgent(BaseAgent):
                     exploitable_indices = {
                         r.get("finding_index") for r in exploitable
                     }
+
+                    # Imported here: openhack.regression imports from this package.
+                    from openhack.regression.evidence import sanitize_exploit_evidence
 
                     for r in exploitable:
                         idx = r.get("finding_index")
