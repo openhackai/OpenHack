@@ -33,7 +33,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in https://*) url=$1; shift ;; -o) dest=$2; shift 2 ;; *) shift ;; esac
 done
 printf '%s\\n' "$url" >> "$TEST_URL_LOG"
-case "$url" in *.sha256) cp "$TEST_CHECKSUM" "$dest" ;; *) cp "$TEST_ARCHIVE" "$dest" ;; esac
+case "$url" in *.sha256\\?download=1) cp "$TEST_CHECKSUM" "$dest" ;; *) cp "$TEST_ARCHIVE" "$dest" ;; esac
 `,
   };
   for (const [name, body] of Object.entries(scripts)) {

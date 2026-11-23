@@ -61,9 +61,9 @@ main() {
   archive="$name.tar.gz"
   base="https://github.com/openhackai/OpenHack/releases/download/v$version"
   printf 'Downloading OpenHack %s for %s-%s…\n' "$version" "$platform" "$arch"
-  download "$base/$archive" "$work/$archive" \
+  download "$base/$archive?download=1" "$work/$archive" \
     || fail "Could not download v$version for $platform-$arch. Check your connection and that this version is published at https://github.com/openhackai/OpenHack/releases. Draft releases are not installable."
-  download "$base/$archive.sha256" "$work/checksum" || fail 'Could not download the release checksum; nothing was installed.'
+  download "$base/$archive.sha256?download=1" "$work/checksum" || fail 'Could not download the release checksum; nothing was installed.'
   expected=$(awk -v file="$archive" 'NR == 1 && NF == 2 && $2 == file && length($1) == 64 && $1 !~ /[^0-9a-f]/ {hash=$1} END {if(NR != 1 || hash == "") exit 1; print hash}' "$work/checksum") \
     || fail 'Invalid release checksum file; nothing was installed.'
   if [ "$hash_tool" = sha256sum ]; then actual=$(sha256sum "$work/$archive")

@@ -64,5 +64,6 @@ try {
   console.log("Standalone smoke test passed: no Bun on PATH, embedded assets, start/reuse/status/stop.");
 } finally {
   if (port) await cli("dashboard", "stop", "--port", String(port), "--json").catch(() => {});
-  await rm(root, { recursive: true, force: true });
+  // Windows may retain the executable handle briefly after the server exits.
+  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
