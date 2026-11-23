@@ -1,0 +1,44 @@
+{
+  "name": "@openhack/local",
+  "version": "0.1.0",
+  "description": "Local OpenHack source scanning and findings dashboard",
+  "type": "module",
+  "bin": {
+    "openhack": "./bin/openhack"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "start": "bun src/cli/index.ts",
+    "dashboard": "bun src/cli/index.ts dashboard",
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --timeout 30000",
+    "check": "bun run typecheck && bun run test && bun run build",
+    "prepack": "bun run build",
+    "test:package": "bun scripts/test-package.ts"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.9.0",
+    "ignore": "^7.0.16",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

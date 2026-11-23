@@ -1,218 +1,164 @@
-# ⏚ [OpenHack](https://openhack.com)
+# OpenHack local
 
-**Open Source Agentic Security Scanner & Verifier for your codebase.**
+A Bun CLI and a local React dashboard for scanning source code, reviewing scan history, and managing findings. Both use the same files under `~/.openhack`. No OpenHack login, hosted database, organization, or subscription is needed.
 
-Like Claude Code Security / Codex Security but open source and **exclusively uses open source models**.
+## Run
 
-<p align="center">
-  <a href="https://openhack.com"><img src="https://img.shields.io/badge/Website-openhack.com-0969da?style=for-the-badge" alt="Website"></a>
-  &nbsp;
-  <a href="https://openhack.com/discord"><img src="https://img.shields.io/badge/Discord-Join_Server-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  &nbsp;
-  <a href="https://x.com/openhackai"><img src="https://img.shields.io/badge/X-@openhackai-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X"></a>
-</p>
+Requires Bun 1.3 or newer.
 
-<p align="center">
-  <a href="https://pypi.org/project/openhack/"><img src="https://img.shields.io/pypi/v/openhack?style=for-the-badge&label=pypi&color=3775A9" alt="PyPI"></a>
-  &nbsp;
-  <a href="https://github.com/openhackai/openhack/blob/main/LICENSE"><img src="https://img.shields.io/github/license/openhackai/openhack?style=for-the-badge" alt="License"></a>
-</p>
+```sh
+bun install --frozen-lockfile
+bun run build
+bun link
 
-## Get started
-
-```bash
-pipx install openhack
-```
-
-Or with [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv tool install openhack
-```
-
-Or with pip:
-
-```bash
-pip install openhack
-```
-
-## How it works
-OpenHack does `recon` -> `hunting` -> `validation` -> `verification` all in one pipeline to find high quality verified vulnerabilities.
-
-**Recon**: Does a deep dive and fully understands your application along with any custom context you give it. Builds a full project model before hunting begins.
-
-**Hunter**: Specialized category based hunters get to finding vulnerabilities initially, along with feature based hunters divind deep to find vulnerabilities in risky code areas.
-
-**Validation**: Validation agent performs a review of the finding and it's impact and whether it's even valid.
-
-**Verification**: Verification agent performs a full browser + sandbox based attack to find verify vulnerabilities in a real docker / DOM environment.
-
-
-## Quick start
-
-```bash
 openhack
 ```
 
-On first run you'll go through a one-time setup:
+`openhack` opens the local dashboard directly in your default browser, starting it in the background if needed. There is no terminal menu. Use the dashboard to run scans, view findings, configure API keys or existing subscriptions, and change settings.
 
-1. Pick **Login with OpenHack account** (recommended) — opens a browser, you log in, get **$20 in free credits**, and the CLI gets a token automatically.
-2. Type `/scan .` to scan the current directory, or `/scan path/to/repo` for somewhere else.
-3. While scanning, the **Trace tab** shows live agent activity (recon → hunters → validators). When the scan finishes, the **Findings tab** shows everything that was found.
+The dashboard binds to **127.0.0.1:4900** by default and keeps running after the command exits. Running `openhack` again reopens the existing dashboard. Add `--no-open` to start it without launching a browser, or `--port 490` to choose another port (low ports may require privileges on some systems).
 
-## What it does
+Explicit commands remain available for scripts and direct use:
 
-OpenHack runs a multi-agent pipeline against your codebase:
-
-- **Recon** — reads the code, builds a project model
-- **Hunters** — multiple specialized agents look for different vulnerability classes (input validation, access control, data handling, …)
-- **Feature hunters** — deeper passes on specific risk categories (XSS rendering, raw SQL, command exec, etc.)
-- **Validators** — re-read the suspect code to confirm or reject each candidate finding
-- **Sandbox verification** (`/verify sandbox`) *(Beta — requires Docker)* — spins up your app in a Docker container and attempts to exploit each finding with live HTTP requests. Findings that are successfully exploited get a ✓ mark.
-- **Browser verification** (`/verify browser`) *(Beta — requires Docker when combined with sandbox)* — launches a headless browser against the sandboxed app to verify client-side vulnerabilities (XSS, CSRF, DOM-based issues) with real browser execution.
-
-> **Docker prerequisite.** Sandbox verification requires Docker Desktop (or any working Docker daemon) installed and running on the machine where the scan runs. Browser verification inherits this when used with sandbox. If Docker isn't running, `/verify sandbox` will fail with a clear error before the scan starts.
-
-For every confirmed finding you get: severity, CVSS score, file location, full description, the vulnerable code snippet, and a recommended fix — all rendered with syntax highlighting in the TUI.
-
-## Slash commands
-
-
-| Command                    | Description                                                                                        |
-| -------------------------- | -------------------------------------------------------------------------------------------------- |
-| `/scan <path>`             | Full scan on a directory (defaults to current dir)                                                 |
-| `/pause` · `/resume`       | Pause and resume a running scan (Ctrl+C also pauses)                                               |
-| `/cancel`                  | Permanently cancel a running scan                                                                  |
-| `/sessions`                | Browse and re-load past scans (also supports re-running an aborted scan with `r`)                  |
-| `/findings`                | Re-display findings from last scan                                                                 |
-| `/copy`                    | Copy the selected finding (description + vulnerable code + fix) for Codex / Claude Code / Cursor |
-| `/verify sandbox` *(Beta)* | Spin up a Docker sandbox and exploit-test each finding with live requests                          |
-| `/verify browser` *(Beta)* | Launch a headless browser to verify client-side vulns (XSS, CSRF, etc.)                            |
-| `/login`                   | Re-login to your OpenHack account                                                                  |
-| `/setup`                   | Run the setup wizard again                                                                         |
-| `/connect [provider]`      | Connect an API key or OpenAI subscription using the provider popup                                |
-| `/disconnect [provider]`   | Remove a provider's saved credentials                                                              |
-| `/models`                  | Choose from every model offered by all connected providers                                         |
-| `/config`                  | Show current config; `/config <key> <value>` to set                                                |
-| `/sidebar`                 | Show/hide the contextual right panel or Findings list (`Ctrl+B`)                                   |
-| `/cost`                    | Cost breakdown for the last scan                                                                   |
-| `/clear`                   | Clear scan state and return to landing                                                             |
-| `/discord`                 | Open the OpenHack Discord                                                                          |
-| `/mouse`                   | Toggle mouse capture (off = native text selection)                                                 |
-| `/help`                    | List commands                                                                                      |
-| `/quit`                    | Exit                                                                                               |
-
-
-## Keyboard shortcuts (Findings tab)
-
-- `↑` / `↓` — switch finding
-- `[` · `]` — alternate prev / next
-- Mouse wheel or `PgUp` / `PgDn` — scroll the details pane
-- `y` — yank (copy) selected finding for an AI agent
-- `<` · `>` — resize the sidebar
-- `Ctrl+B` — toggle the Findings list
-
-## Keyboard shortcuts (Trace tab)
-
-- `↑` / `↓` — scroll the trace
-- Mouse wheel or `PgUp` / `PgDn` — scroll the trace
-- `Home` — jump to the top
-- `End` — resume auto-follow-to-bottom
-- `Ctrl+B` — toggle the right session panel
-
-## Selecting text
-
-The TUI captures mouse events by default (for scrolling and clicking). To select and copy text natively:
-
-- **macOS**: Hold `Option` (⌥) and drag to select, then `Cmd+C` to copy.
-- **Linux / Windows**: Hold `Shift` and drag to select.
-- **Or**: Run `/mouse` to disable mouse capture entirely — the terminal's native selection works normally until you toggle it back on.
-
-## Keyboard
-
-OpenHack negotiates the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) on startup, so on terminals that support it (iTerm2 3.5+, kitty, Ghostty, WezTerm, Alacritty) modifier combos that legacy terminals collapse arrive disambiguated — **Option/Alt+Backspace** deletes the previous word, a lone `Esc` is distinct from an escape sequence, etc. Terminals that don't support it are unaffected (`Ctrl-W` deletes a word everywhere). Set `OPENHACK_KITTY_KEYBOARD_PROTOCOL=false` to force legacy input.
-
-## CLI commands (headless)
-
-For CI, scripts, or one-off scans where you don't want the TUI:
-
-```bash
-openhack --scan /path/to/repo
+```sh
+export OPENAI_API_KEY='your-api-key'
+openhack scan                    # current directory
+openhack scan --codex
+openhack scan --claude-code
+openhack scan /path/to/project
+openhack dashboard status
+openhack dashboard stop
 ```
 
-OpenHack runs the same pipeline as the TUI, prints progress to stdout, writes a JSON report to `~/.openhack/scans/<session-id>.json`, and exits.
+The explicit `openhack dashboard` command runs the server in the foreground until Ctrl+C. It reuses an existing OpenHack dashboard on the requested port for the same data directory. Add `--no-open` to print the URL without launching a browser, or `--port 490` to use a different port for this invocation.
 
+The default command behaves the same in a terminal or pipe; use `--help` for command guidance and explicit commands with `--json` for automation.
 
-| Command                      | Description                                              |
-| ---------------------------- | -------------------------------------------------------- |
-| `openhack [path]`            | Launch the interactive TUI (path defaults to `.`)        |
-| `openhack --scan [path]`     | Full scan, headless (defaults to `.`)                    |
-| `openhack --hack "<task>"`   | Run one hacking task headlessly                          |
-| `openhack --plan "<obj>"`    | Draft a read-only attack plan                            |
-| `openhack --sessions`        | List all saved scans                                     |
-| `openhack --resume <id>`     | Resume a scan from its last checkpoint                   |
-| `openhack --classify [path]` | Classify frameworks + detect entry points (no LLM calls) |
-| `openhack --login`           | Log in to your OpenHack account                          |
-| `openhack --setup`           | Run the setup wizard                                     |
-| `openhack --help`            | Show usage                                               |
+The package's executable is also available directly as `./bin/openhack` after building, or `bun src/cli/index.ts` during development. `bun link` registers the executable in Bun's bin directory; ensure that directory is on your PATH. If another OpenHack installation exists, `command -v openhack` shows which one will run.
 
-> Bare-word forms (`openhack scan`) still work, but `--flags` are the documented interface.
+## Providers and subscriptions
 
-Scans are checkpointed after each pipeline stage. If a scan is interrupted or fails, resume it:
+Configure a provider from dashboard Settings: save, replace, or remove an API key, or select an automatically detected Codex or Claude Code subscription. Provider availability is shown alongside the provider selection. API settings let you change a key or model; subscription providers use their existing login. You can also select a configured provider in the dashboard's **Settings → Provider**, or with `--provider`. Switching providers picks its default model; you can then customize it. Reports save their provider and model, so resuming a scan keeps the original configuration.
 
-```bash
-openhack --resume <session-id>
+| Provider | Authentication | Default model |
+| --- | --- | --- |
+| `openai` | Saved API key or `OPENAI_API_KEY` | `gpt-5-mini` |
+| `anthropic` | Saved API key or `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `codex` | Installed official Codex CLI with an existing ChatGPT login or saved API key | `gpt-6-sol` |
+| `claude-code` | Installed official Claude Code signed in with Claude | `claude-opus-4-8` |
+
+```sh
+# Use an existing subscription login.
+codex login
+openhack scan --codex
+
+claude auth login
+openhack scan --claude-code
+
+# Or use your own API key.
+export ANTHROPIC_API_KEY='your-api-key'
+openhack scan --anthropic
+
+openhack providers
+openhack config set provider claude-code
 ```
 
-## Configuration
+The CLI options call the official CLI on your machine using its existing authentication. Codex accepts its saved ChatGPT login or saved API key; provider status identifies which mode is configured. A Codex API-key login uses API billing, not a ChatGPT subscription. Claude Code uses its existing Claude subscription login. OpenHack does not copy login tokens or API keys out of either CLI. Parent API-key environment variables are excluded from these child processes. Your configured account's model access and usage limits apply; the CLI must be installed and available on `PATH`. Use a current CLI version supporting the isolation flags; incompatible versions fail with an explicit error.
 
-Preferences are stored in `~/.openhack/config`. Provider credentials are kept
-separately in `~/.openhack/auth.json`; both files use owner-only permissions.
+OpenHack retains control of the source scanner and its read-only tools. Subscription requests run in a temporary empty directory with native tools, user rules, plugins, hooks and external MCP configuration disabled. Structured requests return either a scanner tool call or a schema-validated result. Only source excerpts selected by the scanner are passed into the model conversation. Subscription mode can be slower than direct API access because each tool round invokes a CLI process.
 
-Use the provider commands to connect or switch inference services:
+Dashboard provider setup saves API keys to `~/.openhack/credentials.json` with owner-only permissions (`0600`). They are stored as local plaintext, separate from scan reports and settings. A nonempty `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the process environment takes precedence over the corresponding saved key. Dashboard Settings can refresh provider availability and accepts new keys through a masked input. Saved key values are never returned to the browser; only their configuration status is shown. With a custom `--home` or `OPENHACK_HOME`, saved credentials belong to that workspace instead.
+
+For a persistent provider default use `openhack config set provider PROVIDER`. `OPENAI_MODEL`, `OPENAI_REASONING_EFFORT`, and `ANTHROPIC_MODEL` provide initial API defaults. Codex model `default` leaves model selection to the CLI. Codex and Claude Code logins remain in their own CLI-managed credential stores; OpenHack does not save their login tokens.
+
+See the official [Codex non-interactive documentation](https://developers.openai.com/codex/noninteractive) and [Claude Code headless documentation](https://code.claude.com/docs/en/headless) for CLI authentication and plan details.
+
+## Commands
+
+```sh
+openhack scan . --model gpt-5-mini --workers 4 --steps 20
+openhack scan . --reasoning high --context 'Multi-tenant API; verify tenant isolation.'
+openhack scan . --json --fail-on high
+openhack scans                   # current directory
+openhack scans --all             # all projects
+openhack show SCAN_ID
+openhack resume SCAN_ID --steps 30
+openhack findings --severity high --state open
+openhack status SCAN_ID:FINDING_ID resolved
+openhack note SCAN_ID:FINDING_ID 'Reviewed the authorization boundary.'
+openhack help scan
+openhack config
+openhack config set model gpt-5-mini
+openhack config set workers 4
+openhack config set reasoning default
+```
+
+`scan` defaults to your current working directory. `scans` and `findings` also default to that project; supply another directory or `--all` to expand their scope. The dashboard always shows all projects. Provider shortcuts (`--codex`, `--claude-code`, `--openai`, `--anthropic`) apply to one scan and preserve saved settings. Multiple provider selectors are rejected.
+
+Use `openhack help`, `openhack help COMMAND`, or `COMMAND --help` for guidance. `openhack version` prints the installed version. `settings`, `doctor`, `history`, and `list` are aliases for `config`, `providers`, `scans`, and `findings`.
+
+`scans`, `show`, `findings`, `status`, and `config` accept `--json`. Findings print the full `SCAN_ID:FINDING_ID` key used by `status` and `note`. `--home DIRECTORY` or `OPENHACK_HOME` selects another workspace without changing your shell's home directory.
+
+Scan exit codes: **0** complete, **1** failed/partial or invalid input, **2** an open validated finding meets `--fail-on`, **130** cancelled. Interactive scans show the provider and configured model, an animated elapsed-time indicator, current stage, active/completed tasks, files read, findings, request count and latest activity. Piped output gets plain progress logs with a heartbeat every 15 seconds. Progress goes to stderr; `--json` writes the final report to stdout. Ctrl+C cancels requests and saves a checkpoint. Resuming requires the same source snapshot; changed source needs a new scan.
+
+## Dashboard
+
+- **Scans:** all project directories, status and search filters, browse local folders to select a project path, start a scan, inspect coverage, findings, agent tasks and activity, resume or stop work.
+- **Findings:** current findings across projects, severity/status filters, source evidence, validation, remediation, notes, and manual open/resolved/dismissed status. Historical findings remain available through each scan.
+- **Settings:** provider, saved API-key management, model, worker count, tool rounds, reasoning effort, project context, port, storage location and refreshable provider availability. API keys are never returned to the browser or written to settings.
+
+Visual tokens, Inter typography, sidebar, table measurements, and light/dark styles are adapted from the existing OpenHack app. Existing-control icons match the main OpenHack app; new controls use the Desktop Nucleo UI library. Source paths and checksums are recorded in `web/src/components/nucleo-icons.manifest.json`. Shared Base UI controls provide custom selects, checkboxes, number inputs, dialogs and tooltips, with consistent field and button styling. The local app contains only these three sections.
+
+The CLI and dashboard can run together. The dashboard refreshes every three seconds. A scan can only be stopped by the process that started it: use Ctrl+C while a terminal scan runs, or Stop in the dashboard for a dashboard scan. Use `openhack dashboard start`, `openhack dashboard status`, and `openhack dashboard stop` to manage the background server. Closing the browser does not stop a managed background dashboard. Stopping the dashboard checkpoints its active scans. Older dashboards without lifecycle support must be stopped in their original terminal.
+
+## Storage and scope
 
 ```text
-/connect                 # connect one or more providers
-/models                  # select across every connected provider
+~/.openhack/
+  settings.json
+  credentials.json
+  dashboard-<port>.json
+  dashboard-<port>.log
+  projects/<hash-of-canonical-project-path>/
+    project.json
+    scans/<scan-id>.json
+    triage.json
 ```
 
-The provider list and model metadata are synchronized from Models.dev and
-cached for one day. OpenHack also has a bundled offline model catalog.
-`/connect` and `/models` use centered, searchable, scrollable pickers;
-provider refresh happens in the background so opening them never waits on the
-network. The model picker has separate **OpenHack** and **OpenAI** tabs. The
-OpenHack tab groups hosted models by family (DeepSeek, Kimi, GLM, Qwen,
-MiniMax, and others), with at most the five newest routable releases in each
-section. Old selections do not jump above newer releases.
-The first provider screen is curated; choose **Other…** to search the complete
-Models.dev-backed catalog.
+Reports contain source evidence, scan configuration, coverage, usage, agent activity and checkpoints. Files use owner-only permissions (0600), directories 0700, and writes are atomic. Triage follows the finding fingerprint across scans of the same project; identical findings in different projects are independent. The findings list uses each project's newest completed report or report with findings, retaining older findings while a new empty scan runs. Older reports remain in scan history. Existing project-local `.openhack` stores from the exploratory CLI are not automatically imported.
 
-Cloudflare Workers AI additionally needs `CLOUDFLARE_ACCOUNT_ID`. Azure OpenAI
-needs its full `/openai/v1` endpoint in `AZURE_OPENAI_BASE_URL`. Amazon Bedrock
-uses its Mantle endpoint and additionally needs `AWS_REGION`.
+Dashboard runtime files identify the local server and authorize lifecycle actions; background server output is appended to the matching log. Clean shutdown removes its runtime file. API credentials and runtime tokens are not included in scan reports or returned by dashboard APIs.
 
-You can override at runtime via environment variables:
+Valid locks and recovery gates owned by dead processes are recovered automatically. Legacy malformed/empty lock files fail closed and require manual removal only after confirming no scan process is running. Do not copy or edit a workspace while its scans are running.
 
+The scanning engine is the source-review harness from `exploration/cli-scan`, with its storage adapted here. It maps the project, assigns source to hunters, independently reviews candidates, and judges evidence. Only required scanner modules are included; there is no demo engine, shell tool, automatic patching, pull request creation, or additional scanning harness.
 
-| Variable            | Effect                                                                                                                                 |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENHACK_API_KEY`  | Bearer token for the OpenHack inference API                                                                                            |
-| `OPENHACK_DEV=1`    | Point the CLI at local dev servers (app on `:9080`, inference on `:8787`) for self-hosted setups                                       |
-| `PROMPT_CACHING=0`  | Stop sending `prompt_cache_key` with API calls — needed for OpenAI-compatible endpoints that reject it (also: `/config prompt_caching false`) |
+Scanning uses your selected remote model provider; it is **not offline inference**. The dashboard and saved results are local. Source excerpts and paths go to the selected provider, whose usage and retention policies apply. OpenAI API requests use `store: false`. Direct API requests may incur charges; subscription requests consume the existing plan’s usage allowance. The initial provider is OpenAI API, with four workers and twenty tool rounds.
 
+Source collection honors `.gitignore` and `.openhackignore`, skips symlinks, `.env` files, common credential files, dependencies and build outputs, and bounds inventory size. Add sensitive paths to `.openhackignore`. Project code is read, never executed. Exclusions and incomplete coverage are recorded; partial scans are not presented as clean. A validated finding is an AI source review, not runtime exploit verification; resolved is a manual triage decision.
 
-## Privacy
+## Development
 
-OpenHack reads and processes your source code **locally** — prompts are built
-on your machine. Model prompts are sent to the provider you select. With the
-hosted OpenHack provider they go through OpenHack Inference; with BYOK, local,
-or OpenAI subscription connections they go directly to that provider. Review
-the selected provider's data policy before scanning sensitive code.
+```sh
+bun run dev        # Vite on 127.0.0.1:5173, API on 127.0.0.1:4900
+bun run check      # types, deterministic tests, production build
+bun run test:package # pack, extract, start/stop and check assets outside this repo
+bun audit
+```
 
-## Contributing
+Stop the normal dashboard before using `bun run dev`, since both use port 4900. Development and production share `OPENHACK_HOME` unless overridden. Build output contains the CLI and dashboard assets together. `bun pm pack` rebuilds before packing; do not publish a package that has not passed `check` and `test:package`. The package can be moved/packed with `bin/` and `dist/`; it does not depend on the original harness or app directories.
 
-OpenHack is open source. Issues and PRs welcome on [GitHub](https://github.com/openhackai/openhack).
+```text
+src/cli/       commands, dashboard lifecycle, terminal formatting
+src/core/      workspace orchestration and filesystem primitives
+src/harness/   source inventory, coverage, scanner and report schemas
+src/providers/ OpenAI/Anthropic API selection and subscription CLI adapters
+src/server/    loopback HTTP API, request guards, static asset serving
+src/shared/    Zod request schemas and shared TypeScript contracts
+web/src/       React pages, components and app styles
+scripts/       Vite development and package build
+```
 
-## License
+Tests exercise the actual orchestration with a deterministic model client, coverage, cross-project persistence, triage, cancellation/resume, lock handling and HTTP boundaries. They never call a paid model API. The Inter font license is included at `web/public/fonts/OFL.txt` and copied into the built dashboard.
 
-MIT — see [LICENSE](LICENSE).
+On macOS and Linux, the terminal cancellation regression test uses Python 3's standard-library `pty` module to verify that Ctrl+C saves a real scan checkpoint before the process exits.

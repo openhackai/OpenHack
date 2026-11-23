@@ -1,30 +1,9 @@
 # Third-party notices
 
-## OpenCode
+The v2 application uses Bun, React, Vite, Base UI, Zod, and the `ignore` package. These projects and their dependencies retain their respective licenses; see their package distributions and the lockfile for the exact versions.
 
-OpenHack's Models.dev provider discovery and OpenAI Codex OAuth behavior were
-implemented with reference to the OpenCode source code:
+Inter is distributed under the SIL Open Font License 1.1. Its complete license is included in `web/public/fonts/OFL.txt` and in the built dashboard.
 
-https://github.com/anomalyco/opencode
+Icon provenance for the app-supplied Nucleo assets is recorded in `web/src/components/nucleo-icons.manifest.json`. Third-party assets retain their applicable licenses.
 
-OpenCode is distributed under the MIT License:
-
-Copyright (c) 2025 opencode
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Codex and Claude Code are separately installed applications invoked through their public CLIs. Their executables, credentials, and source code are not included in this repository.
