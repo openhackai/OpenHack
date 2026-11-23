@@ -194,7 +194,7 @@ export async function startDashboardBackground(workspace: Pick<LocalWorkspace, "
   try {
     const info = await log.stat();
     if (!info.isFile() || info.nlink !== 1) throw new Error("Dashboard logs must be stored in a regular file without hard links.");
-    await log.chmod(0o600);
+    if (process.platform !== "win32") await log.chmod(0o600);
     const launcher = standalone && !options.entrypoint ? [] : [resolve(entrypoint)];
     child = spawn(process.execPath, [...launcher, "dashboard", "--port", String(port), "--home", workspace.home, "--no-open"], {
       detached: true, stdio: ["ignore", log.fd, log.fd], env: process.env,

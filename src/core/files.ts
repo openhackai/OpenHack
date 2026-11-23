@@ -10,6 +10,8 @@ export async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const info = await lstat(path);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Storage must be a real directory: ${path}`);
+  // Windows uses inherited ACLs, not POSIX directory modes; fchmod fails there.
+  if (process.platform === "win32") return;
   const directory = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try { await directory.chmod(0o700); } finally { await directory.close(); }
 }
