@@ -2,6 +2,8 @@
 
 OpenHack is a local AI security scanner for source code. Pick a project, connect your AI provider, and review findings in a browser dashboard or your terminal.
 
+![OpenHack v2 demo showing onboarding, scanning, and reviewing findings](docs/assets/openhack-v2-demo.gif)
+
 The v2 harness maps your codebase, assigns focused source reviews, challenges candidate findings, and judges the evidence. Scan history, findings, notes, and configuration stay in your local workspace. The selected AI provider processes the source excerpts needed for each review.
 
 ## Install
