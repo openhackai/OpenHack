@@ -11,7 +11,7 @@ The v2 harness maps your codebase, assigns focused source reviews, challenges ca
 On macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/openhackai/OpenHack/v2/install.sh | sh
+curl -fsSL https://install.openhack.com | sh
 ```
 
 The installer currently selects **v2.0.0**. It detects your OS and processor, downloads the matching GitHub release archive, verifies its SHA-256 checksum, and installs `openhack` in `~/.local/bin`. License notices are preserved in `~/.local/bin/openhack-licenses`. It needs no sudo, does not modify shell profiles, and does not start the app automatically. If needed, add the directory to your current terminal's PATH:
@@ -24,7 +24,7 @@ openhack
 To select a version or installation directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/openhackai/OpenHack/v2/install.sh | sh -s -- --version 2.0.0 --install-dir "$HOME/.local/bin"
+curl -fsSL https://install.openhack.com | sh -s -- --version 2.0.0 --install-dir "$HOME/.local/bin"
 ```
 
 **Release status:** the installer is available, but v2.0.0 is still an unpublished draft. Until its binaries are published, installation stops with a release-unavailable error and leaves any existing executable intact. Earlier releases use the previous harness and are not installed by this script.

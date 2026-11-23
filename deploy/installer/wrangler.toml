@@ -1,0 +1,14 @@
+name = "openhack-installer"
+main = "index.js"
+account_id = "30d448115f517e712aae3572cdf6b8c6"
+compatibility_date = "2026-11-23"
+workers_dev = false
+
+routes = [
+  { pattern = "install.openhack.com", custom_domain = true },
+]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.sh"]
+fallthrough = true

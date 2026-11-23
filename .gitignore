@@ -5,3 +5,4 @@ dist/
 !.env.example
 .openhack/
 .DS_Store
+.wrangler/
