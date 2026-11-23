@@ -1,6 +1,6 @@
 {
   "name": "@openhack/local",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Local OpenHack source scanning and findings dashboard",
   "type": "module",
   "bin": {
