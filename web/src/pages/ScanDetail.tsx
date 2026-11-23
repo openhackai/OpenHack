@@ -71,10 +71,15 @@ function StatusDot({ tone, label }: { tone: Tone; label: string }) {
 }
 
 function stageStatus(tasks: Task[]): { label: string; tone: Tone } {
-  if (tasks.some((task) => task.state === "failed"))
-    return { label: "Failed", tone: "danger" };
   if (tasks.some((task) => task.state === "running"))
     return { label: "Running", tone: "running" };
+  if (tasks.some((task) => task.state === "failed")) {
+    if (tasks.some((task) => task.state === "queued"))
+      return { label: "In progress", tone: "running" };
+    return tasks.some((task) => task.state === "complete" || task.state === "limited")
+      ? { label: "Partial", tone: "warning" }
+      : { label: "Failed", tone: "danger" };
+  }
   if (tasks.every((task) => DONE.includes(task.state)))
     return tasks.some((task) => task.state === "limited")
       ? { label: "Limited", tone: "warning" }

@@ -1,0 +1,210 @@
+.pro-page {
+  --pro-gold: #987019;
+}
+:root[data-theme="dark"] .pro-page {
+  --pro-gold: #e5bc5b;
+}
+.pro-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.pro-content {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 54px 40px 48px;
+}
+.pro-hero {
+  text-align: center;
+  max-width: 730px;
+  margin: 0 auto 42px;
+}
+.pro-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 23px;
+  font-size: 20px;
+  letter-spacing: -0.04em;
+}
+.pro-brand > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pro-brand strong {
+  border: 1px solid color-mix(in srgb, var(--pro-gold) 40%, transparent);
+  color: var(--pro-gold);
+  background: color-mix(in srgb, var(--pro-gold) 8%, transparent);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.pro-hero h2 {
+  margin: 0 0 15px;
+  font-size: clamp(28px, 3vw, 42px);
+  letter-spacing: -0.045em;
+  font-weight: 550;
+  line-height: 1.18;
+}
+.pro-lead {
+  font-size: 17px;
+  color: var(--fg-2);
+  margin: 0 0 10px;
+}
+.pro-description {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--fg-3);
+  max-width: 590px;
+  margin: 0 auto;
+}
+.pro-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 25px;
+}
+.pro-actions .button {
+  padding: 9px 14px;
+  height: auto;
+  text-decoration: none;
+}
+.pro-actions .pro-cta {
+  min-height: 44px;
+  padding: 11px 16px;
+  gap: 8px;
+  border-radius: 4px;
+  background: #080808;
+  border-color: #080808;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 18px;
+  box-shadow: none;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+.pro-actions .pro-cta:is(:hover, :focus-visible) {
+  background: #262626;
+  border-color: #262626;
+}
+:root[data-theme="dark"] .pro-actions .pro-cta {
+  background: #fff;
+  border-color: #fff;
+  color: #080808;
+}
+:root[data-theme="dark"] .pro-actions .pro-cta:is(:hover, :focus-visible) {
+  background: #e6e6e6;
+  border-color: #e6e6e6;
+}
+.pro-showcase {
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--raised);
+}
+.pro-feature-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line-2);
+}
+.pro-feature-buttons button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 19px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+}
+.pro-feature-buttons button:hover {
+  background: var(--hover);
+}
+.pro-feature-buttons button[aria-pressed="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--pro-gold);
+  background: color-mix(in srgb, var(--pro-gold) 5%, transparent);
+}
+.pro-feature-number {
+  font-size: 10px;
+  color: var(--pro-gold);
+  font-variant-numeric: tabular-nums;
+}
+.pro-preview {
+  margin: 0;
+}
+.pro-preview-heading {
+  padding: 24px 26px;
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+}
+.pro-preview-heading h3 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 5px;
+}
+.pro-preview-heading p {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin: 0;
+  line-height: 1.6;
+}
+.pro-preview-heading > a {
+  color: var(--fg-3);
+  padding: 8px;
+}
+.pro-image-link {
+  display: block;
+  margin: 0 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #080808;
+}
+.pro-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pro-preview figcaption {
+  font-size: 10px;
+  color: var(--fg-3);
+  text-align: center;
+  padding: 14px;
+}
+@media (max-width: 680px) {
+  .pro-content {
+    padding: 32px 16px;
+  }
+  .pro-lead {
+    font-size: 15px;
+  }
+  .pro-feature-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pro-feature-buttons button {
+    flex-direction: column;
+    gap: 7px;
+    font-size: 11px;
+    padding: 14px 5px;
+  }
+  .pro-preview-heading {
+    padding: 18px 14px;
+  }
+  .pro-image-link {
+    margin: 0 12px;
+  }
+  .pro-actions {
+    flex-wrap: wrap;
+  }
+}

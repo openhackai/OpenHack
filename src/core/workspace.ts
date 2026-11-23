@@ -51,7 +51,7 @@ export class LocalWorkspace {
     if (!parsed.success) throw new Error("Saved OpenHack settings are invalid. Restore a valid settings.json file in the data directory.");
     const saved = parsed.data;
     const provider = saved.provider ?? "openai";
-    const defaults: Settings = {provider, model: defaultModel(provider), workers: 4, steps: 20, context: "", port: 4900, reasoning: provider === "openai" ? reasoning : undefined};
+    const defaults: Settings = {provider, model: defaultModel(provider), workers: 4, steps: 20, context: "", port: 6969, reasoning: provider === "openai" ? reasoning : undefined};
     const merged = {...defaults, ...saved};
     const settings = settingsSchema.parse({...merged, reasoning: merged.reasoning ?? undefined});
     return settings;

@@ -8,7 +8,8 @@
   },
   "files": [
     "bin",
-    "dist",
+    "dist/cli.js",
+    "dist/web",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
@@ -21,6 +22,10 @@
     "start": "bun src/cli/index.ts",
     "dashboard": "bun src/cli/index.ts dashboard",
     "build": "bun scripts/build.ts",
+    "build:standalone": "bun scripts/build.ts --standalone",
+    "build:all": "bun scripts/build.ts --all-targets",
+    "package:standalone": "bun scripts/package-standalone.ts",
+    "test:standalone": "bun scripts/test-standalone.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 30000",
     "check": "bun run typecheck && bun run test && bun run build",

@@ -4,7 +4,7 @@ A Bun CLI and a local React dashboard for scanning source code, reviewing scan h
 
 ## Run
 
-Requires Bun 1.3 or newer.
+Building from source and running the development/npm package requires Bun 1.3 or newer. The standalone executable below includes the Bun runtime and needs no separate Bun installation.
 
 ```sh
 bun install --frozen-lockfile
@@ -16,7 +16,7 @@ openhack
 
 `openhack` opens the local dashboard directly in your default browser, starting it in the background if needed. There is no terminal menu. Use the dashboard to run scans, view findings, configure API keys or existing subscriptions, and change settings.
 
-The dashboard binds to **127.0.0.1:4900** by default and keeps running after the command exits. Running `openhack` again reopens the existing dashboard. Add `--no-open` to start it without launching a browser, or `--port 490` to choose another port (low ports may require privileges on some systems).
+The dashboard binds to **127.0.0.1:6969** by default and keeps running after the command exits. Running `openhack` again reopens the existing dashboard. Add `--no-open` to start it without launching a browser, or `--port 490` to choose another port (low ports may require privileges on some systems).
 
 Explicit commands remain available for scripts and direct use:
 
@@ -35,6 +35,59 @@ The explicit `openhack dashboard` command runs the server in the foreground unti
 The default command behaves the same in a terminal or pipe; use `--help` for command guidance and explicit commands with `--json` for automation.
 
 The package's executable is also available directly as `./bin/openhack` after building, or `bun src/cli/index.ts` during development. `bun link` registers the executable in Bun's bin directory; ensure that directory is on your PATH. If another OpenHack installation exists, `command -v openhack` shows which one will run.
+
+### Standalone executable
+
+On the build machine, with Bun installed:
+
+```sh
+bun install --frozen-lockfile
+bun run build:standalone
+bun run test:standalone
+```
+
+This produces `dist/openhack` (`dist/openhack.exe` on Windows) for the build machine's OS and architecture. It embeds Bun and all dashboard assets, including fonts. Copy that single executable to another machine with the same OS and architecture; no Bun, Node.js, npm install, or adjacent asset files are needed. Cross-platform release builds are described below. The npm package continues to use the Bun-based script wrapper; the native executable is distributed separately.
+
+```sh
+./dist/openhack                     # Open the dashboard
+./dist/openhack scan /path/to/project
+./dist/openhack dashboard stop
+```
+
+Provider authentication is still required for scans. Subscription providers still require their official Codex or Claude Code CLI on PATH. The standalone smoke test uses temporary storage and an empty PATH to check CLI commands, embedded assets, and dashboard start/reuse/status/stop without calling model APIs.
+
+### Cross-platform releases
+
+Release builds pin Bun to `.bun-version` (currently 1.4.5). On the build machine:
+
+```sh
+bun install --frozen-lockfile
+bun run build:all
+bun run package:standalone --all
+```
+
+This cross-compiles six executables into `dist/standalone/<platform>/` and packages versioned archives and SHA-256 checksum files in `dist/releases/`:
+
+| Platform | Architectures | Download format |
+| --- | --- | --- |
+| macOS | Apple Silicon (`darwin-arm64`), Intel (`darwin-x64`) | `.tar.gz` |
+| Linux | ARM64 (`linux-arm64`), x64 (`linux-x64`) | `.tar.gz` |
+| Windows | ARM64 (`windows-arm64`), x64 (`windows-x64`) | `.zip` |
+
+You can also build and package one target:
+
+```sh
+bun run build:standalone --target=bun-linux-x64
+bun run package:standalone bun-linux-x64
+```
+
+Cross-compilation downloads the matching Bun runtimes during the build. Archive creation uses build-machine tools (`tar`, plus `zip` on macOS/Linux or PowerShell on Windows). End users only extract their archive and run `openhack` or `openhack.exe`; none of these build tools are needed to run it. Archives include licenses and a build manifest with the runtime version, target and binary checksum.
+
+The `Standalone builds` GitHub Actions workflow builds each target on a matching OS/architecture, then copies only the executable to a temporary directory and tests it with an empty PATH. It checks CLI commands, embedded assets, and background dashboard start/reuse/status/stop before uploading archives. Cross-compilation alone does not establish runtime compatibility: require all six native jobs and the existing test workflow to pass before release. This workflow uploads CI artifacts; it does not publish a GitHub release.
+
+These targets use Bun's supported OS baseline: macOS 13+, Windows 10 1809+ (or an appropriate Windows ARM64 version), and Linux with glibc 2.17+; Alpine/musl is not covered by these Linux downloads. A browser and network access to the selected model provider are needed. API-key mode needs no separate provider software. Codex/Claude subscription mode still needs the corresponding separately installed CLI. If Linux has no `xdg-open`, open the printed local URL manually; its native folder chooser is optional and paths can be entered directly.
+
+Before public distribution, sign and notarize the macOS builds with your Apple Developer identity and sign Windows builds with your publisher certificate. Generate archives/checksums **after** signing and test the signed executables. The current workflow produces unsigned build artifacts, not signed installers. Publish only artifacts from the same tested commit, alongside their checksum files and the corresponding source revision. Bun's runtime license and linked-library notices are included in `licenses/BUN-LICENSE.md`.
 
 ## Providers and subscriptions
 
@@ -103,6 +156,8 @@ Scan exit codes: **0** complete, **1** failed/partial or invalid input, **2** an
 
 ## Dashboard
 
+Before your first scan, the dashboard shows an inline three-step setup: connect a provider, choose a project folder, then review and start the scan. API-key entry and folder browsing stay on the page. Once a scan exists, the dashboard shows the workspace overview.
+
 - **Scans:** all project directories, status and search filters, browse local folders to select a project path, start a scan, inspect coverage, findings, agent tasks and activity, resume or stop work.
 - **Findings:** current findings across projects, severity/status filters, source evidence, validation, remediation, notes, and manual open/resolved/dismissed status. Historical findings remain available through each scan.
 - **Settings:** provider, saved API-key management, model, worker count, tool rounds, reasoning effort, project context, port, storage location and refreshable provider availability. API keys are never returned to the browser or written to settings.
@@ -140,13 +195,13 @@ Source collection honors `.gitignore` and `.openhackignore`, skips symlinks, `.e
 ## Development
 
 ```sh
-bun run dev        # Vite on 127.0.0.1:5173, API on 127.0.0.1:4900
+bun run dev        # Vite on 127.0.0.1:5173, API on 127.0.0.1:6969
 bun run check      # types, deterministic tests, production build
 bun run test:package # pack, extract, start/stop and check assets outside this repo
 bun audit
 ```
 
-Stop the normal dashboard before using `bun run dev`, since both use port 4900. Development and production share `OPENHACK_HOME` unless overridden. Build output contains the CLI and dashboard assets together. `bun pm pack` rebuilds before packing; do not publish a package that has not passed `check` and `test:package`. The package can be moved/packed with `bin/` and `dist/`; it does not depend on the original harness or app directories.
+The development dashboard is available at `http://localhost:5173` with hot reload. If the normal dashboard is already using port 6969, run `OPENHACK_DEV_API_PORT=6970 bun run dev` to use a separate development API port. Otherwise, stop the normal dashboard first. Development and production share `OPENHACK_HOME` unless overridden. Build output contains the CLI and dashboard assets together. `bun pm pack` rebuilds before packing; do not publish a package that has not passed `check` and `test:package`. The package can be moved/packed with `bin/` and `dist/`; it does not depend on the original harness or app directories.
 
 ```text
 src/cli/       commands, dashboard lifecycle, terminal formatting

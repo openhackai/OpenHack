@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { LocalWorkspace } from "../core/workspace";
 import { atomicJson, isMissing, privateDirectory, processAlive, processLock, readRegular, regularDirectory } from "../core/files";
 import { startDashboard } from "../server";
+import { standalone } from "../server/embedded";
 import { openBrowser } from "./browser";
 import { safe } from "./display";
 
@@ -194,7 +195,8 @@ export async function startDashboardBackground(workspace: Pick<LocalWorkspace, "
     const info = await log.stat();
     if (!info.isFile() || info.nlink !== 1) throw new Error("Dashboard logs must be stored in a regular file without hard links.");
     await log.chmod(0o600);
-    child = spawn(process.execPath, [resolve(entrypoint), "dashboard", "--port", String(port), "--home", workspace.home, "--no-open"], {
+    const launcher = standalone && !options.entrypoint ? [] : [resolve(entrypoint)];
+    child = spawn(process.execPath, [...launcher, "dashboard", "--port", String(port), "--home", workspace.home, "--no-open"], {
       detached: true, stdio: ["ignore", log.fd, log.fd], env: process.env,
     });
     child.once("exit", code => { exited = code; });

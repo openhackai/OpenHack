@@ -25,11 +25,11 @@ import { ScansPage } from "./pages/ScansPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ProPage } from "./pages/ProPage";
+import { ProLogo } from "./components/ProLogo";
 import { useRequestGate } from "./use-request-gate";
-import { Onboarding } from "./components/Onboarding";
-import { NewScanDialog } from "./components/NewScanDialog";
 
-type Page = "dashboard" | "scans" | "findings" | "settings";
+type Page = "dashboard" | "scans" | "findings" | "pro" | "settings";
 function decode(value?: string) {
   if (!value) return undefined;
   try {
@@ -41,7 +41,7 @@ function decode(value?: string) {
 function readRoute() {
   const [page, id, sub] = window.location.hash.slice(2).split("/");
   return {
-    page: (["scans", "findings", "settings"].includes(page ?? "")
+    page: (["scans", "findings", "pro", "settings"].includes(page ?? "")
       ? page
       : "dashboard") as Page,
     id: decode(id),
@@ -70,7 +70,6 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
-  const [firstScan, setFirstScan] = useState(false);
   // The council can still reject a running scan's candidates; show settled results only.
   const runningIds = new Set(
     scans.filter((scan) => scan.state === "running").map((scan) => scan.id),
@@ -129,7 +128,10 @@ export function App() {
       localStorage.setItem("openhack-theme", theme);
     } catch {}
   }, [theme]);
-  const pageTitle = route.page.charAt(0).toUpperCase() + route.page.slice(1);
+  const pageTitle =
+    route.page === "pro"
+      ? "OpenHack Pro"
+      : route.page.charAt(0).toUpperCase() + route.page.slice(1);
   return (
     <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <a
@@ -168,6 +170,7 @@ export function App() {
               { page: "dashboard", label: "Dashboard", Icon: IconNavOverview },
               { page: "scans", label: "Scans", Icon: IconNavScans },
               { page: "findings", label: "Findings", Icon: IconNavShield },
+              { page: "pro", label: "OpenHack Pro", Icon: ProLogo },
               { page: "settings", label: "Settings", Icon: IconNavSettings },
             ] as const
           ).map(({ page, label, Icon }) => (
@@ -213,9 +216,6 @@ export function App() {
           ) : (
             <span className="crumb-current">{pageTitle}</span>
           )}
-          <span className="local-status">
-            <span /> On this machine
-          </span>
         </header>
         <ErrorBanner message={error} />
         {route.page === "dashboard" && (
@@ -244,23 +244,8 @@ export function App() {
           />
         )}
         {route.page === "settings" && <SettingsPage />}
+        {route.page === "pro" && <ProPage />}
       </main>
-      {!loading && (
-        <Onboarding
-          hasScans={scans.length > 0}
-          onRunScan={() => setFirstScan(true)}
-        />
-      )}
-      {firstScan && (
-        <NewScanDialog
-          onClose={() => setFirstScan(false)}
-          onStarted={(scan) => {
-            setFirstScan(false);
-            navigate("scans", scan.id);
-            void refresh();
-          }}
-        />
-      )}
     </div>
   );
 }

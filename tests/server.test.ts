@@ -33,7 +33,7 @@ const finding: FindingRecord = {
   validation: "validated", validationReason: "Fixture", status: "open", note: "", updatedAt: "",
 };
 const settings: SettingsView = {
-  provider: "openai", model: "fixture-model", workers: 4, steps: 20, context: "", port: 4900,
+  provider: "openai", model: "fixture-model", workers: 4, steps: 20, context: "", port: 6969,
   home: "/fixture/.openhack", apiKeyConfigured: false,
   providers: [
     { id: "openai", ready: false, detail: "Set OPENAI_API_KEY." },

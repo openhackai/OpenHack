@@ -136,7 +136,7 @@ test("resume retains the saved source assignment plan", async () => {
       return o.schema.parse(withReviews(o.name==="Recon"?recon:{findings:[]},o.prompt));
     }};
     const run=()=>scan({report,store,client,steps:2,workers:4,signal:AbortSignal.timeout(2000),onChange(){}});
-    await run();expect(report.state).toBe("failed");
+    await run();expect(report.state).toBe("partial");
     const first=report.execution!.tasks.find(t=>t.role==="research")!;
     first.segments!.reverse();const saved=JSON.stringify(first.segments);
     fail=false;await run();expect(report.state).toBe("complete");expect(JSON.stringify(first.segments)).toBe(saved);

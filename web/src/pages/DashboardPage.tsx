@@ -3,6 +3,7 @@ import { Button } from "../components/controls/Button";
 import { Tooltip } from "../components/controls/Tooltip";
 import { ChevronRight, Play, RefreshCw } from "../components/nucleo-icons";
 import { ProviderIcon } from "../components/provider-icons";
+import { Onboarding } from "../components/Onboarding";
 import { NewScanDialog } from "../components/NewScanDialog";
 import type { FindingRecord, Report } from "../../../src/shared/contracts";
 import { navigate, routeHash } from "../App";
@@ -80,6 +81,21 @@ export function DashboardPage({
   refresh: () => Promise<void>;
 }) {
   const [newScan, setNewScan] = useState(false);
+  const [demoOnboarding, setDemoOnboarding] = useState(
+    () =>
+      import.meta.env.DEV &&
+      new URLSearchParams(window.location.search).get("demo") === "onboarding",
+  );
+  function setDemo(active: boolean) {
+    if (!import.meta.env.DEV) return;
+    const url = new URL(window.location.href);
+    if (active) url.searchParams.set("demo", "onboarding");
+    else url.searchParams.delete("demo");
+    window.history.replaceState(null, "", url);
+    setDemoOnboarding(active);
+  }
+  const showOnboarding =
+    scans.length === 0 || (import.meta.env.DEV && demoOnboarding);
   const runningIds = new Set(
     scans.filter((s) => s.state === "running").map((s) => s.id),
   );
@@ -127,12 +143,21 @@ export function DashboardPage({
       <div className="pagebar">
         <div className="page-title">
           <h1>Dashboard</h1>
-          <span className="muted">
-            {projects.length} project{projects.length === 1 ? "" : "s"} on this
-            machine
-          </span>
+          {!showOnboarding && (
+            <span className="muted">
+              {projects.length} project{projects.length === 1 ? "" : "s"} on this machine
+            </span>
+          )}
         </div>
         <div className="actions">
+          {import.meta.env.DEV && !demoOnboarding && (
+            <Button
+              className="button"
+              onClick={() => setDemo(true)}
+            >
+              Demo onboarding
+            </Button>
+          )}
           <Button
             className="button icon-button"
             aria-label="Refresh dashboard"
@@ -140,14 +165,32 @@ export function DashboardPage({
           >
             <RefreshCw size={14} />
           </Button>
-          <Button className="button primary" onClick={() => setNewScan(true)}>
-            <Play size={12} />
-            Run scan
-          </Button>
+          {!showOnboarding && (
+            <Button className="button primary" onClick={() => setNewScan(true)}>
+              <Play size={12} />
+              Run scan
+            </Button>
+          )}
         </div>
       </div>
       {loading ? (
         <Loading />
+      ) : showOnboarding ? (
+        <div className="dash-scroll">
+          <Onboarding
+            key={import.meta.env.DEV && demoOnboarding ? "demo" : "first-scan"}
+            onStarted={(scan) => {
+              if (import.meta.env.DEV && demoOnboarding) {
+                setDemo(false);
+                void refresh();
+                navigate("scans");
+                return;
+              }
+              navigate("scans", scan.id);
+              void refresh();
+            }}
+          />
+        </div>
       ) : (
         <div className="dash-scroll">
           <section className="posture" aria-label="Security posture">

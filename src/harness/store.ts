@@ -1,3 +1,4 @@
+import { normalizeSavedOutcome } from "./outcome";
 import { readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -46,7 +47,7 @@ export class Store {
     const reports = await Promise.all(names.filter(n => /^[a-zA-Z0-9-]+\.json$/.test(n)).map(async name => {
       const report = reportSchema.parse(JSON.parse(await readRegular(join(this.dir, "scans", name))));
       if (resolve(report.root) !== this.root) throw new Error("Stored report has an invalid project root.");
-      return report;
+      return normalizeSavedOutcome(report);
     }));
     return reports.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }

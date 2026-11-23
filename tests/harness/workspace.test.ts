@@ -154,3 +154,67 @@ describe("local workspace", () => {
     await expect(workspace(home).updateSettings({workers: 3})).rejects.toThrow("real directory");
   });
 });
+
+test("a finished scan with failed review agents is partial and resumes only unfinished work", async () => {
+  const { home, project } = await fixture();
+  let failAdvocacy = true;
+  const calls: string[] = [];
+  const partialClient: AgentClient = { async run(options) {
+    calls.push(options.name);
+    if (options.name === "Advocacy" && failAdvocacy) throw new Error("Fixture provider failure");
+    return client.run(options);
+  } };
+  const app = workspace(home, partialClient);
+  const started = await app.startScan({ path: project });
+  const partial = await app.waitForScan(started.id);
+  expect(partial.state).toBe("partial");
+  expect(partial.finishedAt).toBeTruthy();
+  expect(partial.error).toContain("Fixture provider failure");
+  expect(partial.execution!.tasks.some(task => task.role === "research" && task.state === "complete")).toBe(true);
+  expect(partial.findings).toHaveLength(1);
+  expect(partial.findings[0]!.validation).not.toBe("validated");
+  expect((await app.listScans())[0]!.state).toBe("partial");
+
+  // Old reports receive the same classification without rewriting evidence or error history.
+  const store = new Store(project, home);
+  await store.save({ ...partial, state: "failed", phase: "Scan needs attention" });
+  const reportPath = join(store.dir, "scans", `${started.id}.json`);
+  const before = await readFile(reportPath, "utf8");
+  const legacy = await store.latest(started.id);
+  expect(legacy.state).toBe("partial");
+  expect(legacy.findings).toEqual(partial.findings);
+  expect(legacy.error).toBe(partial.error);
+  expect(await readFile(reportPath, "utf8")).toBe(before);
+
+  const previousCalls = calls.length;
+  failAdvocacy = false;
+  await app.resumeScan(started.id);
+  const complete = await app.waitForScan(started.id);
+  expect(complete.state).toBe("complete");
+  expect(complete.error).toBeUndefined();
+  expect(complete.findings[0]!.validation).toBe("validated");
+  expect(calls.slice(previousCalls).sort()).toEqual(["Advocacy", "Judgment"]);
+});
+
+test("a scan with no successful source review remains failed", async () => {
+  const { home, project } = await fixture();
+  const app = workspace(home, { async run(options) {
+    if (options.name !== "Recon") throw new Error("Every source reviewer failed");
+    return client.run(options);
+  } });
+  const started = await app.startScan({ path: project });
+  const report = await app.waitForScan(started.id);
+  expect(report.state).toBe("failed");
+  expect(report.findings).toHaveLength(0);
+  expect((await new Store(project, home).latest(started.id)).state).toBe("failed");
+});
+
+test("a source snapshot failure stays failed even when a previous attempt made progress", async () => {
+  const { home, project } = await fixture();
+  const app = workspace(home);
+  const started = await app.startScan({ path: project });
+  const report = await app.waitForScan(started.id);
+  const store = new Store(project, home);
+  await store.save({ ...report, state: "failed", error: "Source changed since this checkpoint." });
+  expect((await store.latest(started.id)).state).toBe("failed");
+});

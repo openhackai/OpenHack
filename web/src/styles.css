@@ -300,20 +300,6 @@ code {
 .topbar .crumb-link:hover {
   color: var(--fg);
 }
-.local-status {
-  margin-left: auto;
-  color: var(--fg-3);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-.local-status span {
-  height: 5px;
-  width: 5px;
-  background: var(--success);
-  border-radius: 50%;
-}
 .page {
   min-width: 0;
   min-height: 0;
@@ -1190,9 +1176,6 @@ code {
   .topbar {
     padding: 0 16px;
   }
-  .local-status {
-    display: none;
-  }
   .pagebar {
     padding: 0 16px;
     height: 52px;
@@ -1920,60 +1903,6 @@ code {
   color: var(--fg);
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-/* First-run welcome */
-.onboarding-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.onboarding-mark {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--line-2);
-  background: var(--chip);
-}
-.onboarding-mark .ground-mark {
-  width: 15px;
-  height: 17px;
-}
-.onboarding-list {
-  list-style: none;
-  margin: 18px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.onboarding-list li {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-.onboarding-icon {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  border: 1px solid var(--line-2);
-  color: var(--fg-2);
-}
-.onboarding-list li > span:last-child {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 13px;
-  line-height: 18px;
-  color: var(--fg-3);
-}
-.onboarding-list strong {
-  font-weight: 500;
-  color: var(--fg-menu);
 }
 /* The skip-link target takes programmatic focus; never draw a ring around the whole page. */
 #main-content:focus,

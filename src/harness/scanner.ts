@@ -1,3 +1,4 @@
+import { hasReviewResults, unfinishedAgentsMessage } from "./outcome";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import { inventory, useTool, type Project } from "./project";
@@ -304,9 +305,14 @@ export async function scan(options: { report: Report; store: Store; client: Agen
     signal.throwIfAborted();
     if (fatal) throw fatal;
     const failed = execution.tasks.find(t => t.state === "failed");
-    if (execution.tasks.some(t => !["complete", "limited"].includes(t.state))) throw new Error(`${failed?.trace.findLast(e => e.tone === "danger")?.text ?? "One or more agents failed."} Partial findings are saved; resume retries unfinished tasks.`);
+    const unfinished = execution.tasks.some(t => !["complete", "limited"].includes(t.state));
     const coverage = coverageSummary(report);
-    if (coverage.reasons.length) {
+    if (unfinished) {
+      report.state = hasReviewResults(report) ? "partial" : "failed";
+      report.phase = report.state === "partial" ? "Review finished · some agents failed" : "Scan needs attention";
+      report.error = `${failed?.trace.findLast(e => e.tone === "danger")?.text ?? "One or more agents failed."} ${unfinishedAgentsMessage}`;
+      event("coordinator", report.error, report.state === "partial" ? "warning" : "danger");
+    } else if (coverage.reasons.length) {
       report.state = "partial"; report.phase = "Review stopped · incomplete coverage"; report.error = coverage.reasons.join(" ");
       event("coordinator", report.error, "warning");
     } else {

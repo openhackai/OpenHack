@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { LocalWorkspace } from "../core/workspace";
 import { settingsPatchSchema, startScanSchema, triagePatchSchema } from "../shared/contracts";
 import { dashboardFile } from "./static";
+import { standalone } from "./embedded";
 import { localRequestError, mutationRequestError, securityHeaders } from "./security";
 import { DirectoryListingError, directoryListSchema, listDirectories } from "./directories";
 import { FolderPickerError, pickNativeFolder, type FolderPicker } from "./folder-picker";
@@ -76,7 +77,7 @@ export function startDashboard(options: DashboardOptions): Bun.Server<void> {
   }
   const pickDirectory = options.pickDirectory ?? pickNativeFolder;
   let picking = false;
-  const port = options.port ?? 4900;
+  const port = options.port ?? 6969;
   let shutdownRequested = false;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid dashboard port.");
 
@@ -203,7 +204,7 @@ export function startDashboard(options: DashboardOptions): Bun.Server<void> {
         }
         if (path === "/api" || path.startsWith("/api/")) throw new HttpError(404, "API route not found.");
         if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "Method not allowed.");
-        const file = await dashboardFile(webDir, path);
+        const file = await dashboardFile(webDir, path, standalone && options.webDir === undefined);
         if (!file) {
           if (path === "/" && !existsSync(resolve(webDir, "index.html"))) {
             return new Response("The dashboard has not been built. Run `bun run build`, then start OpenHack again.", { status: 503, headers });
