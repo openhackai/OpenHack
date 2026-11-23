@@ -233,4 +233,10 @@ For local signing, set `OPENHACK_SIGNING_IDENTITY`, `OPENHACK_SIGNING_KEYCHAIN`,
 
 ## License
 
-See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Standalone distributions include Bun, font, and dependency license notices.
+Copyright (c) 2026 OpenHack. OpenHack is licensed under the **GNU Affero General Public License, version 3 only (AGPL-3.0-only)**. See [LICENSE](LICENSE) for the full terms, including source-sharing obligations for distribution and modified versions used over a network. OpenHack is provided without warranty as described in the license.
+
+This license applies from the license-change commit onward. The previously published **v2.0.0** release and earlier MIT-licensed revisions retain their original MIT terms.
+
+Source code and build instructions are available in [this repository](https://github.com/openhackai/OpenHack). For a release, use its matching Git tag to obtain the corresponding source.
+
+Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Standalone distributions include Bun, font, and dependency license notices.

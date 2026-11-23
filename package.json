@@ -1,6 +1,7 @@
 {
   "name": "@openhack/local",
   "version": "2.0.0",
+  "license": "AGPL-3.0-only",
   "description": "Local OpenHack source scanning and findings dashboard",
   "type": "module",
   "bin": {
