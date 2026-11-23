@@ -109,9 +109,11 @@ export class LocalWorkspace {
   async listFindings(root?: string): Promise<FindingRecord[]> {
     const latest = new Map<string, Report>();
     const reports = await this.listScans(root);
-    // Keep the previous findings visible while a new scan has not produced a result.
-    for (const report of reports) if (!latest.has(report.root) && (report.state === "complete" || report.findings.length > 0)) latest.set(report.root, report);
-    for (const report of reports) if (!latest.has(report.root)) latest.set(report.root, report);
+    // Running scans are excluded: the council can still reject their candidates.
+    // Keep the previous finished findings visible until a new scan completes.
+    const settled = reports.filter(report => report.state !== "running");
+    for (const report of settled) if (!latest.has(report.root) && (report.state === "complete" || report.findings.length > 0)) latest.set(report.root, report);
+    for (const report of settled) if (!latest.has(report.root)) latest.set(report.root, report);
     const groups = await Promise.all([...latest.values()].map(async report => {
       const triage = await new Store(report.root, this.home).triage();
       return report.findings.map(finding => ({...finding, ...stateFor(finding.id, triage), key: `${report.id}:${finding.id}`, scanId: report.id, project: report.project, root: report.root}));
@@ -140,7 +142,11 @@ export class LocalWorkspace {
     const valid = startScanSchema.parse(input);
     return this.exclusive(async () => {
       if (this.closing) throw new Error("The scanner is shutting down.");
-      const root = await realpath(resolve(valid.path));
+      const root = await realpath(resolve(valid.path)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") throw new Error(`No folder at ${valid.path}.`);
+        if (error.code === "EACCES" || error.code === "EPERM") throw new Error(`OpenHack can't read ${valid.path}.`);
+        throw error;
+      });
       if (!(await stat(root)).isDirectory()) throw new Error("Scan path must be a directory.");
       const current = await this.getConfiguration();
       const switched = valid.provider !== undefined && valid.provider !== current.provider;

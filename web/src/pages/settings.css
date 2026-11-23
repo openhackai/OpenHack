@@ -23,6 +23,10 @@
   flex-direction: column;
   gap: 2px;
 }
+.settings-nav a[aria-current="true"] {
+  background: var(--chip);
+  color: var(--fg);
+}
 .settings-nav a {
   display: flex;
   align-items: center;

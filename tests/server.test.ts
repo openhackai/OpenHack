@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startDashboard, type DashboardWorkspace } from "../src/server";
 import { dashboardFile } from "../src/server/static";
+import { FolderPickerError, NO_NATIVE_PICKER, type FolderPicker } from "../src/server/folder-picker";
 import type { FindingRecord, Report, SettingsView } from "../src/shared/contracts";
 import { LocalWorkspace } from "../src/core/workspace";
 import type { AgentClient } from "../src/harness/openai";
@@ -63,7 +64,7 @@ function fixtureWorkspace() {
   return { workspace, changes: () => changes };
 }
 
-async function setup(options: { devOrigins?: string[] } = {}) {
+async function setup(options: { devOrigins?: string[]; pickDirectory?: FolderPicker } = {}) {
   const root = await mkdtemp(join(tmpdir(), "openhack-server-test-"));
   directories.push(root);
   const webDir = join(root, "web");
@@ -79,6 +80,60 @@ async function setup(options: { devOrigins?: string[] } = {}) {
 const mutationHeaders = { "Content-Type": "application/json", "X-OpenHack-Client": "dashboard" };
 
 describe("local dashboard API", () => {
+  test("native folder chooser returns the chosen path, null on cancel, and 501 when unavailable", async () => {
+    let next: () => Promise<string | null> = async () => "/Users/fixture/project";
+    let calls = 0;
+    const app = await setup({ pickDirectory: async signal => { calls++; expect(signal).toBeInstanceOf(AbortSignal); return next(); } });
+    const pick = (init: RequestInit = { method: "POST", headers: mutationHeaders, body: "{}" }) => fetch(`${app.url}/api/directories/pick`, init);
+
+    const chosen = await pick();
+    expect(chosen.status).toBe(200);
+    expect(await chosen.json()).toEqual({ path: "/Users/fixture/project" });
+
+    next = async () => null;
+    const cancelled = await pick();
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toEqual({ path: null });
+
+    next = async () => { throw new FolderPickerError(501, NO_NATIVE_PICKER); };
+    const unsupported = await pick();
+    expect(unsupported.status).toBe(501);
+    expect(await unsupported.json()).toEqual({ error: NO_NATIVE_PICKER });
+
+    next = async () => { throw new FolderPickerError(500, "The folder chooser could not be opened. Type the project path instead."); };
+    const broken = await pick();
+    expect(broken.status).toBe(500);
+    expect((await broken.json()).error).toContain("folder chooser could not be opened");
+    expect(calls).toBe(4);
+  });
+
+  test("native folder chooser route enforces method, request checks, empty body, and one dialog at a time", async () => {
+    let release: (value: string | null) => void = () => {};
+    let calls = 0;
+    const app = await setup({ pickDirectory: () => { calls++; return new Promise(resolve => { release = resolve; }); } });
+    const url = `${app.url}/api/directories/pick`;
+    expect((await fetch(url)).status).toBe(405);
+    expect((await fetch(url, { method: "PUT", headers: mutationHeaders, body: "{}" })).status).toBe(405);
+    expect((await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { ...mutationHeaders, Origin: "https://untrusted.example" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { ...mutationHeaders, "Sec-Fetch-Site": "cross-site" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ path: "/etc" }) })).status).toBe(400);
+    expect(calls).toBe(0);
+
+    const first = fetch(url, { method: "POST", headers: mutationHeaders, body: "{}" });
+    while (calls === 0) await Bun.sleep(5);
+    const second = await fetch(url, { method: "POST", headers: mutationHeaders, body: "{}" });
+    expect(second.status).toBe(409);
+    expect(calls).toBe(1);
+    release("/fixture/project");
+    expect(await (await first).json()).toEqual({ path: "/fixture/project" });
+
+    const third = fetch(url, { method: "POST", headers: mutationHeaders, body: "{}" });
+    while (calls === 1) await Bun.sleep(5);
+    release(null);
+    expect(await (await third).json()).toEqual({ path: null });
+  });
+
   test("unexpected errors and invalid field names cannot reflect private values", async () => {
     const app = await setup();
     const marker = "PRIVATE_VALUE_MUST_NOT_BE_RETURNED";

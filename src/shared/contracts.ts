@@ -28,3 +28,5 @@ export interface SettingsResponse { settings: SettingsView }
 export interface ErrorResponse { error: string }
 export interface DirectoryEntry { name: string; path: string }
 export interface DirectoryListing { path: string; parent: string | null; directories: DirectoryEntry[]; truncated: boolean }
+/** `path` is null when the user cancels the native folder chooser. */
+export interface DirectoryPickResponse { path: string | null }

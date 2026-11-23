@@ -270,6 +270,16 @@ export const PanelLeftOpen = (p: IconProps) => (
   </NucleoSvg>
 );
 
+/** OpenHack app: components/ui/nucleo-icons.tsx#IconNavOverview */
+export const IconNavOverview = (p: IconProps) => (
+  <NucleoSvg {...p}>
+    <rect x="2.75" y="2.75" width="4.5" height="4.5" rx="1" ry="1" />
+    <rect x="10.75" y="10.75" width="4.5" height="4.5" rx="1" ry="1" />
+    <circle cx="13" cy="5" r="2.5" />
+    <circle cx="5" cy="13" r="2.5" />
+  </NucleoSvg>
+);
+
 /** OpenHack app: components/ui/nucleo-icons.tsx#IconNavScans */
 export const IconNavScans = (p: IconProps) => (
   <NucleoSvg {...p}>

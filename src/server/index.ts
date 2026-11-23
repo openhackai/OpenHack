@@ -55,7 +55,7 @@ function errorStatus(error: Error): number {
   if (/not found|no saved scan/i.test(error.message)) return 404;
   if (/shutting down/i.test(error.message)) return 503;
   if (/already running|already complete|another process|scan lock|currently running|not running|no resumable checkpoint|storage is busy/i.test(error.message)) return 409;
-  if (/invalid|must |requires?|cannot |can't |not a directory|ENOENT|not resumable|API.key|no source/i.test(error.message)) return 400;
+  if (/invalid|must |requires?|cannot |can't |not a directory|no folder at|ENOENT|not resumable|API.key|no source/i.test(error.message)) return 400;
   return 500;
 }
 

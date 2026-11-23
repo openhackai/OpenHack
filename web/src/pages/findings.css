@@ -296,7 +296,6 @@
   overflow: auto;
 }
 .finding-detail {
-  max-width: 860px;
   padding: 28px 40px 48px;
 }
 .fd-header {
@@ -513,4 +512,12 @@
   .fd-found {
     margin-left: 0;
   }
+}
+.inbox-empty-text {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.inbox-detail .scan-empty {
+  height: 100%;
 }

@@ -1,1 +1,6 @@
-export { IconNavScans, IconNavShield, IconNavSettings } from "./nucleo-icons";
+export {
+  IconNavOverview,
+  IconNavScans,
+  IconNavShield,
+  IconNavSettings,
+} from "./nucleo-icons";

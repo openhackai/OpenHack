@@ -1,6 +1,5 @@
 import { Button } from "../components/controls/Button";
 import { NumberInput } from "../components/controls/NumberInput";
-import { Select } from "../components/controls/Select";
 import { Input } from "../components/controls/Input";
 import { Textarea } from "../components/controls/Textarea";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -22,7 +21,17 @@ import {
 import { errorMessage, request } from "../api";
 import { ErrorBanner, Loading } from "../components/ui";
 
+const SECTIONS = [
+  ["settings-provider", "Provider"],
+  ["settings-context", "Project context"],
+  ["settings-workspace", "Workspace"],
+] as const;
+type SectionId = (typeof SECTIONS)[number][0];
+
 export function SettingsPage() {
+  const [active, setActive] = useState<SectionId>("settings-provider");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const lockSpy = useRef(0);
   const action = useRequestGate();
   const revision = useRef(0);
   const [settings, setSettings] = useState<SettingsView>();
@@ -164,19 +173,7 @@ export function SettingsPage() {
       action.finish(signal);
     }
   }
-  const reasoningOptions = [
-    { value: "", label: "Model default" },
-    { value: "none", label: "None" },
-    { value: "minimal", label: "Minimal" },
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-    { value: "xhigh", label: "Extra high" },
-  ].filter(
-    (option) =>
-      settings?.provider === "openai" ||
-      !["none", "minimal"].includes(option.value),
-  );
+
   return (
     <section className="page">
       <div className="pagebar">
@@ -190,26 +187,39 @@ export function SettingsPage() {
         !error && <Loading />
       ) : (
         <form noValidate className="settings-layout" onSubmit={submit}>
-          <div className="settings-scroll">
+          <div
+            className="settings-scroll"
+            ref={scrollRef}
+            onScroll={(event) => {
+              // Highlight the section nearest the top; a click wins while it scrolls.
+              if (Date.now() < lockSpy.current) return;
+              const root = event.currentTarget;
+              const top = root.getBoundingClientRect().top + 48;
+              let current: SectionId = SECTIONS[0][0];
+              for (const [id] of SECTIONS) {
+                const el = document.getElementById(id);
+                if (el && el.getBoundingClientRect().top <= top) current = id;
+              }
+              if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4)
+                current = "settings-workspace";
+              setActive(current);
+            }}
+          >
             <div className="settings-columns">
               <nav className="settings-nav" aria-label="Settings sections">
-                {[
-                  ["settings-provider", "Provider"],
-                  ["settings-agents", "Agents"],
-                  ["settings-context", "Project context"],
-                  ["settings-workspace", "Workspace"],
-                ].map(([id, label]) => (
+                {SECTIONS.map(([id, label]) => (
                   <a
                     key={id}
-                    href={`#/settings`}
+                    href="#/settings"
+                    aria-current={active === id ? "true" : undefined}
                     onClick={(event) => {
                       event.preventDefault();
-                      document
-                        .getElementById(id!)
-                        ?.scrollIntoView({
-                          behavior: "smooth",
-                          block: "start",
-                        });
+                      setActive(id);
+                      lockSpy.current = Date.now() + 800;
+                      document.getElementById(id)?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
                     }}
                   >
                     {label}
@@ -261,7 +271,11 @@ export function SettingsPage() {
                             onChange={() => changeProvider(id)}
                           />
                           <span className="provider-tile">
-                            <ProviderIcon provider={id} size={15} aria-hidden="true" />
+                            <ProviderIcon
+                              provider={id}
+                              size={15}
+                              aria-hidden="true"
+                            />
                           </span>
                           <span className="provider-option-text">
                             <span className="settings-row-title">
@@ -321,82 +335,6 @@ export function SettingsPage() {
                         maxLength={200}
                         autoComplete="off"
                         spellCheck={false}
-                      />
-                    </div>
-                  </div>
-                </section>
-
-                <section className="settings-card" id="settings-agents">
-                  <header className="settings-card-header">
-                    <div>
-                      <h2>Agents</h2>
-                      <p>How hard the harness works on each scan.</p>
-                    </div>
-                  </header>
-                  <div className="settings-row">
-                    <div className="settings-row-text">
-                      <span className="settings-row-title">
-                        Parallel workers
-                      </span>
-                      <span className="settings-row-desc">
-                        Shared pool for hunters and reviewers, 1–32.
-                      </span>
-                    </div>
-                    <div className="settings-row-control">
-                      <NumberInput
-                        id="settings-workers"
-                        aria-label="Parallel workers"
-                        min={1}
-                        max={32}
-                        required
-                        value={settings.workers}
-                        onValueChange={(value) => update("workers", value)}
-                      />
-                    </div>
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-row-text">
-                      <span className="settings-row-title">
-                        Tool rounds per agent
-                      </span>
-                      <span className="settings-row-desc">
-                        Maximum tool rounds before an agent stops, 1–30.
-                      </span>
-                    </div>
-                    <div className="settings-row-control">
-                      <NumberInput
-                        id="settings-steps"
-                        aria-label="Tool rounds per agent"
-                        min={1}
-                        max={30}
-                        required
-                        value={settings.steps}
-                        onValueChange={(value) => update("steps", value)}
-                      />
-                    </div>
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-row-text">
-                      <span className="settings-row-title">
-                        Reasoning effort
-                      </span>
-                      <span className="settings-row-desc">
-                        Higher effort is slower and uses more tokens.
-                      </span>
-                    </div>
-                    <div className="settings-row-control">
-                      <Select
-                        aria-label="Reasoning effort"
-                        value={settings.reasoning ?? ""}
-                        onValueChange={(value) =>
-                          update(
-                            "reasoning",
-                            value
-                              ? (value as Settings["reasoning"])
-                              : undefined,
-                          )
-                        }
-                        options={reasoningOptions}
                       />
                     </div>
                   </div>

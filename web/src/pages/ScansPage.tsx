@@ -26,11 +26,13 @@ export function ScansPage({
   scans,
   loading,
   selectedId,
+  findingId,
   refresh,
 }: {
   scans: Report[];
   loading: boolean;
   selectedId?: string;
+  findingId?: string;
   refresh: () => Promise<void>;
 }) {
   const action = useRequestGate();
@@ -137,12 +139,14 @@ export function ScansPage({
       ) : selectedId ? (
         selected ? (
           <ScanDetail
+            key={selected.id}
             scan={selected}
             busy={busy}
             error={error}
             onAction={(scanAction) => void act(scanAction)}
-            onRefresh={() => void refresh()}
-            onBack={() => navigate("scans")}
+            number={numbers.get(selected.id)}
+            findingId={findingId}
+            onRefresh={refresh}
           />
         ) : (
           <EmptyState title="Scan not found">
@@ -189,7 +193,6 @@ export function ScansPage({
             <table className="scans-table">
               <thead>
                 <tr>
-                  <th>Scan</th>
                   <th>Project</th>
                   <th>Provider</th>
                   <th>Status</th>
@@ -223,16 +226,12 @@ export function ScansPage({
                       }}
                     >
                       <td>
-                        <a href={href} className="scan-number">
-                          #{numbers.get(scan.id)}
+                        <a href={href} className="project-name">
+                          <span className="truncate">{scan.project}</span>
+                          <small className="truncate" title={scan.root}>
+                            {scan.root}
+                          </small>
                         </a>
-                      </td>
-                      <td>
-                        <Tooltip content={scan.root}>
-                          <a href={href} className="project-name truncate">
-                            {scan.project}
-                          </a>
-                        </Tooltip>
                       </td>
                       <td>
                         <span className="provider-cell">
@@ -252,7 +251,9 @@ export function ScansPage({
                         </span>
                       </td>
                       <td>
-                        {counts.length ? (
+                        {scan.state === "running" ? (
+                          <span className="muted">Pending</span>
+                        ) : counts.length ? (
                           <span className="severity-summary">
                             {counts.slice(0, 2).map(({ severity, count }) => (
                               <span key={severity}>
@@ -272,9 +273,7 @@ export function ScansPage({
                             )}
                           </span>
                         ) : (
-                          <span className="muted">
-                            {scan.state === "running" ? "–" : "No findings"}
-                          </span>
+                          <span className="muted">No findings</span>
                         )}
                       </td>
                       <td className="date-cell">

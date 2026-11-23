@@ -11,9 +11,9 @@ export class ApiError extends Error {
 
 export async function request<T>(
   path: string,
-  options: RequestInit = {},
+  { timeoutMs = 30_000, ...options }: RequestInit & { timeoutMs?: number } = {},
 ): Promise<T> {
-  const timeout = AbortSignal.timeout(30_000);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const response = await fetch(`/api${path}`, {
     ...options,
     signal: options.signal

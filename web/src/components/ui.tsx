@@ -1,13 +1,5 @@
 import { Input } from "./controls/Input";
-import {
-  Check,
-  Circle,
-  LoaderCircle,
-  Minus,
-  Search,
-  ShieldCheck,
-  X,
-} from "./nucleo-icons";
+import { LoaderCircle, Search, ShieldCheck } from "./nucleo-icons";
 import type { ReactNode } from "react";
 
 export function GroundMark() {
@@ -26,17 +18,8 @@ export function GroundMark() {
   );
 }
 
+/** Scan/finding state as text only: running shimmers amber, failed is red. */
 export function Status({ value }: { value: string }) {
-  const Icon =
-    value === "running"
-      ? LoaderCircle
-      : ["complete", "resolved"].includes(value)
-        ? Check
-        : value === "failed"
-          ? X
-          : ["cancelled", "dismissed"].includes(value)
-            ? Minus
-            : Circle;
   const label =
     (
       {
@@ -50,12 +33,7 @@ export function Status({ value }: { value: string }) {
         dismissed: "Dismissed",
       } as Record<string, string>
     )[value] || value;
-  return (
-    <span className={`status status-${value}`}>
-      <Icon size={13} className={value === "running" ? "spin" : undefined} />
-      {label}
-    </span>
-  );
+  return <span className={`status status-${value}`}>{label}</span>;
 }
 
 export function Severity({ value }: { value: string }) {

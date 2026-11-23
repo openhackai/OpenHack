@@ -2,7 +2,6 @@ import { Button } from "./components/controls/Button";
 import { useCallback, useEffect, useState } from "react";
 import {
   ChevronRight,
-  Monitor,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,6 +16,7 @@ import type {
 import { request, errorMessage } from "./api";
 import { GroundMark, ErrorBanner } from "./components/ui";
 import {
+  IconNavOverview,
   IconNavScans,
   IconNavSettings,
   IconNavShield,
@@ -24,9 +24,12 @@ import {
 import { ScansPage } from "./pages/ScansPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { useRequestGate } from "./use-request-gate";
+import { Onboarding } from "./components/Onboarding";
+import { NewScanDialog } from "./components/NewScanDialog";
 
-type Page = "scans" | "findings" | "settings";
+type Page = "dashboard" | "scans" | "findings" | "settings";
 function decode(value?: string) {
   if (!value) return undefined;
   try {
@@ -40,12 +43,13 @@ function readRoute() {
   return {
     page: (["scans", "findings", "settings"].includes(page ?? "")
       ? page
-      : "scans") as Page,
+      : "dashboard") as Page,
     id: decode(id),
     sub: decode(sub),
   };
 }
 export function routeHash(page: Page, id?: string, sub?: string) {
+  if (page === "dashboard") return "#/";
   return `#/${page}${id ? `/${encodeURIComponent(id)}` : ""}${id && sub ? `/${encodeURIComponent(sub)}` : ""}`;
 }
 export function navigate(page: Page, id?: string, sub?: string) {
@@ -66,6 +70,14 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [firstScan, setFirstScan] = useState(false);
+  // The council can still reject a running scan's candidates; show settled results only.
+  const runningIds = new Set(
+    scans.filter((scan) => scan.state === "running").map((scan) => scan.id),
+  );
+  const settledFindings = findings.filter(
+    (finding) => !runningIds.has(finding.scanId),
+  );
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("openhack-theme") === "light"
@@ -132,7 +144,7 @@ export function App() {
       </a>
       <aside className="sidebar">
         <div className="sidebar-header">
-          <a href="#/scans" className="brand" aria-label="OpenHack scans">
+          <a href="#/" className="brand" aria-label="OpenHack dashboard">
             <GroundMark />
             <span>OpenHack</span>
           </a>
@@ -153,6 +165,7 @@ export function App() {
         <nav aria-label="Main navigation">
           {(
             [
+              { page: "dashboard", label: "Dashboard", Icon: IconNavOverview },
               { page: "scans", label: "Scans", Icon: IconNavScans },
               { page: "findings", label: "Findings", Icon: IconNavShield },
               { page: "settings", label: "Settings", Icon: IconNavSettings },
@@ -160,7 +173,7 @@ export function App() {
           ).map(({ page, label, Icon }) => (
             <a
               key={page}
-              href={`#/${page}`}
+              href={page === "dashboard" ? "#/" : `#/${page}`}
               aria-label={label}
               aria-current={route.page === page ? "page" : undefined}
             >
@@ -170,10 +183,6 @@ export function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <span className="local-label">
-            <Monitor size={14} />
-            <span>Local workspace</span>
-          </span>
           <Button
             className="icon-button"
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
@@ -187,12 +196,36 @@ export function App() {
         <header className="topbar">
           <span>Local workspace</span>
           <ChevronRight size={12} />
-          <span>{pageTitle}</span>
+          {route.id ? (
+            <>
+              <a className="crumb-link" href={`#/${route.page}`}>
+                {pageTitle}
+              </a>
+              <ChevronRight size={12} />
+              <span className="crumb-current">
+                {route.page === "scans"
+                  ? (scans.find((scan) => scan.id === route.id)?.project ??
+                    "Scan")
+                  : (findings.find((finding) => finding.key === route.id)
+                      ?.project ?? "Finding")}
+              </span>
+            </>
+          ) : (
+            <span className="crumb-current">{pageTitle}</span>
+          )}
           <span className="local-status">
             <span /> On this machine
           </span>
         </header>
         <ErrorBanner message={error} />
+        {route.page === "dashboard" && (
+          <DashboardPage
+            scans={scans}
+            findings={settledFindings}
+            loading={loading}
+            refresh={refresh}
+          />
+        )}
         {route.page === "scans" && (
           <ScansPage
             scans={scans}
@@ -204,7 +237,7 @@ export function App() {
         )}
         {route.page === "findings" && (
           <FindingsPage
-            findings={findings}
+            findings={settledFindings}
             loading={loading}
             selectedId={route.id}
             refresh={refresh}
@@ -212,6 +245,22 @@ export function App() {
         )}
         {route.page === "settings" && <SettingsPage />}
       </main>
+      {!loading && (
+        <Onboarding
+          hasScans={scans.length > 0}
+          onRunScan={() => setFirstScan(true)}
+        />
+      )}
+      {firstScan && (
+        <NewScanDialog
+          onClose={() => setFirstScan(false)}
+          onStarted={(scan) => {
+            setFirstScan(false);
+            navigate("scans", scan.id);
+            void refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -2,10 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button } from "../components/controls/Button";
 import { Tooltip } from "../components/controls/Tooltip";
 import { providerDefinitions } from "../../../src/shared/providers";
-import type {
-  FindingRecord,
-  Report,
-} from "../../../src/shared/contracts";
+import type { FindingRecord, Report } from "../../../src/shared/contracts";
 import {
   ArrowLeft,
   ChevronRight,
@@ -86,7 +83,6 @@ function stageStatus(tasks: Task[]): { label: string; tone: Tone } {
     return { label: "In progress", tone: "running" };
   return { label: "Queued", tone: "muted" };
 }
-
 
 function Disclosure({
   open,
@@ -215,7 +211,6 @@ function Progress({ scan }: { scan: Report }) {
   );
 }
 
-
 function Activity({ scan }: { scan: Report }) {
   const [open, setOpen] = useState(false);
   const events = scan.events.slice(-60).reverse();
@@ -248,7 +243,6 @@ function Activity({ scan }: { scan: Report }) {
     </section>
   );
 }
-
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -317,7 +311,14 @@ function Overview({ scan }: { scan: Report }) {
   const tokens = scan.usage.input + scan.usage.output;
   return (
     <div className="detail-scroll scan-body">
-      {scan.error && <ErrorBanner message={scan.error} />}
+      {scan.error &&
+        (scan.state === "cancelled" ? (
+          <p className="scan-note" role="status">
+            {scan.error} Resume to finish validating and judging.
+          </p>
+        ) : (
+          <ErrorBanner message={scan.error} />
+        ))}
       <section className="card" aria-label="Scan details">
         <div className="detail-facts">
           <Fact label="Project">
@@ -373,13 +374,13 @@ export function ScanDetail({
   onRefresh: () => Promise<void>;
 }) {
   const { records, reload } = useScanFindings(scan);
-  const listed = (records ?? []).filter((f) => f.validation !== "rejected");
+  // Findings stay hidden until the scan finishes: the council can still reject them.
+  const running = scan.state === "running";
+  const listed = running
+    ? []
+    : (records ?? []).filter((f) => f.validation !== "rejected");
   const open = listed.filter((f) => f.status === "open");
-  const [view, setView] = useState<"findings" | "overview">(() =>
-    findingId || scan.findings.some((f) => f.validation !== "rejected")
-      ? "findings"
-      : "overview",
-  );
+  const [view, setView] = useState<"findings" | "overview">("findings");
   const tasks = scan.execution?.tasks ?? [];
   const done = tasks.filter((task) =>
     ["complete", "limited", "failed"].includes(task.state),
@@ -468,14 +469,13 @@ export function ScanDetail({
           aria-pressed={view === "overview"}
           onClick={() => setView("overview")}
         >
-          Progress{" "}
-          <span>{tasks.length ? `${done}/${tasks.length}` : ""}</span>
+          Progress <span>{tasks.length ? `${done}/${tasks.length}` : ""}</span>
         </button>
       </nav>
       <ErrorBanner message={error} />
       {view === "overview" ? (
         <Overview scan={scan} />
-      ) : listed.length || findingId ? (
+      ) : (
         <FindingsInbox
           key={scan.id}
           findings={listed}
@@ -487,35 +487,43 @@ export function ScanDetail({
           searchPlaceholder="Find a finding in this scan…"
           showScanLink={false}
           backLabel={`Scan ${number ? `#${number}` : ""}`.trim()}
+          emptyListText={
+            records === undefined
+              ? "Loading findings…"
+              : scan.state === "running"
+                ? "Findings appear when the scan finishes."
+                : "No findings in this scan."
+          }
+          emptyDetail={
+            <div className="scan-empty">
+              <div className="scan-empty-icon">
+                <ShieldCheck size={20} strokeWidth={1.4} />
+              </div>
+              <h2>
+                {records === undefined
+                  ? "Loading findings…"
+                  : scan.state === "running"
+                    ? "Scanning"
+                    : "No findings"}
+              </h2>
+              <p>
+                {scan.state === "running"
+                  ? "Findings show here once the council finishes validating and judging them, so nothing you see is later rejected. You can leave this page."
+                  : scan.findings.length
+                    ? "Every candidate was rejected during validation."
+                    : "This scan didn't report any vulnerabilities."}
+              </p>
+              <Button className="button" onClick={() => setView("overview")}>
+                View progress
+                <ChevronRight size={11} />
+              </Button>
+            </div>
+          }
           onSaved={async () => {
             reload();
             await onRefresh();
           }}
         />
-      ) : (
-        <div className="scan-empty">
-          <div className="scan-empty-icon">
-            <ShieldCheck size={20} strokeWidth={1.4} />
-          </div>
-          <h2>
-            {records === undefined
-              ? "Loading findings…"
-              : scan.state === "running"
-                ? "No findings yet"
-                : "No findings"}
-          </h2>
-          <p>
-            {scan.state === "running"
-              ? "Findings appear here as agents confirm them. You can leave this page."
-              : scan.findings.length
-                ? "Every candidate was rejected during validation."
-                : "This scan didn't report any vulnerabilities."}
-          </p>
-          <Button className="button" onClick={() => setView("overview")}>
-            View progress
-            <ChevronRight size={11} />
-          </Button>
-        </div>
       )}
     </>
   );

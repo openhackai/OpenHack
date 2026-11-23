@@ -90,6 +90,8 @@ export function FindingsInbox({
   loadMissing = false,
   showScanLink = true,
   backLabel = "Findings",
+  emptyDetail,
+  emptyListText,
 }: {
   findings: FindingRecord[];
   selectedId?: string;
@@ -103,6 +105,9 @@ export function FindingsInbox({
   loadMissing?: boolean;
   showScanLink?: boolean;
   backLabel?: string;
+  /** Detail pane when there are no findings at all (e.g. a clean scan). */
+  emptyDetail?: ReactNode;
+  emptyListText?: string;
 }) {
   const narrow = useNarrow();
   const [query, setQuery] = useState("");
@@ -266,6 +271,7 @@ export function FindingsInbox({
         </EmptyState>
       </div>
     );
+  else if (!findings.length && emptyDetail) detail = emptyDetail;
   else
     detail = (
       <div className="inbox-detail-empty">
@@ -328,7 +334,9 @@ export function FindingsInbox({
           />
         </div>
         <div className="inbox-groups" ref={listRef}>
-          {groups.length === 0 ? (
+          {findings.length === 0 && emptyListText ? (
+            <p className="inbox-empty-text">{emptyListText}</p>
+          ) : groups.length === 0 ? (
             <EmptyState title="No matching findings">
               {openClosed === "open" && !query && severity === "all"
                 ? "Nothing is open. Resolved and dismissed findings are under Closed."
