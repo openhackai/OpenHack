@@ -8,7 +8,28 @@ The v2 harness maps your codebase, assigns focused source reviews, challenges ca
 
 ## Install
 
-Use the standalone downloads on [GitHub Releases](https://github.com/openhackai/OpenHack/releases). Choose the archive matching your operating system and processor:
+On macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/openhackai/OpenHack/v2/install.sh | sh
+```
+
+The installer currently selects **v2.0.0**. It detects your OS and processor, downloads the matching GitHub release archive, verifies its SHA-256 checksum, and installs `openhack` in `~/.local/bin`. License notices are preserved in `~/.local/bin/openhack-licenses`. It needs no sudo, does not modify shell profiles, and does not start the app automatically. If needed, add the directory to your current terminal's PATH:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+openhack
+```
+
+To select a version or installation directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/openhackai/OpenHack/v2/install.sh | sh -s -- --version 2.0.0 --install-dir "$HOME/.local/bin"
+```
+
+**Release status:** the installer is available, but v2.0.0 is still an unpublished draft. Until its binaries are published, installation stops with a release-unavailable error and leaves any existing executable intact. Earlier releases use the previous harness and are not installed by this script.
+
+On Windows, or to install manually, use the standalone downloads on [GitHub Releases](https://github.com/openhackai/OpenHack/releases). Choose the archive matching your operating system and processor:
 
 | Operating system | Processor | Archive suffix |
 | --- | --- | --- |
@@ -18,8 +39,6 @@ Use the standalone downloads on [GitHub Releases](https://github.com/openhackai/
 | Linux | x64 | `linux-x64.tar.gz` |
 | Windows | ARM64 | `windows-arm64.zip` |
 | Windows | x64 | `windows-x64.zip` |
-
-**Release status:** v2.0.0 is being prepared. The standalone downloads described here will be available when that release is published. Earlier releases use the previous harness. A curl installer is not available yet.
 
 The standalone executable includes the Bun runtime and dashboard assets. Running it requires no separate Bun, Node.js, Python, or package installation. Linux archives target glibc systems; Alpine/musl is not supported by these builds.
 
@@ -151,6 +170,8 @@ Project code is read, not executed. Required source excerpts and paths are sent 
 ## Updating
 
 When a new standalone release is available, stop the dashboard, replace the executable with the matching new download, and restart it. Scan data remains in your workspace. There is no automatic updater yet.
+
+On macOS/Linux, you can rerun the installer with `--version` to select a published v2-or-newer release. Downloads are verified before replacing the executable; restart a running dashboard to use the new binary.
 
 ```sh
 openhack dashboard stop
