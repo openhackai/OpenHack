@@ -1,3 +1,4 @@
+import { projectOptions } from "../project-options";
 import { Button } from "../components/controls/Button";
 import { Checkbox } from "../components/controls/Checkbox";
 import { Select } from "../components/controls/Select";
@@ -23,13 +24,11 @@ export function FindingsPage({
 }) {
   const [project, setProject] = useState("all");
   const [includeRejected, setIncludeRejected] = useState(false);
-  const projects = [
-    ...new Set(findings.map((finding) => finding.project)),
-  ].sort((a, b) => a.localeCompare(b));
+  const projects = projectOptions(findings);
   const scoped = findings.filter(
     (finding) =>
       (includeRejected || finding.validation !== "rejected") &&
-      (project === "all" || finding.project === project),
+      (project === "all" || finding.root === project),
   );
   const open = scoped.filter((finding) => finding.status === "open").length;
   return (
@@ -45,7 +44,7 @@ export function FindingsPage({
             onValueChange={setProject}
             options={[
               { value: "all", label: "All" },
-              ...projects.map((name) => ({ value: name, label: name })),
+              ...projects,
             ]}
           />
           <span className="muted">{open} open</span>
@@ -65,7 +64,7 @@ export function FindingsPage({
             markdown={() =>
               findingsMarkdown(
                 scoped.filter((finding) => finding.status === "open"),
-                project === "all" ? {} : { project, root: scoped[0]?.root },
+                project === "all" ? {} : { project: scoped[0]?.project, root: project },
               )
             }
           />

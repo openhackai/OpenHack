@@ -261,6 +261,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 /** Scan findings with their triage state; refetched as the scan changes. */
 function useScanFindings(scan: Report) {
   const [records, setRecords] = useState<FindingRecord[]>();
+  const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const signature = `${scan.id}|${scan.findings.length}|${scan.state}|${scan.findings
     .map((f) => f.validation)
@@ -268,6 +269,8 @@ function useScanFindings(scan: Report) {
   useEffect(() => {
     const controller = new AbortController();
     const signal = controller.signal;
+    setRecords(undefined);
+    setError(null);
     void request<{ findings: FindingRecord[] }>(
       `/scans/${encodeURIComponent(scan.id)}/findings`,
       { signal },
@@ -290,25 +293,16 @@ function useScanFindings(scan: Report) {
         if (!signal.aborted) setRecords(list);
       })
       .catch(() => {
-        if (!signal.aborted)
-          setRecords(
-            scan.findings.map((finding) => ({
-              ...finding,
-              key: `${scan.id}:${finding.id}`,
-              scanId: scan.id,
-              project: scan.project,
-              root: scan.root,
-              status: "open",
-              note: "",
-              updatedAt: scan.startedAt,
-            })),
-          );
+        if (!signal.aborted) {
+          setRecords(undefined);
+          setError("Could not load saved findings and triage. Retry to edit findings safely.");
+        }
       });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, version]);
   const reload = useCallback(() => setVersion((v) => v + 1), []);
-  return { records, reload };
+  return { records, reload, error };
 }
 
 function Overview({ scan }: { scan: Report }) {
@@ -378,7 +372,7 @@ export function ScanDetail({
   onAction: (action: "resume" | "cancel") => void;
   onRefresh: () => Promise<void>;
 }) {
-  const { records, reload } = useScanFindings(scan);
+  const { records, reload, error: findingsError } = useScanFindings(scan);
   // Findings stay hidden until the scan finishes: the council can still reject them.
   const running = scan.state === "running";
   const listed = running
@@ -480,6 +474,11 @@ export function ScanDetail({
       <ErrorBanner message={error} />
       {view === "overview" ? (
         <Overview scan={scan} />
+      ) : findingsError ? (
+        <div className="scan-empty">
+          <ErrorBanner message={findingsError} />
+          <Button className="button" onClick={reload}>Retry</Button>
+        </div>
       ) : (
         <FindingsInbox
           key={scan.id}

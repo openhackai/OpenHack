@@ -112,12 +112,12 @@ export function DashboardPage({
   const running = scans.filter((s) => s.state === "running");
   const latest = scans[0];
 
-  const projects = [...new Set(scans.map((s) => s.project))].map((name) => {
-    const projectScans = scans.filter((s) => s.project === name);
-    const rows = open.filter((f) => f.project === name);
+  const projects = [...new Set(scans.map((s) => s.root))].map((root) => {
+    const projectScans = scans.filter((s) => s.root === root);
+    const rows = open.filter((f) => f.root === root);
     return {
-      name,
-      root: projectScans[0]!.root,
+      name: projectScans[0]!.project,
+      root,
       lastScan: projectScans[0]!,
       scans: projectScans.length,
       open: rows.length,
@@ -269,7 +269,7 @@ export function DashboardPage({
               {projects.length ? (
                 <ul className="dash-list">
                   {projects.slice(0, 6).map((p) => (
-                    <li key={p.name}>
+                    <li key={p.root}>
                       <a
                         href={routeHash("scans", p.lastScan.id)}
                         className="dash-item"

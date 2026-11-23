@@ -161,7 +161,7 @@ export function FindingsInbox({
           .includes(needle)
       )
         continue;
-      const key = groupBy === "project" ? finding.project : finding.severity;
+      const key = groupBy === "project" ? finding.root : finding.severity;
       const group = byKey.get(key) ?? {
         key,
         label:

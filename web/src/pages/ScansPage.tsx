@@ -1,3 +1,4 @@
+import { projectOptions } from "../project-options";
 import { Button } from "../components/controls/Button";
 import { Select } from "../components/controls/Select";
 import { Tooltip } from "../components/controls/Tooltip";
@@ -56,9 +57,7 @@ export function ScansPage({
       setCreatedScan(undefined);
     }
   }, [scans, createdScan]);
-  const projects = [...new Set(scans.map((scan) => scan.project))].sort(
-    (a, b) => a.localeCompare(b),
-  );
+  const projects = projectOptions(scans);
   // Chronological scan numbers, oldest first (#1), like company/app.
   const numbers = new Map(
     [...scans]
@@ -71,7 +70,7 @@ export function ScansPage({
   const filtered = scans.filter(
     (scan) =>
       (status === "all" || scan.state === status) &&
-      (project === "all" || scan.project === project) &&
+      (project === "all" || scan.root === project) &&
       `${scan.project} ${scan.root} ${scan.id}`
         .toLowerCase()
         .includes(query.toLowerCase()),
@@ -170,7 +169,7 @@ export function ScansPage({
               onValueChange={setProject}
               options={[
                 { value: "all", label: "All" },
-                ...projects.map((name) => ({ value: name, label: name })),
+                ...projects,
               ]}
             />
             <Select

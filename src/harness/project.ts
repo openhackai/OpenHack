@@ -63,7 +63,13 @@ export async function inventory(path: string, signal?: AbortSignal): Promise<Pro
     for (const entry of entries) {
       signal?.throwIfAborted();
       const full = resolve(dir, entry.name), name = relative(root, full).split(sep).join("/");
-      if (entry.isSymbolicLink() || excludedDirs.has(entry.name) || secretName.test(entry.name) || secretExt.test(entry.name) || lockName.test(entry.name) || /\.min\.[cm]?js$/i.test(entry.name) || rules.some(r => r.matcher.ignores(relative(r.dir, full).split(sep).join("/") + (entry.isDirectory() ? "/" : "")))) {
+      let ignored = false;
+      for (const rule of rules) {
+        const match = rule.matcher.test(relative(rule.dir, full).split(sep).join("/") + (entry.isDirectory() ? "/" : ""));
+        if (match.ignored) ignored = true;
+        else if (match.unignored) ignored = false;
+      }
+      if (entry.isSymbolicLink() || excludedDirs.has(entry.name) || secretName.test(entry.name) || secretExt.test(entry.name) || lockName.test(entry.name) || /\.min\.[cm]?js$/i.test(entry.name) || ignored) {
         project.skipped++; continue;
       }
       if (entry.isDirectory()) { await walk(full, rules, depth + 1); continue; }
