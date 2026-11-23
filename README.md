@@ -1,219 +1,211 @@
-# OpenHack local
+# OpenHack
 
-A Bun CLI and a local React dashboard for scanning source code, reviewing scan history, and managing findings. Both use the same files under `~/.openhack`. No OpenHack login, hosted database, organization, or subscription is needed.
+OpenHack is a local AI security scanner for source code. Pick a project, connect your AI provider, and review findings in a browser dashboard or your terminal.
 
-## Run
+The v2 harness maps your codebase, assigns focused source reviews, challenges candidate findings, and judges the evidence. Scan history, findings, notes, and configuration stay in your local workspace. The selected AI provider processes the source excerpts needed for each review.
 
-Building from source and running the development/npm package requires Bun 1.3 or newer. The standalone executable below includes the Bun runtime and needs no separate Bun installation.
+## Install
+
+Use the standalone downloads on [GitHub Releases](https://github.com/openhackai/OpenHack/releases). Choose the archive matching your operating system and processor:
+
+| Operating system | Processor | Archive suffix |
+| --- | --- | --- |
+| macOS | Apple Silicon | `darwin-arm64.tar.gz` |
+| macOS | Intel | `darwin-x64.tar.gz` |
+| Linux | ARM64 | `linux-arm64.tar.gz` |
+| Linux | x64 | `linux-x64.tar.gz` |
+| Windows | ARM64 | `windows-arm64.zip` |
+| Windows | x64 | `windows-x64.zip` |
+
+**Release status:** v2.0.0 is being prepared. The standalone downloads described here will be available when that release is published. Earlier releases use the previous harness. A curl installer is not available yet.
+
+The standalone executable includes the Bun runtime and dashboard assets. Running it requires no separate Bun, Node.js, Python, or package installation. Linux archives target glibc systems; Alpine/musl is not supported by these builds.
+
+Extract the archive, then run `openhack` on macOS/Linux or `openhack.exe` on Windows. You can place the executable in a directory on your `PATH` to run it from any terminal. Archives also include licenses, a build manifest, and a separate SHA-256 checksum file for verifying the download.
+
+An AI provider is required to scan. API-key mode needs no additional provider software. To use a Codex or Claude Code subscription, install and sign in to that provider's official CLI.
+
+## Start your first scan
 
 ```sh
-bun install --frozen-lockfile
-bun run build
-bun link
-
 openhack
 ```
 
-`openhack` opens the local dashboard directly in your default browser, starting it in the background if needed. There is no terminal menu. Use the dashboard to run scans, view findings, configure API keys or existing subscriptions, and change settings.
+OpenHack opens the dashboard at **http://127.0.0.1:6969**. The inline setup walks you through three steps:
 
-The dashboard binds to **127.0.0.1:6969** by default and keeps running after the command exits. Running `openhack` again reopens the existing dashboard. Add `--no-open` to start it without launching a browser, or `--port 490` to choose another port (low ports may require privileges on some systems).
+1. **Connect a provider.** Save an OpenAI or Anthropic API key, or use an existing Codex or Claude Code login.
+2. **Choose a project.** Browse with the native folder chooser or enter a directory path. On systems without a native chooser, use the built-in folder browser.
+3. **Start the scan.** Review the settings and follow the scan's progress.
 
-Explicit commands remain available for scripts and direct use:
+The dashboard runs in the background. Closing the browser leaves it running; running `openhack` again reopens it. Use `openhack --no-open` to start it without opening a browser, or `openhack --port 6970` to choose another port.
+
+## Providers
+
+| Provider | Authentication | Billing |
+| --- | --- | --- |
+| OpenAI API | OpenAI API key | Your API account |
+| Anthropic API | Anthropic API key | Your API account |
+| Codex | Official Codex CLI login | ChatGPT plan limits or API billing, depending on the login |
+| Claude Code | Official Claude Code CLI login | Your Claude plan's usage limits |
+
+Connect a provider in **Settings** or use environment variables for API access:
 
 ```sh
 export OPENAI_API_KEY='your-api-key'
-openhack scan                    # current directory
-openhack scan --codex
-openhack scan --claude-code
-openhack scan /path/to/project
-openhack dashboard status
-openhack dashboard stop
+openhack scan /path/to/project --openai
+
+export ANTHROPIC_API_KEY='your-api-key'
+openhack scan /path/to/project --anthropic
 ```
 
-The explicit `openhack dashboard` command runs the server in the foreground until Ctrl+C. It reuses an existing OpenHack dashboard on the requested port for the same data directory. Add `--no-open` to print the URL without launching a browser, or `--port 490` to use a different port for this invocation.
-
-The default command behaves the same in a terminal or pipe; use `--help` for command guidance and explicit commands with `--json` for automation.
-
-The package's executable is also available directly as `./bin/openhack` after building, or `bun src/cli/index.ts` during development. `bun link` registers the executable in Bun's bin directory; ensure that directory is on your PATH. If another OpenHack installation exists, `command -v openhack` shows which one will run.
-
-### Standalone executable
-
-On the build machine, with Bun installed:
+For existing subscriptions:
 
 ```sh
+codex login
+openhack scan /path/to/project --codex
+
+claude auth login
+openhack scan /path/to/project --claude-code
+```
+
+OpenHack keeps control of the scanning workflow and source tools. Subscription adapters invoke the provider CLI in an isolated temporary directory with its native execution tools disabled. They reuse the CLI's authentication without copying its login tokens.
+
+Use a current provider CLI that supports OpenHack's isolation flags. Model access and usage limits depend on your provider account. Subscription requests can be slower because each tool round invokes the CLI again.
+
+Select a provider and model in Settings or from the terminal:
+
+```sh
+openhack providers
+openhack config set provider codex
+openhack config set model gpt-6-sol
+openhack config set reasoning high
+```
+
+Switching the saved provider chooses its default model. A model supplied for an individual scan applies only to that scan. Resumed scans retain their original provider, model, and configuration.
+
+## Dashboard
+
+- **Dashboard:** project overview, open findings, severity counts, and recent scans.
+- **Scans:** all projects, live activity, agent tasks, coverage, findings, and controls to stop or resume scans.
+- **Findings:** source evidence, validation, remediation guidance, notes, and manual open/resolved/dismissed status.
+- **OpenHack Pro:** learn about the enterprise product's business-impact assessment, triage, automatic fixes, and Slack integration. These are Pro capabilities, not integrations enabled in the local scanner.
+- **Settings:** provider credentials, model, reasoning effort, worker count, tool rounds, project context, and local configuration.
+
+A scan with useful results and unfinished work is marked **Partial**. Its findings remain available, and resume retries unfinished tasks. A partial scan does not mean the codebase is clean.
+
+## Terminal commands
+
+```sh
+openhack scan                         # Scan the current directory
+openhack scan /path/to/project
+openhack scan . --workers 4 --steps 20
+openhack scan . --context 'Multi-tenant API; verify tenant isolation.'
+openhack scan . --json --fail-on high
+
+openhack scans                       # Current project's history
+openhack scans --all                 # All projects
+openhack show SCAN_ID
+openhack resume SCAN_ID --steps 30
+
+openhack findings --severity high --state open
+openhack status SCAN_ID:FINDING_ID resolved
+openhack note SCAN_ID:FINDING_ID 'Reviewed the authorization boundary.'
+
+openhack dashboard status
+openhack dashboard stop
+openhack version
+openhack help scan
+```
+
+`scans` and `findings` default to the current project; pass a directory or `--all` to broaden the scope. The dashboard always shows all projects. Use `openhack help` or `openhack COMMAND --help` for the full command reference.
+
+Progress goes to stderr; `--json` writes the final report to stdout. Scan exit codes are `0` for complete, `1` for failed/partial or invalid input, `2` when an open validated finding meets `--fail-on`, and `130` for cancellation.
+
+Ctrl+C saves a checkpoint for a terminal scan. Use Stop for a dashboard scan. Resume requires the same source snapshot; after changing the source, start a new scan. `openhack dashboard stop` checkpoints scans owned by that dashboard before shutting it down.
+
+## Data and source handling
+
+OpenHack listens on loopback and stores its workspace under `~/.openhack`:
+
+```text
+settings.json
+credentials.json
+dashboard-<port>.json
+dashboard-<port>.log
+projects/<project-hash>/
+  project.json
+  scans/<scan-id>.json
+  triage.json
+```
+
+Use `OPENHACK_HOME` or `--home DIRECTORY` to choose a different workspace. Reports include source evidence, coverage, configuration, usage, activity, and checkpoints. Triage carries forward across scans of the same project; older reports remain available in scan history.
+
+Saved API keys are local plaintext in `credentials.json`, with owner-only file permissions where supported. They are not returned by the dashboard API or included in reports. An API key in the environment takes precedence over a saved key. Provider login tokens remain managed by the provider CLI.
+
+Source collection honors `.gitignore` and `.openhackignore`, skips symlinks and common credential/dependency/build paths, and records exclusions and incomplete coverage. Add sensitive paths to `.openhackignore` before scanning.
+
+Project code is read, not executed. Required source excerpts and paths are sent to your chosen remote AI provider; scanning is not offline inference. OpenAI API requests use `store: false`. Provider usage and retention policies still apply. Findings are AI source reviews, not proof of a successful runtime exploit. The local scanner does not automatically modify code or create pull requests.
+
+## Updating
+
+When a new standalone release is available, stop the dashboard, replace the executable with the matching new download, and restart it. Scan data remains in your workspace. There is no automatic updater yet.
+
+```sh
+openhack dashboard stop
+# Replace the executable with the new download.
+openhack
+```
+
+## Development
+
+Install the Bun version pinned in `.bun-version`, then:
+
+```sh
+git clone https://github.com/openhackai/OpenHack.git
+cd OpenHack
 bun install --frozen-lockfile
+bun run dev
+```
+
+The development UI runs at **http://localhost:5173** with hot reload, and its API defaults to port 6969. If an installed dashboard is already using that port:
+
+```sh
+OPENHACK_DEV_API_PORT=6970 bun run dev
+```
+
+Development uses the same workspace unless you override `OPENHACK_HOME`. To replay the complete onboarding flow against existing scan history, open `http://localhost:5173/?demo=onboarding#/`. Finishing setup starts a real scan and opens the full scan list. This replay is development-only and is excluded from production builds.
+
+Validation does not call paid model APIs:
+
+```sh
+bun run check          # Types, deterministic tests, production build
+bun run test:package   # Extracted package and dashboard lifecycle
+bun audit
+```
+
+The terminal cancellation test uses Python 3's standard-library PTY support on macOS/Linux. This is a development test dependency, not an installation requirement for OpenHack.
+
+## Building standalone executables
+
+```sh
 bun run build:standalone
 bun run test:standalone
 ```
 
-This produces `dist/openhack` (`dist/openhack.exe` on Windows) for the build machine's OS and architecture. It embeds Bun and all dashboard assets, including fonts. Copy that single executable to another machine with the same OS and architecture; no Bun, Node.js, npm install, or adjacent asset files are needed. Cross-platform release builds are described below. The npm package continues to use the Bun-based script wrapper; the native executable is distributed separately.
+This creates `dist/openhack` (or `dist/openhack.exe`) for the build machine. To build all supported targets, or one target:
 
 ```sh
-./dist/openhack                     # Open the dashboard
-./dist/openhack scan /path/to/project
-./dist/openhack dashboard stop
-```
-
-Provider authentication is still required for scans. Subscription providers still require their official Codex or Claude Code CLI on PATH. The standalone smoke test uses temporary storage and an empty PATH to check CLI commands, embedded assets, and dashboard start/reuse/status/stop without calling model APIs.
-
-### Cross-platform releases
-
-Release builds pin Bun to `.bun-version` (currently 1.4.5). On the build machine:
-
-```sh
-bun install --frozen-lockfile
 bun run build:all
 bun run package:standalone --all
-```
 
-This cross-compiles six executables into `dist/standalone/<platform>/` and packages versioned archives and SHA-256 checksum files in `dist/releases/`:
-
-| Platform | Architectures | Download format |
-| --- | --- | --- |
-| macOS | Apple Silicon (`darwin-arm64`), Intel (`darwin-x64`) | `.tar.gz` |
-| Linux | ARM64 (`linux-arm64`), x64 (`linux-x64`) | `.tar.gz` |
-| Windows | ARM64 (`windows-arm64`), x64 (`windows-x64`) | `.zip` |
-
-You can also build and package one target:
-
-```sh
 bun run build:standalone --target=bun-linux-x64
 bun run package:standalone bun-linux-x64
 ```
 
-Cross-compilation downloads the matching Bun runtimes during the build. Archive creation uses build-machine tools (`tar`, plus `zip` on macOS/Linux or PowerShell on Windows). End users only extract their archive and run `openhack` or `openhack.exe`; none of these build tools are needed to run it. Archives include licenses and a build manifest with the runtime version, target and binary checksum.
+Cross-platform executables are written to `dist/standalone/<platform>/`; versioned archives and checksums go to `dist/releases/`. CI builds and smoke-tests each of the six targets on its corresponding operating system and architecture, including dashboard assets and start/reuse/stop behavior with no runtime on `PATH`.
 
-The `Standalone builds` GitHub Actions workflow builds each target on a matching OS/architecture, then copies only the executable to a temporary directory and tests it with an empty PATH. It checks CLI commands, embedded assets, and background dashboard start/reuse/status/stop before uploading archives. Cross-compilation alone does not establish runtime compatibility: require all six native jobs and the existing test workflow to pass before release. This workflow uploads CI artifacts; it does not publish a GitHub release.
+The current build workflow uploads unsigned CI artifacts. Public signed releases require macOS Developer ID signing and notarization, plus Windows publisher signing, before packaging and checksum generation. A successful cross-compile alone is not a native runtime test.
 
-These targets use Bun's supported OS baseline: macOS 13+, Windows 10 1809+ (or an appropriate Windows ARM64 version), and Linux with glibc 2.17+; Alpine/musl is not covered by these Linux downloads. A browser and network access to the selected model provider are needed. API-key mode needs no separate provider software. Codex/Claude subscription mode still needs the corresponding separately installed CLI. If Linux has no `xdg-open`, open the printed local URL manually; its native folder chooser is optional and paths can be entered directly.
+## License
 
-Before public distribution, sign and notarize the macOS builds with your Apple Developer identity and sign Windows builds with your publisher certificate. Generate archives/checksums **after** signing and test the signed executables. The current workflow produces unsigned build artifacts, not signed installers. Publish only artifacts from the same tested commit, alongside their checksum files and the corresponding source revision. Bun's runtime license and linked-library notices are included in `licenses/BUN-LICENSE.md`.
-
-## Providers and subscriptions
-
-Configure a provider from dashboard Settings: save, replace, or remove an API key, or select an automatically detected Codex or Claude Code subscription. Provider availability is shown alongside the provider selection. API settings let you change a key or model; subscription providers use their existing login. You can also select a configured provider in the dashboard's **Settings → Provider**, or with `--provider`. Switching providers picks its default model; you can then customize it. Reports save their provider and model, so resuming a scan keeps the original configuration.
-
-| Provider | Authentication | Default model |
-| --- | --- | --- |
-| `openai` | Saved API key or `OPENAI_API_KEY` | `gpt-5-mini` |
-| `anthropic` | Saved API key or `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
-| `codex` | Installed official Codex CLI with an existing ChatGPT login or saved API key | `gpt-6-sol` |
-| `claude-code` | Installed official Claude Code signed in with Claude | `claude-opus-4-8` |
-
-```sh
-# Use an existing subscription login.
-codex login
-openhack scan --codex
-
-claude auth login
-openhack scan --claude-code
-
-# Or use your own API key.
-export ANTHROPIC_API_KEY='your-api-key'
-openhack scan --anthropic
-
-openhack providers
-openhack config set provider claude-code
-```
-
-The CLI options call the official CLI on your machine using its existing authentication. Codex accepts its saved ChatGPT login or saved API key; provider status identifies which mode is configured. A Codex API-key login uses API billing, not a ChatGPT subscription. Claude Code uses its existing Claude subscription login. OpenHack does not copy login tokens or API keys out of either CLI. Parent API-key environment variables are excluded from these child processes. Your configured account's model access and usage limits apply; the CLI must be installed and available on `PATH`. Use a current CLI version supporting the isolation flags; incompatible versions fail with an explicit error.
-
-OpenHack retains control of the source scanner and its read-only tools. Subscription requests run in a temporary empty directory with native tools, user rules, plugins, hooks and external MCP configuration disabled. Structured requests return either a scanner tool call or a schema-validated result. Only source excerpts selected by the scanner are passed into the model conversation. Subscription mode can be slower than direct API access because each tool round invokes a CLI process.
-
-Dashboard provider setup saves API keys to `~/.openhack/credentials.json` with owner-only permissions (`0600`). They are stored as local plaintext, separate from scan reports and settings. A nonempty `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the process environment takes precedence over the corresponding saved key. Dashboard Settings can refresh provider availability and accepts new keys through a masked input. Saved key values are never returned to the browser; only their configuration status is shown. With a custom `--home` or `OPENHACK_HOME`, saved credentials belong to that workspace instead.
-
-For a persistent provider default use `openhack config set provider PROVIDER`. `OPENAI_MODEL`, `OPENAI_REASONING_EFFORT`, and `ANTHROPIC_MODEL` provide initial API defaults. Codex model `default` leaves model selection to the CLI. Codex and Claude Code logins remain in their own CLI-managed credential stores; OpenHack does not save their login tokens.
-
-See the official [Codex non-interactive documentation](https://developers.openai.com/codex/noninteractive) and [Claude Code headless documentation](https://code.claude.com/docs/en/headless) for CLI authentication and plan details.
-
-## Commands
-
-```sh
-openhack scan . --model gpt-5-mini --workers 4 --steps 20
-openhack scan . --reasoning high --context 'Multi-tenant API; verify tenant isolation.'
-openhack scan . --json --fail-on high
-openhack scans                   # current directory
-openhack scans --all             # all projects
-openhack show SCAN_ID
-openhack resume SCAN_ID --steps 30
-openhack findings --severity high --state open
-openhack status SCAN_ID:FINDING_ID resolved
-openhack note SCAN_ID:FINDING_ID 'Reviewed the authorization boundary.'
-openhack help scan
-openhack config
-openhack config set model gpt-5-mini
-openhack config set workers 4
-openhack config set reasoning default
-```
-
-`scan` defaults to your current working directory. `scans` and `findings` also default to that project; supply another directory or `--all` to expand their scope. The dashboard always shows all projects. Provider shortcuts (`--codex`, `--claude-code`, `--openai`, `--anthropic`) apply to one scan and preserve saved settings. Multiple provider selectors are rejected.
-
-Use `openhack help`, `openhack help COMMAND`, or `COMMAND --help` for guidance. `openhack version` prints the installed version. `settings`, `doctor`, `history`, and `list` are aliases for `config`, `providers`, `scans`, and `findings`.
-
-`scans`, `show`, `findings`, `status`, and `config` accept `--json`. Findings print the full `SCAN_ID:FINDING_ID` key used by `status` and `note`. `--home DIRECTORY` or `OPENHACK_HOME` selects another workspace without changing your shell's home directory.
-
-Scan exit codes: **0** complete, **1** failed/partial or invalid input, **2** an open validated finding meets `--fail-on`, **130** cancelled. Interactive scans show the provider and configured model, an animated elapsed-time indicator, current stage, active/completed tasks, files read, findings, request count and latest activity. Piped output gets plain progress logs with a heartbeat every 15 seconds. Progress goes to stderr; `--json` writes the final report to stdout. Ctrl+C cancels requests and saves a checkpoint. Resuming requires the same source snapshot; changed source needs a new scan.
-
-## Dashboard
-
-Before your first scan, the dashboard shows an inline three-step setup: connect a provider, choose a project folder, then review and start the scan. API-key entry and folder browsing stay on the page. Once a scan exists, the dashboard shows the workspace overview.
-
-- **Scans:** all project directories, status and search filters, browse local folders to select a project path, start a scan, inspect coverage, findings, agent tasks and activity, resume or stop work.
-- **Findings:** current findings across projects, severity/status filters, source evidence, validation, remediation, notes, and manual open/resolved/dismissed status. Historical findings remain available through each scan.
-- **Settings:** provider, saved API-key management, model, worker count, tool rounds, reasoning effort, project context, port, storage location and refreshable provider availability. API keys are never returned to the browser or written to settings.
-
-Visual tokens, Inter typography, sidebar, table measurements, and light/dark styles are adapted from the existing OpenHack app. Existing-control icons match the main OpenHack app; new controls use the Desktop Nucleo UI library. Source paths and checksums are recorded in `web/src/components/nucleo-icons.manifest.json`. Shared Base UI controls provide custom selects, checkboxes, number inputs, dialogs and tooltips, with consistent field and button styling. The local app contains only these three sections.
-
-The CLI and dashboard can run together. The dashboard refreshes every three seconds. A scan can only be stopped by the process that started it: use Ctrl+C while a terminal scan runs, or Stop in the dashboard for a dashboard scan. Use `openhack dashboard start`, `openhack dashboard status`, and `openhack dashboard stop` to manage the background server. Closing the browser does not stop a managed background dashboard. Stopping the dashboard checkpoints its active scans. Older dashboards without lifecycle support must be stopped in their original terminal.
-
-## Storage and scope
-
-```text
-~/.openhack/
-  settings.json
-  credentials.json
-  dashboard-<port>.json
-  dashboard-<port>.log
-  projects/<hash-of-canonical-project-path>/
-    project.json
-    scans/<scan-id>.json
-    triage.json
-```
-
-Reports contain source evidence, scan configuration, coverage, usage, agent activity and checkpoints. Files use owner-only permissions (0600), directories 0700, and writes are atomic. Triage follows the finding fingerprint across scans of the same project; identical findings in different projects are independent. The findings list uses each project's newest completed report or report with findings, retaining older findings while a new empty scan runs. Older reports remain in scan history. Existing project-local `.openhack` stores from the exploratory CLI are not automatically imported.
-
-Dashboard runtime files identify the local server and authorize lifecycle actions; background server output is appended to the matching log. Clean shutdown removes its runtime file. API credentials and runtime tokens are not included in scan reports or returned by dashboard APIs.
-
-Valid locks and recovery gates owned by dead processes are recovered automatically. Legacy malformed/empty lock files fail closed and require manual removal only after confirming no scan process is running. Do not copy or edit a workspace while its scans are running.
-
-The scanning engine is the source-review harness from `exploration/cli-scan`, with its storage adapted here. It maps the project, assigns source to hunters, independently reviews candidates, and judges evidence. Only required scanner modules are included; there is no demo engine, shell tool, automatic patching, pull request creation, or additional scanning harness.
-
-Scanning uses your selected remote model provider; it is **not offline inference**. The dashboard and saved results are local. Source excerpts and paths go to the selected provider, whose usage and retention policies apply. OpenAI API requests use `store: false`. Direct API requests may incur charges; subscription requests consume the existing plan’s usage allowance. The initial provider is OpenAI API, with four workers and twenty tool rounds.
-
-Source collection honors `.gitignore` and `.openhackignore`, skips symlinks, `.env` files, common credential files, dependencies and build outputs, and bounds inventory size. Add sensitive paths to `.openhackignore`. Project code is read, never executed. Exclusions and incomplete coverage are recorded; partial scans are not presented as clean. A validated finding is an AI source review, not runtime exploit verification; resolved is a manual triage decision.
-
-## Development
-
-```sh
-bun run dev        # Vite on 127.0.0.1:5173, API on 127.0.0.1:6969
-bun run check      # types, deterministic tests, production build
-bun run test:package # pack, extract, start/stop and check assets outside this repo
-bun audit
-```
-
-The development dashboard is available at `http://localhost:5173` with hot reload. If the normal dashboard is already using port 6969, run `OPENHACK_DEV_API_PORT=6970 bun run dev` to use a separate development API port. Otherwise, stop the normal dashboard first. Development and production share `OPENHACK_HOME` unless overridden. Build output contains the CLI and dashboard assets together. `bun pm pack` rebuilds before packing; do not publish a package that has not passed `check` and `test:package`. The package can be moved/packed with `bin/` and `dist/`; it does not depend on the original harness or app directories.
-
-```text
-src/cli/       commands, dashboard lifecycle, terminal formatting
-src/core/      workspace orchestration and filesystem primitives
-src/harness/   source inventory, coverage, scanner and report schemas
-src/providers/ OpenAI/Anthropic API selection and subscription CLI adapters
-src/server/    loopback HTTP API, request guards, static asset serving
-src/shared/    Zod request schemas and shared TypeScript contracts
-web/src/       React pages, components and app styles
-scripts/       Vite development and package build
-```
-
-Tests exercise the actual orchestration with a deterministic model client, coverage, cross-project persistence, triage, cancellation/resume, lock handling and HTTP boundaries. They never call a paid model API. The Inter font license is included at `web/public/fonts/OFL.txt` and copied into the built dashboard.
-
-On macOS and Linux, the terminal cancellation regression test uses Python 3's standard-library `pty` module to verify that Ctrl+C saves a real scan checkpoint before the process exits.
+See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Standalone distributions include Bun, font, and dependency license notices.

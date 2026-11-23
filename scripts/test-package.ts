@@ -11,8 +11,8 @@ const executable = join(root, "package/bin/openhack");
 let port: number | undefined;
 const env = { ...process.env, OPENHACK_HOME: home, OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", PATH: dirname(process.execPath) };
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
-async function run(cmd: string[], cwd = root) {
-  const child = Bun.spawn(cmd, { cwd, env, stdout: "pipe", stderr: "pipe" });
+async function run(cmd: string[], cwd = root, commandEnv: NodeJS.ProcessEnv = env) {
+  const child = Bun.spawn(cmd, { cwd, env: commandEnv, stdout: "pipe", stderr: "pipe" });
   const deadline = setTimeout(() => child.kill(), 30_000);
   try {
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -26,10 +26,13 @@ try {
   // check/build runs first; suppress the lifecycle script to verify that exact build.
   await run([process.execPath, "pm", "pack", "--ignore-scripts", "--filename", archive], repo);
   const tar = Bun.which("tar"); assert(tar, "Package smoke test requires tar.");
-  const entries = (await run([tar, "-tzf", archive])).trim().split("\n");
+  // GNU tar invokes gzip from PATH. Archive tooling uses the build environment;
+  // the installed CLI below still runs with only Bun on PATH.
+  const archiveEnv = { ...env, PATH: process.env.PATH };
+  const entries = (await run([tar, "-tzf", archive], root, archiveEnv)).trim().split("\n");
   assert(entries.every(entry => /^package\/(bin\/|dist\/|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$|package\.json$)/.test(entry)), "Unexpected source or secret in package.");
   assert(entries.includes("package/dist/web/index.html") && entries.includes("package/dist/cli.js"), "Missing build output.");
-  await run([tar, "-xzf", archive, "-C", root]);
+  await run([tar, "-xzf", archive, "-C", root], root, archiveEnv);
   assert((await cli("version")).trim() === version, "Wrong package version.");
   assert((await cli("help", "scan")).includes("--claude-code"), "Missing command help.");
   assert((await cli("scans", "--json")).trim() === "[]", "Unexpected scan data.");
