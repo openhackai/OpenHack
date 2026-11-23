@@ -27,9 +27,9 @@ To select a version or installation directory:
 curl -fsSL https://install.openhack.com | sh -s -- --version 2.0.0 --install-dir "$HOME/.local/bin"
 ```
 
-**Release status:** the installer is available, but v2.0.0 is still an unpublished draft. Until its binaries are published, installation stops with a release-unavailable error and leaves any existing executable intact. Earlier releases use the previous harness and are not installed by this script.
+**Release status:** [v2.0.0 is available](https://github.com/openhackai/OpenHack/releases/tag/v2.0.0) for macOS and Linux. Both macOS builds are Developer ID signed and Apple notarized. Windows downloads are deferred until publisher signing is ready. Earlier releases use the previous harness and are not installed by this script.
 
-On Windows, or to install manually, use the standalone downloads on [GitHub Releases](https://github.com/openhackai/OpenHack/releases). Choose the archive matching your operating system and processor:
+To install manually, use the standalone downloads on [GitHub Releases](https://github.com/openhackai/OpenHack/releases). Choose the archive matching your operating system and processor:
 
 | Operating system | Processor | Archive suffix |
 | --- | --- | --- |
@@ -37,12 +37,10 @@ On Windows, or to install manually, use the standalone downloads on [GitHub Rele
 | macOS | Intel | `darwin-x64.tar.gz` |
 | Linux | ARM64 | `linux-arm64.tar.gz` |
 | Linux | x64 | `linux-x64.tar.gz` |
-| Windows | ARM64 | `windows-arm64.zip` |
-| Windows | x64 | `windows-x64.zip` |
 
 The standalone executable includes the Bun runtime and dashboard assets. Running it requires no separate Bun, Node.js, Python, or package installation. Linux archives target glibc systems; Alpine/musl is not supported by these builds.
 
-Extract the archive, then run `openhack` on macOS/Linux or `openhack.exe` on Windows. You can place the executable in a directory on your `PATH` to run it from any terminal. Archives also include licenses, a build manifest, and a separate SHA-256 checksum file for verifying the download.
+Extract the archive, then run `openhack`. You can place the executable in a directory on your `PATH` to run it from any terminal. Archives also include licenses and a build manifest; a separate SHA-256 checksum file accompanies each download.
 
 An AI provider is required to scan. API-key mode needs no additional provider software. To use a Codex or Claude Code subscription, install and sign in to that provider's official CLI.
 
