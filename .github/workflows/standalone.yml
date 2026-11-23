@@ -1,0 +1,45 @@
+name: Standalone builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, v2]
+  pull_request:
+    branches: [main, v2]
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-26, target: bun-darwin-arm64, platform: darwin-arm64, binary: openhack }
+          - { os: macos-15-intel, target: bun-darwin-x64, platform: darwin-x64, binary: openhack }
+          - { os: ubuntu-24.04-arm, target: bun-linux-arm64, platform: linux-arm64, binary: openhack }
+          - { os: ubuntu-24.04, target: bun-linux-x64, platform: linux-x64, binary: openhack }
+          - { os: windows-11-arm, target: bun-windows-arm64, platform: windows-arm64, binary: openhack.exe }
+          - { os: windows-2022, target: bun-windows-x64, platform: windows-x64, binary: openhack.exe }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Build with embedded runtime and dashboard
+        run: bun run build:standalone --target=${{ matrix.target }}
+      - name: Test executable with no runtime on PATH
+        run: bun run test:standalone --binary=dist/standalone/${{ matrix.platform }}/${{ matrix.binary }}
+      - name: Package tested binary and checksums
+        run: bun run package:standalone ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhack-${{ matrix.platform }}
+          path: dist/releases/*
+          if-no-files-found: error

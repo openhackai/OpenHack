@@ -1,0 +1,246 @@
+{
+  "library": "Nucleo UI",
+  "sourceRoot": "/Users/kartikkhorwal/Desktop/Nucleo UI",
+  "icons": {
+    "ChevronRight": {
+      "source": "outline/18px/Arrows/chevron-right.svg",
+      "sha256": "65e6f6ae3cc68197bba1ceeec0c888878450f91671c9d2ff9b7b798f3efe7e1f",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconChevronRight",
+      "appExportSha256": "89cfb4b197bc0bc8d597dc46de6686091eb3ce1dd27ed7dc1905991ed63c2873",
+      "renderedFrom": "app"
+    },
+    "ArrowLeft": {
+      "source": "outline/18px/Arrows/chevron-left.svg",
+      "sha256": "63c14a199f77d2b931898a4b637f380ec8def705aebcfb85ccb431e8eb273a17",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconChevronLeft",
+      "appExportSha256": "8eac4f55e57233e3b919bdc4cfa8d610f9921275bf6f724272809f272584b065",
+      "renderedFrom": "app"
+    },
+    "ArrowUpRight": {
+      "source": "outline/18px/Arrows/arrow-up-right.svg",
+      "sha256": "6770e0a69ce691706c62523c7ce5cd2217662f4af8dd317f5914c73bce5caa6a",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconArrowUpRight",
+      "appExportSha256": "d87893bf0d7aa769746d5c4b04ddc05c99fea444038ad4164610771e8870221b",
+      "renderedFrom": "app"
+    },
+    "Check": {
+      "source": "outline/18px/UI & Layout/check.svg",
+      "sha256": "b5a46117dbac60f0a6d48e71658884951e163a49958ce25c6c5657adae185fc7",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconCheck",
+      "appExportSha256": "37151151722af408684dcd993e110513dacd8c42624d926df60add1b764ff996",
+      "renderedFrom": "app"
+    },
+    "Copy": {
+      "source": "outline/18px/UI & Layout/copy.svg",
+      "sha256": "c4de9c161e8c995acdb82c944a7e62a65147b96ff688fac455c5bc0ad52b7a09",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconCopy",
+      "appExportSha256": "eaeb836fb2e3d29fb6cf5ca94172cc809a7145b7cdce1e02093354d98420451c",
+      "renderedFrom": "app"
+    },
+    "RefreshCw": {
+      "source": "outline/18px/Arrows/refresh-3.svg",
+      "sha256": "22164ffe5c1ef8d89b4ae8e55a72314efd3ba65099fe4f298f815ef4a4256bb4",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconRefresh",
+      "appExportSha256": "97cf15dbbbc3edac5f259093e0d7d6c67ce1ca555f942a8c660a095351384cdf",
+      "renderedFrom": "app"
+    },
+    "Folder": {
+      "source": "outline/18px/Files/folder.svg",
+      "sha256": "6a9cc44ffadce16541776897a152b00623372799513432f5b474184823088c1a",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconFolder",
+      "appExportSha256": "2d73bdc716482ae3d48128b2e18567ca58d01d10f1635e9a233211ee4df6a514",
+      "renderedFrom": "app"
+    },
+    "Play": {
+      "source": "outline/18px/Sound & Music/media-play.svg",
+      "sha256": "a5903acd8ba507c561cf556012814cf131c5da4d76921075c7a975d5a0ab2bc7",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconPlay",
+      "appExportSha256": "124058dff58a40645500cf1dd518bc199463360064748b8cdbaf2d01f8ddc7f5",
+      "renderedFrom": "app"
+    },
+    "Square": {
+      "source": "fill/18px/Sound & Music/media-stop.svg",
+      "sha256": "cf57f62ee9242f3857e25b007ea330f2176fe383ffd4ffd99c60167b999416ee",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconMediaStopFill",
+      "appExportSha256": "2e6617efe52b917fe11981461e7181f3ecb599f0743bbe617f90fe17c3a07a70",
+      "renderedFrom": "app"
+    },
+    "Circle": {
+      "source": "outline/18px/UI & Layout/circle-dashed.svg",
+      "sha256": "91eb6f840520a55242e2a8238d8b5febf6323e36313db471f9d3e652ca9b23a6",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconStatusNewDots",
+      "appExportSha256": "1dbe218826eb7d7366d1d62f9ddac3e4a5ddc2d474f25d015f192b73ea18a417",
+      "renderedFrom": "app"
+    },
+    "X": {
+      "source": "outline/18px/UI & Layout/xmark.svg",
+      "sha256": "b30dcb6032c9d29a752812ff9558d837997b87a6c5614aac286eca31fe1754b4",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconXmark",
+      "appExportSha256": "41be2788276cac39f23958720923f5f841e8bb7d28c5037d1714f84e1f3f337d",
+      "renderedFrom": "app"
+    },
+    "XCircle": {
+      "source": "outline/18px/UI & Layout/circle-xmark.svg",
+      "sha256": "3bdf4ea418a76040d8c04d8b462204bc839025041ae450a40914e6c96d46fb59",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconStatusWontFix",
+      "appExportSha256": "be2d4a5043f56d0d3c20c28b278683de5f2bf664087d8bfd24c87629b0dcc2f2",
+      "renderedFrom": "app"
+    },
+    "CheckCircle2": {
+      "source": "outline/18px/UI & Layout/circle-check.svg",
+      "sha256": "1c49222d4cfa46913fecba217b45f869cc1ece6b5c2ce6cdd043c3df3b678ace",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconCircleCheck",
+      "appExportSha256": "e893d640bbefe36b95ce44c96aba07429a5908396d739ef5e098b03f3fb00d90",
+      "renderedFrom": "app"
+    },
+    "CircleAlert": {
+      "source": "outline/18px/UI & Layout/circle-warning.svg",
+      "sha256": "4b162a8c44c295fb69edc4c2fcb710e311af5cb0cddee2925aed707023f903f2",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconCircleWarning",
+      "appExportSha256": "ed2017a588cdc00e7349cfc86d54b22d6235984654563b5b901204a3d4ef1f96",
+      "renderedFrom": "app"
+    },
+    "CircleSlash": {
+      "source": "outline/18px/UI & Layout/ban.svg",
+      "sha256": "18ca7b8613095942bdb7ef9a11f929e9c6484e23706a1f12a19703a7baa36a02",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconStatusFalsePositive",
+      "appExportSha256": "0a7b2f7c4c1217ff827a5f797fbc9ecb7e80c527ec5af91b4c68e3417fa188f3",
+      "renderedFrom": "app"
+    },
+    "LoaderCircle": {
+      "source": "outline/18px/Arrows/arrow-rotate-clockwise.svg",
+      "sha256": "93eeb57955fd43c8a37bee0f04b573042cbb612a953bd75be5fb8ecd8151efef",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconArrowRotateClockwise",
+      "appExportSha256": "ed3943cb9489186dfe6a3fc1602d6ecbab5eb4857e56dad7d0ba9d8c64b1a317",
+      "renderedFrom": "app"
+    },
+    "Search": {
+      "source": "outline/18px/Filtering & Sorting/magnifier.svg",
+      "sha256": "ca2fe23c4bd8266608922320c3e3b51a1d5c3b78657755169bfef59bff597daf",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconSearch",
+      "appExportSha256": "862fd0585c22735761ae1980de9bcb95398bd85ea4b900f5e8568170bddbf986",
+      "renderedFrom": "app"
+    },
+    "ShieldCheck": {
+      "source": "outline/18px/Security/shield-check.svg",
+      "sha256": "aa281ac419f9b9538beae1ba62119e79b3ff33907217895c414ed5cebe4434fd",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconStatusVerified",
+      "appExportSha256": "187c1873143c102187fcb57d2499065fba126762c9783f579ccb3e592b80f858",
+      "renderedFrom": "app"
+    },
+    "Save": {
+      "source": "outline/18px/Files/floppy-disk.svg",
+      "sha256": "fd75b7620d646b145ea119fe3cb55859e5fbf17878419c69f62b40edf32c2622",
+      "renderedFrom": "desktop-nucleo"
+    },
+    "Monitor": {
+      "source": "outline/18px/Technology & Devices/monitor.svg",
+      "sha256": "64aef3fcc03e656f903188708cde1addae74581b204c7904ef66ec756547bcc6",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconMonitor",
+      "appExportSha256": "16b556d0f16377ffe0ebc1ce5be45c465a2df2919f24500a0a82ce0932cd3dcd",
+      "renderedFrom": "app"
+    },
+    "Moon": {
+      "source": "outline/18px/Weather/moon.svg",
+      "sha256": "29ee45267daeb3167cddec931a08b438c7558ab9e41e825a66cbb896cf40b9a4",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconMoon",
+      "appExportSha256": "e83ad70f506212fa93f0b61b385921efa819b4bf7dcfcdea2296c474d8c9337d",
+      "renderedFrom": "app"
+    },
+    "Sun": {
+      "source": "outline/18px/Weather/sun.svg",
+      "sha256": "b8d9a394cbe8cb9bc242c0401c44e932aeac2806007bc3207b2d21db5a437fb5",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconSun",
+      "appExportSha256": "1d34dec5cee002b6d657720437256e0fd74a376d09d734f23876e0536bfe3a2b",
+      "renderedFrom": "app"
+    },
+    "PanelLeftClose": {
+      "source": "outline/18px/UI & Layout/window-right.svg",
+      "sha256": "a7124f99a797e3598ea3c56f0962e424078c0813710af538a0e1562d168b06d3",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconSidebarToggle",
+      "appExportSha256": "35ebe2bcd45299c7576453f195bf746c3376a624f4e25672bf013e0c93f52852",
+      "renderedFrom": "app"
+    },
+    "PanelLeftOpen": {
+      "source": "outline/18px/UI & Layout/window-right.svg",
+      "sha256": "a7124f99a797e3598ea3c56f0962e424078c0813710af538a0e1562d168b06d3",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconSidebarToggle",
+      "appExportSha256": "35ebe2bcd45299c7576453f195bf746c3376a624f4e25672bf013e0c93f52852",
+      "renderedFrom": "app"
+    },
+    "IconNavScans": {
+      "source": "components/ui/nucleo-icons.tsx",
+      "sha256": "99cb1eba5751c4ac5b54e623410e14269cc9d83e00b4353c5c849a1e97bbf725",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconNavScans",
+      "appExportSha256": "44f5753e38284ba32b20451a0c0b9573d6a1e9c7b30d73862c6442a8087a5ffa",
+      "renderedFrom": "app",
+      "sourceRoot": "/Users/kartikkhorwal/Desktop/code/openhack/company/app",
+      "note": "Existing app-specific scan glyph; latest user instruction requests the exact app icon."
+    },
+    "IconNavShield": {
+      "source": "outline/18px/Security/shield.svg",
+      "sha256": "faf6c26a00eaa96e267ca51157cd07533b071974e192584d0916c56a365d1cbb",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconNavShield",
+      "appExportSha256": "3a85af91c5cf257b60bce583d719f230a6ea334dc8f42952ca38c8060f1b061c",
+      "renderedFrom": "app"
+    },
+    "IconNavSettings": {
+      "source": "outline/18px/UI & Layout/gear.svg",
+      "sha256": "f7541fda65e281eb95f554018a68063a58358673a31aac134dc8af3663117a04",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconNavSettings",
+      "appExportSha256": "e7483f722bbd3db7970ce017a2f998ca6f3d38bec7beac5fd2c445d20d64837b",
+      "renderedFrom": "app"
+    },
+    "ChevronDown": {
+      "source": "outline/18px/Arrows/chevron-down.svg",
+      "sha256": "9e3761df10fad7a964da7df9b19bca9445db4bcf0a7a59b3a0ac77ddd6db402a",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconChevronDown",
+      "appExportSha256": "961cfa9e7064e80877e41ff1edd3fcb1f45c9aa4c81364f571b07778710dbecf",
+      "renderedFrom": "app"
+    },
+    "Plus": {
+      "source": "outline/18px/UI & Layout/plus.svg",
+      "sha256": "19485de4032659e9393b17931783998bfd22101c31b0a285d34787f8157c4a94",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconPlus",
+      "appExportSha256": "7dafabe8f5a2098b612e4f6541fa9a18e6eb0363c7f609955884852574d3e10e",
+      "renderedFrom": "app"
+    },
+    "Minus": {
+      "source": "outline/18px/UI & Layout/minus.svg",
+      "sha256": "0030ab005728b62c936c9678863229a107fb185875c117309f30546a98020dcc",
+      "appSource": "components/ui/nucleo-icons.tsx",
+      "appExport": "IconScMinus",
+      "appExportSha256": "a3ef9caf6279e08d48c55b0458a6b375ff6d3a976b1771c238f3d125db687be8",
+      "renderedFrom": "app"
+    }
+  },
+  "appSourceRoot": "/Users/kartikkhorwal/Desktop/code/openhack/company/app"
+}

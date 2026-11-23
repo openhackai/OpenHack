@@ -1,0 +1,28 @@
+{
+  "logo": {
+    "source": "app/components/openhack-logo.tsx",
+    "notes": "Original app SVG geometry and gold gradient; unique gradient IDs for multiple instances."
+  },
+  "screenshots": [
+    {
+      "file": "/pro/business-impact.png",
+      "page": "https://openhack.com/docs/platform/briefings",
+      "source": "https://openhack.com/_next/static/media/organization-briefing.03v0le-9dktpd.png"
+    },
+    {
+      "file": "/pro/findings.png",
+      "page": "https://openhack.com/docs/platform/findings",
+      "source": "https://openhack.com/_next/static/media/vulnerabilities.0azff4oekcb17.png"
+    },
+    {
+      "file": "/pro/autofix.png",
+      "page": "https://openhack.com/docs/platform/github-reviews",
+      "source": "https://openhack.com/_next/static/media/summary.0r4_do9gxau67.png"
+    },
+    {
+      "file": "/pro/slack.png",
+      "page": "https://openhack.com/docs/platform/integrations/slack",
+      "source": "https://openhack.com/_next/static/media/slack.073rp_a6k.yty.png"
+    }
+  ]
+}

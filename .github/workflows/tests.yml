@@ -2,28 +2,31 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   pull_request:
-    branches: [main]
+    branches: [main, v2]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  check:
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Run tests
-        run: uv run python -m pytest tests/ -v
+        run: bun install --frozen-lockfile
+      - name: Check types, tests, and production build
+        run: bun run check
+      - name: Check standalone package
+        run: bun run test:package
+      - name: Audit dependencies
+        run: bun audit

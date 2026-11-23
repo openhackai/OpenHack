@@ -1,0 +1,269 @@
+/* Settings: company/app org settings pattern (section nav + 12px cards with label/control rows). */
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.settings-layout .settings-scroll {
+  padding: 28px 32px 48px;
+  scrollbar-width: thin;
+}
+.settings-columns {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+}
+.settings-nav {
+  position: sticky;
+  top: 0;
+  width: 180px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav a[aria-current="true"] {
+  background: var(--chip);
+  color: var(--fg);
+}
+.settings-nav a {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+.settings-cards {
+  flex: 1;
+  min-width: 0;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  scroll-margin-top: 28px;
+}
+.settings-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 24px;
+}
+.settings-card-header h2 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--fg-menu);
+}
+.settings-card-header p {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-3);
+  max-width: 520px;
+}
+.settings-card-header .button {
+  flex-shrink: 0;
+  font-size: 12px;
+  min-height: 28px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--line);
+}
+.settings-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-row-title {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--fg-menu);
+}
+.settings-row-desc {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-3);
+}
+.settings-row-text .success-text {
+  margin-top: 4px;
+}
+.settings-row-control {
+  width: 240px;
+  flex-shrink: 0;
+}
+.settings-row-control .control-field,
+.settings-row-control .number-field {
+  width: 100%;
+  min-height: 34px;
+}
+.mono-field {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.credentials-control {
+  width: auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.credentials-control .button {
+  font-size: 12px;
+  min-height: 28px;
+}
+.settings-path {
+  max-width: 320px;
+  font-size: 12px;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.settings-block {
+  position: relative;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--line);
+}
+.settings-counter {
+  display: block;
+  margin-top: 8px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+.provider-options {
+  border-top: 1px solid var(--line);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.provider-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.provider-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.provider-option.checked {
+  background: var(--chip);
+  border-color: var(--line-2);
+}
+.provider-option:has(input:focus-visible) {
+  outline: 2px solid var(--fg-3);
+  outline-offset: 1px;
+}
+.provider-option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.provider-option-text .settings-row-desc {
+  font-size: 12px;
+  line-height: 17px;
+}
+.provider-option .dot-status {
+  font-size: 12px;
+  width: 92px;
+  justify-content: flex-end;
+}
+.radio-mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--line-3);
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+.provider-option.checked .radio-mark {
+  border-color: var(--fg-menu);
+  background: var(--fg-menu);
+}
+.provider-option.checked .radio-mark::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bg);
+}
+.settings-footer {
+  height: 52px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 0 32px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+@media (hover: hover) {
+  .settings-nav a:hover {
+    background: var(--chip);
+    color: var(--fg);
+  }
+  .provider-option:not(.checked):hover {
+    background: color-mix(in srgb, var(--chip) 60%, var(--bg));
+  }
+}
+@media (max-width: 900px) {
+  .settings-nav {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .settings-layout .settings-scroll {
+    padding: 20px 16px 32px;
+  }
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+  .settings-card-header {
+    padding: 16px;
+  }
+  .settings-row-control {
+    width: 100%;
+  }
+  .credentials-control {
+    justify-content: flex-start;
+  }
+  .settings-path {
+    text-align: left;
+  }
+  .provider-option .dot-status {
+    display: none;
+  }
+  .settings-footer {
+    padding: 0 16px;
+  }
+}

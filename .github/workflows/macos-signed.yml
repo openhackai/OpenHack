@@ -1,0 +1,57 @@
+name: Signed macOS builds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    # Never expose release credentials to pull-request or unmerged branch code.
+    if: github.ref == 'refs/heads/main'
+    name: Signed ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-26, platform: darwin-arm64 }
+          - { os: macos-15-intel, platform: darwin-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build:standalone --target=bun-${{ matrix.platform }}
+      - name: Import signing credentials
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+        run: python3 scripts/macos/prepare-signing.py
+      - name: Sign and require Apple notarization
+        env:
+          OPENHACK_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          OPENHACK_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          OPENHACK_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: bash scripts/macos/sign-and-notarize.sh dist/standalone/${{ matrix.platform }}/openhack
+      - name: Test the signed executable on its native architecture
+        run: bun run test:standalone --binary=dist/standalone/${{ matrix.platform }}/openhack
+      - name: Package accepted executable and final checksums
+        run: bun run package:standalone bun-${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhack-signed-${{ matrix.platform }}
+          path: dist/releases/*
+          if-no-files-found: error
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/openhack-signing/signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/openhack-signing/signing.keychain-db"
+          fi
+          rm -rf "$RUNNER_TEMP/openhack-signing"

@@ -1,0 +1,290 @@
+/* Shared OpenHack fields and surfaces, backed by Base UI behavior. */
+.control-field {
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--fg-menu);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  outline: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.control-field::placeholder {
+  color: var(--fg-4);
+}
+.control-field:focus-visible,
+.number-group:focus-within,
+.select-trigger[data-popup-open] {
+  outline: none;
+  border-color: var(--fg-4);
+  box-shadow: 0 0 0 3px rgb(0 0 0 / 6%);
+}
+[data-theme="dark"] .control-field:focus-visible,
+[data-theme="dark"] .number-group:focus-within,
+[data-theme="dark"] .select-trigger[data-popup-open] {
+  border-color: #5a5a5a;
+  box-shadow: 0 0 0 3px #ffffff14;
+}
+.control-field[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.control-field:disabled,
+.control-field[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.control-textarea {
+  resize: none;
+  min-height: 110px;
+  line-height: 1.7;
+}
+/* Search is composed into its own shared field surface. */
+.search .control-field {
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  appearance: none;
+}
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.select-trigger.filter {
+  width: auto;
+  min-width: 118px;
+  min-height: 30px;
+  height: 30px;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+.select-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.select-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--fg-3);
+}
+.select-positioner {
+  z-index: 60;
+  outline: none;
+}
+.select-popup {
+  min-width: var(--anchor-width);
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: var(--available-height);
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--line-3);
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--fg-menu);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 12%);
+  outline: none;
+  transform-origin: var(--transform-origin);
+}
+[data-theme="dark"] .select-popup {
+  box-shadow: 0 16px 40px #000c;
+}
+.select-list {
+  max-height: min(320px, calc(var(--available-height) - 14px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+.select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 32px 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+.select-item[data-highlighted] {
+  background: var(--hover);
+}
+.select-item[data-disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.select-indicator {
+  position: absolute;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+}
+.control-checkbox {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line-3);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--raised);
+  cursor: pointer;
+  outline: none;
+}
+.control-checkbox[data-checked] {
+  background: var(--fg-menu);
+  border-color: var(--fg-menu);
+}
+.control-checkbox:focus-visible {
+  outline: 2px solid var(--fg-3);
+  outline-offset: 3px;
+}
+.control-checkbox[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.checkbox-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.checkbox-label {
+  gap: 8px;
+  cursor: pointer;
+}
+.number-group {
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+.number-group .number-input {
+  appearance: textfield;
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  border: 0;
+  border-radius: 0;
+  min-height: 34px;
+  padding: 7px 12px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  font: inherit;
+  box-shadow: none;
+}
+.number-input:focus-visible {
+  outline: none;
+}
+.number-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-3);
+}
+.number-step:focus-visible {
+  outline-offset: -3px;
+}
+.number-step:disabled {
+  opacity: 0.3;
+}
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: #0008;
+  backdrop-filter: blur(2px);
+}
+.dialog-viewport {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+.dialog {
+  margin: 0;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  outline: none;
+}
+.tooltip-positioner {
+  z-index: 70;
+}
+.tooltip-popup {
+  padding: 6px 9px;
+  max-width: min(420px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  color: var(--fg-menu);
+  background: var(--raised);
+  border: 1px solid var(--line-3);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px #0002;
+  font-size: 11px;
+  line-height: 1.5;
+}
+@media (hover: hover) {
+  .select-trigger:hover {
+    border-color: var(--fg-4);
+  }
+  .number-step:not(:disabled):hover {
+    background: var(--hover);
+    color: var(--fg-menu);
+  }
+  .control-checkbox:not([data-disabled]):hover {
+    border-color: var(--fg-3);
+  }
+}
+@media (pointer: coarse) {
+  .control-field {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .select-trigger.filter {
+    min-height: 44px;
+  }
+  .select-item {
+    min-height: 44px;
+  }
+  .number-step {
+    flex-basis: 44px;
+  }
+  .checkbox-label {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .control-field {
+    transition: none;
+  }
+}
