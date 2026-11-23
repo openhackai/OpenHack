@@ -206,7 +206,11 @@ bun run package:standalone bun-linux-x64
 
 Cross-platform executables are written to `dist/standalone/<platform>/`; versioned archives and checksums go to `dist/releases/`. CI builds and smoke-tests each of the six targets on its corresponding operating system and architecture, including dashboard assets and start/reuse/stop behavior with no runtime on `PATH`.
 
-The current build workflow uploads unsigned CI artifacts. Public signed releases require macOS Developer ID signing and notarization, plus Windows publisher signing, before packaging and checksum generation. A successful cross-compile alone is not a native runtime test.
+The general build workflow uploads unsigned CI artifacts. The separate **Signed macOS builds** workflow runs manually from `main`: it signs with Developer ID, requires Apple notarization to succeed, tests the signed executable on its native architecture, and only then packages the archive and final checksums. It never publishes a release automatically. Windows publisher signing remains a separate release prerequisite. A successful cross-compile alone is not a native runtime test.
+
+The macOS workflow uses these Actions secrets: `MACOS_CERTIFICATE_P12` (base64 PKCS#12 identity including the intermediate certificate), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_NOTARY_KEY_P8`, `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER`. Signing keys are imported into an isolated temporary keychain and removed after the job. No credentials belong in this repository. The workflow refuses to run against unmerged branches.
+
+For local signing, set `OPENHACK_SIGNING_IDENTITY`, `OPENHACK_SIGNING_KEYCHAIN`, `OPENHACK_NOTARY_KEY_FILE`, `OPENHACK_NOTARY_KEY_ID`, and `OPENHACK_NOTARY_ISSUER`, then run `bash scripts/macos/sign-and-notarize.sh dist/standalone/darwin-arm64/openhack` (or the `darwin-x64` executable). An Apple rejection or timeout fails the command. Bare executable files cannot have notarization tickets stapled; Apple records their signed hashes. Never modify or re-sign an accepted binary before packaging it.
 
 ## License
 
